@@ -39,6 +39,7 @@ from spicycrab.ir.nodes import (
     IRName,
     IRParameter,
     IRPass,
+    IRPrimitiveType,
     IRRaise,
     IRReturn,
     IRSet,
@@ -361,6 +362,7 @@ class PythonASTVisitor(ast.NodeVisitor):
         docstring: str | None = None
         has_enter = False
         has_exit = False
+        init_method: ast.FunctionDef | None = None
 
         for i, item in enumerate(node.body):
             # Check for docstring
@@ -370,7 +372,7 @@ class PythonASTVisitor(ast.NodeVisitor):
                     continue
 
             if isinstance(item, ast.AnnAssign):
-                # Class field with annotation
+                # Class field with annotation (dataclass style)
                 if isinstance(item.target, ast.Name):
                     if item.annotation is None:
                         raise TypeAnnotationError(
@@ -383,14 +385,27 @@ class PythonASTVisitor(ast.NodeVisitor):
                     fields.append((item.target.id, field_type))
 
             elif isinstance(item, ast.FunctionDef):
+                # Save __init__ for field extraction
+                if item.name == "__init__":
+                    init_method = item
+
                 method = self.visit_FunctionDef(item)
                 method.is_method = True
+
+                # Detect if method modifies self (needs &mut self)
+                if item.name != "__init__":
+                    method.modifies_self = self._method_modifies_self(item)
+
                 methods.append(method)
 
                 if item.name == "__enter__":
                     has_enter = True
                 elif item.name == "__exit__":
                     has_exit = True
+
+        # For non-dataclass classes, extract fields from __init__
+        if not is_dataclass and init_method and not fields:
+            fields = self._extract_fields_from_init(init_method)
 
         self._pop_scope()
 
@@ -405,6 +420,76 @@ class PythonASTVisitor(ast.NodeVisitor):
             has_exit=has_exit,
             line=node.lineno,
         )
+
+    def _extract_fields_from_init(self, init_method: ast.FunctionDef) -> list[tuple[str, IRType]]:
+        """Extract fields from __init__ method's self.x = x assignments."""
+        fields: list[tuple[str, IRType]] = []
+        param_types: dict[str, IRType] = {}
+
+        # Build a map of parameter names to their types
+        for arg in init_method.args.args:
+            if arg.arg == "self":
+                continue
+            if arg.annotation:
+                param_types[arg.arg] = self.type_parser.parse(arg.annotation, arg.arg)
+
+        # Look for self.x = x or self.x = value patterns in __init__ body
+        for stmt in init_method.body:
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if (isinstance(target, ast.Attribute) and
+                        isinstance(target.value, ast.Name) and
+                        target.value.id == "self"):
+                        field_name = target.attr
+                        # Try to get type from corresponding parameter
+                        if isinstance(stmt.value, ast.Name) and stmt.value.id in param_types:
+                            fields.append((field_name, param_types[stmt.value.id]))
+                        elif field_name in param_types:
+                            fields.append((field_name, param_types[field_name]))
+                        else:
+                            # Infer type from literal value
+                            inferred = self._infer_type_from_value(stmt.value)
+                            fields.append((field_name, inferred))
+
+        return fields
+
+    def _infer_type_from_value(self, value: ast.expr) -> IRType:
+        """Infer type from a literal value."""
+        if isinstance(value, ast.Constant):
+            if isinstance(value.value, str):
+                return IRPrimitiveType(kind=PrimitiveType.STR)
+            if isinstance(value.value, int) and not isinstance(value.value, bool):
+                return IRPrimitiveType(kind=PrimitiveType.INT)
+            if isinstance(value.value, float):
+                return IRPrimitiveType(kind=PrimitiveType.FLOAT)
+            if isinstance(value.value, bool):
+                return IRPrimitiveType(kind=PrimitiveType.BOOL)
+            if value.value is None:
+                return IRPrimitiveType(kind=PrimitiveType.NONE)
+        if isinstance(value, ast.List):
+            return IRPrimitiveType(kind=PrimitiveType.INT)  # Default list element type
+        if isinstance(value, ast.Dict):
+            return IRPrimitiveType(kind=PrimitiveType.INT)  # Default dict type
+        # Default fallback
+        return IRPrimitiveType(kind=PrimitiveType.INT)
+
+    def _method_modifies_self(self, method: ast.FunctionDef) -> bool:
+        """Check if a method modifies self (needs &mut self)."""
+        for stmt in ast.walk(method):
+            # Check for self.x = ... assignments
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if (isinstance(target, ast.Attribute) and
+                        isinstance(target.value, ast.Name) and
+                        target.value.id == "self"):
+                        return True
+            # Check for augmented assignments like self.x += 1
+            if isinstance(stmt, ast.AugAssign):
+                if (isinstance(stmt.target, ast.Attribute) and
+                    isinstance(stmt.target.value, ast.Name) and
+                    stmt.target.value.id == "self"):
+                    return True
+        return False
 
     def _visit_statement(self, node: ast.stmt) -> IRStatement | None:
         """Visit a statement node."""

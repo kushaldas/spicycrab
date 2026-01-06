@@ -426,6 +426,7 @@ class IRFunction(IRNode):
     is_method: bool = False
     is_static: bool = False
     is_classmethod: bool = False
+    modifies_self: bool = False  # True if method assigns to self.* (needs &mut self)
     docstring: str | None = None
     line: int | None = None
 

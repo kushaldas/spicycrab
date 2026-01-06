@@ -95,6 +95,7 @@ class EmitterContext:
     current_class: str | None = None
     resolver: TypeResolver = field(default_factory=TypeResolver)
     in_last_stmt: bool = False  # True when emitting the last statement in a block
+    class_names: set[str] = field(default_factory=set)  # Known class names for constructor detection
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -111,6 +112,9 @@ class RustEmitter:
     def emit_module(self, module: IRModule) -> str:
         """Emit a complete Rust module."""
         lines: list[str] = []
+
+        # Collect class names for constructor detection
+        self.ctx.class_names = {cls.name for cls in module.classes}
 
         # Module docstring as comment
         if module.docstring:
@@ -240,14 +244,25 @@ class RustEmitter:
         lines.append(f"{indent}}}")
         lines.append("")
 
-        # Impl block for methods
-        if cls.methods:
+        # Check if class has __init__ method
+        has_init = any(m.name == "__init__" for m in cls.methods)
+
+        # Impl block for methods (or just constructor for dataclass)
+        if cls.methods or (cls.is_dataclass and cls.fields):
             lines.append(f"{indent}impl {cls.name} {{")
             self.ctx.indent += 1
             self.ctx.in_impl = True
             self.ctx.current_class = cls.name
 
+            # Generate constructor for dataclass without __init__
+            if cls.is_dataclass and not has_init and cls.fields:
+                lines.append(self._emit_dataclass_constructor(cls))
+                lines.append("")
+
             for method in cls.methods:
+                # Skip __enter__/__exit__ for context managers - Drop trait handles it
+                if method.name in ("__enter__", "__exit__"):
+                    continue
                 lines.append(self.emit_method(method, cls))
                 lines.append("")
 
@@ -264,6 +279,36 @@ class RustEmitter:
             lines.append(f"{indent}        // Auto-generated from __exit__")
             lines.append(f"{indent}    }}")
             lines.append(f"{indent}}}")
+
+        return "\n".join(lines)
+
+    def _emit_dataclass_constructor(self, cls: IRClass) -> str:
+        """Generate a new() constructor for a dataclass."""
+        lines: list[str] = []
+        indent = self.ctx.indent_str()
+
+        # Build parameter list
+        params: list[str] = []
+        for field_name, field_type in cls.fields:
+            rust_type = self.resolver.resolve(field_type)
+            params.append(f"{field_name}: {rust_type.to_rust()}")
+
+        params_str = ", ".join(params)
+        lines.append(f"{indent}pub fn new({params_str}) -> Self {{")
+
+        self.ctx.indent += 1
+        inner_indent = self.ctx.indent_str()
+        lines.append(f"{inner_indent}Self {{")
+
+        self.ctx.indent += 1
+        field_indent = self.ctx.indent_str()
+        for field_name, _ in cls.fields:
+            lines.append(f"{field_indent}{field_name},")
+        self.ctx.indent -= 1
+
+        lines.append(f"{inner_indent}}}")
+        self.ctx.indent -= 1
+        lines.append(f"{indent}}}")
 
         return "\n".join(lines)
 
@@ -292,8 +337,11 @@ class RustEmitter:
         is_constructor = method.name == "__init__"
 
         if not is_constructor and method.is_method:
-            # Add self parameter
-            params.append("&self")
+            # Add self parameter - use &mut self if method modifies self
+            if method.modifies_self:
+                params.append("&mut self")
+            else:
+                params.append("&self")
 
         for param in method.params:
             rust_type = self.resolver.resolve(param.type)
@@ -332,8 +380,11 @@ class RustEmitter:
         else:
             # Regular method body
             self.ctx.indent += 1
-            for stmt in method.body:
+            for i, stmt in enumerate(method.body):
+                is_last = (i == len(method.body) - 1)
+                self.ctx.in_last_stmt = is_last
                 lines.append(self.emit_statement(stmt))
+            self.ctx.in_last_stmt = False
             self.ctx.indent -= 1
 
         lines.append(f"{indent}}}")
@@ -534,8 +585,9 @@ class RustEmitter:
         self.ctx.indent += 1
         inner_indent = self.ctx.indent_str()
 
+        # Use mut by default since context managers often need mutation
         if stmt.target:
-            lines.append(f"{inner_indent}let {stmt.target} = {ctx_expr};")
+            lines.append(f"{inner_indent}let mut {stmt.target} = {ctx_expr};")
         else:
             lines.append(f"{inner_indent}let _ctx = {ctx_expr};")
 
@@ -548,19 +600,43 @@ class RustEmitter:
         return "\n".join(lines)
 
     def _emit_try(self, stmt: IRTry) -> str:
-        """Emit try/except as match on Result."""
+        """Emit try/except using std::panic::catch_unwind for runtime errors."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        lines.append(f"{indent}// try/except translated to Result handling")
-        lines.append(f"{indent}{{")
-        self.ctx.indent += 1
+        if stmt.handlers:
+            # Use catch_unwind to handle panics (similar to Python exceptions)
+            lines.append(f"{indent}if let Err(_panic_err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{")
+            self.ctx.indent += 1
 
-        for s in stmt.body:
-            lines.append(self.emit_statement(s))
+            for s in stmt.body:
+                lines.append(self.emit_statement(s))
 
-        self.ctx.indent -= 1
-        lines.append(f"{indent}}}")
+            self.ctx.indent -= 1
+            lines.append(f"{indent}}})) {{")
+
+            # Emit first handler's body (simplified - combines all handlers)
+            self.ctx.indent += 1
+            if stmt.handlers:
+                handler = stmt.handlers[0]
+                for s in handler.body:
+                    lines.append(self.emit_statement(s))
+            self.ctx.indent -= 1
+            lines.append(f"{indent}}}")
+        else:
+            # No handlers - just emit the body in a block
+            lines.append(f"{indent}{{")
+            self.ctx.indent += 1
+            for s in stmt.body:
+                lines.append(self.emit_statement(s))
+            self.ctx.indent -= 1
+            lines.append(f"{indent}}}")
+
+        # Emit finally block if present
+        if stmt.finally_body:
+            lines.append(f"{indent}// finally block")
+            for s in stmt.finally_body:
+                lines.append(self.emit_statement(s))
 
         return "\n".join(lines)
 
@@ -659,17 +735,52 @@ class RustEmitter:
         if expr.op == BinaryOp.FLOOR_DIV:
             return f"{left} / {right}"
 
-        # Special handling for power
+        # Special handling for power - return f64
+        # Convert the entire left expression to f64 first, then apply powf
         if expr.op == BinaryOp.POW:
-            return f"({left} as f64).powf({right} as f64) as i64"
+            # Wrap left in parens if it's a compound expression
+            if isinstance(expr.left, IRBinaryOp):
+                return f"(({left}) as f64).powf({right} as f64)"
+            return f"({left} as f64).powf({right} as f64)"
+
+        # Special handling for string concatenation
+        # If either operand looks like a string (ends with .to_string() or is a string field)
+        # use format! macro which works with both String and &str
+        if expr.op == BinaryOp.ADD:
+            if self._looks_like_string(left) or self._looks_like_string(right):
+                return f'format!("{{}}{{}}", {left}, {right})'
 
         op = BINOP_MAP.get(expr.op, "+")
+
+        # Add parentheses around nested binary ops to preserve precedence
+        if isinstance(expr.left, IRBinaryOp):
+            left = f"({left})"
+        if isinstance(expr.right, IRBinaryOp):
+            right = f"({right})"
+
         return f"{left} {op} {right}"
+
+    def _looks_like_string(self, expr_str: str) -> bool:
+        """Heuristic to detect if an expression is likely a String type."""
+        # String literals end with .to_string()
+        if expr_str.endswith('.to_string()'):
+            return True
+        # Common string field names
+        string_field_names = ('content', 'text', 'message', 'name', 'filename', 'data', 'value', 'title')
+        # Check for self.field patterns
+        for field in string_field_names:
+            if f'.{field}' in expr_str or expr_str == field:
+                return True
+        return False
 
     def _emit_call(self, expr: IRCall) -> str:
         """Emit a function call."""
         func = self.emit_expression(expr.func)
         args = [self.emit_expression(a) for a in expr.args]
+
+        # Handle class constructor calls - ClassName(...) -> ClassName::new(...)
+        if func in self.ctx.class_names:
+            return f"{func}::new({', '.join(args)})"
 
         # Handle Some() constructor
         if func == "Some":

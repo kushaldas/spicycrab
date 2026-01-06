@@ -214,5 +214,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-./rusty
-./rusty*
+./rusty/
+./rusty*/

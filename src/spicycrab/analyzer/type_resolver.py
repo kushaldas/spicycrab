@@ -172,6 +172,10 @@ class TypeResolver:
         # Check for known types
         name = ir_type.name
 
+        # Python's 'object' type - use () in Rust
+        if name == "object":
+            return RustType(name="()")
+
         # Path types
         if name in ("Path", "PurePath", "PosixPath", "WindowsPath"):
             self.imports.add("std::path")
