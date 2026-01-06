@@ -398,6 +398,82 @@ def main() -> None:
 '''
         transpile_and_run(code, "hello rust")
 
+    def test_string_find_contains(self, check_cargo):
+        """Test str.find() >= 0 becomes str.contains()."""
+        code = '''
+def main() -> None:
+    s: str = "hello world"
+    if s.find("world") >= 0:
+        print("found")
+    else:
+        print("not found")
+'''
+        transpile_and_run(code, "found")
+
+    def test_string_find_not_found(self, check_cargo):
+        """Test str.find() >= 0 returns false when not found."""
+        code = '''
+def main() -> None:
+    s: str = "hello world"
+    if s.find("rust") >= 0:
+        print("found")
+    else:
+        print("not found")
+'''
+        transpile_and_run(code, "not found")
+
+    def test_string_find_equals_negative_one(self, check_cargo):
+        """Test str.find() == -1 for not found check."""
+        code = '''
+def main() -> None:
+    s: str = "hello world"
+    if s.find("xyz") == -1:
+        print("not found")
+    else:
+        print("found")
+'''
+        transpile_and_run(code, "not found")
+
+    def test_string_find_not_equals_negative_one(self, check_cargo):
+        """Test str.find() != -1 for found check."""
+        code = '''
+def main() -> None:
+    s: str = "hello world"
+    if s.find("world") != -1:
+        print("found")
+    else:
+        print("not found")
+'''
+        transpile_and_run(code, "found")
+
+
+class TestIndexOperations:
+    """Test index variable operations with len() and subscript."""
+
+    def test_while_loop_with_index(self, check_cargo):
+        """Test while loop with index compared to len()."""
+        code = '''
+def main() -> None:
+    values: list[int] = [10, 20, 30]
+    i: int = 0
+    total: int = 0
+    while i < len(values):
+        total = total + values[i]
+        i = i + 1
+    print(total)
+'''
+        transpile_and_run(code, "60")
+
+    def test_index_variable_with_subscript(self, check_cargo):
+        """Test that index variables work with subscript access."""
+        code = '''
+def main() -> None:
+    items: list[str] = ["a", "b", "c"]
+    idx: int = 1
+    print(items[idx])
+'''
+        transpile_and_run(code, "b")
+
 
 class TestErrorHandling:
     """Test Result type and error handling transpilation."""

@@ -118,6 +118,8 @@ class BinaryOp(Enum):
     BIT_XOR = "^"
     LSHIFT = "<<"
     RSHIFT = ">>"
+    IN = "in"
+    NOT_IN = "not in"
 
 
 class UnaryOp(Enum):

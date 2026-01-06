@@ -85,6 +85,8 @@ class TypeResolver:
     def __init__(self) -> None:
         self.imports: set[str] = set()  # Track required Rust imports
         self.custom_types: dict[str, RustType] = {}  # User-defined types
+        # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
+        self.stub_imports: dict[str, str] = {}
 
     def resolve(self, ir_type: IRType | None) -> RustType:
         """Resolve an IR type to a Rust type."""
@@ -130,6 +132,21 @@ class TypeResolver:
                 inner = ", ".join(r.to_rust() for r in resolved)
                 return RustType(name=f"({inner})")
             return RustType(name="()")
+
+        # Check for stub type mappings (e.g., Result from anyhow)
+        if name in self.stub_imports:
+            # Import here to avoid circular import
+            from spicycrab.codegen.stub_discovery import get_stub_type_mapping
+            stub_rust_type = get_stub_type_mapping(name)
+            if stub_rust_type:
+                # For anyhow::Result, only use the first type arg (T), not the error type
+                # anyhow::Result<T> is an alias for Result<T, anyhow::Error>
+                if stub_rust_type == "anyhow::Result" and ir_type.type_args:
+                    inner = self.resolve(ir_type.type_args[0])
+                    return RustType(name="anyhow::Result", generics=[inner])
+                # For other stub types, resolve all type args
+                generics = [self.resolve(t) for t in ir_type.type_args]
+                return RustType(name=stub_rust_type, generics=generics)
 
         # Standard generics
         rust_name = GENERIC_MAP.get(name, name)
@@ -201,6 +218,14 @@ class TypeResolver:
                 return RustType(name="chrono::Duration")
             if name == "timezone":
                 return RustType(name="chrono::FixedOffset")
+
+        # Check for stub type mappings (e.g., Error from anyhow)
+        if name in self.stub_imports:
+            # Import here to avoid circular import
+            from spicycrab.codegen.stub_discovery import get_stub_type_mapping
+            stub_rust_type = get_stub_type_mapping(name)
+            if stub_rust_type:
+                return RustType(name=stub_rust_type)
 
         # Check custom types
         if name in self.custom_types:

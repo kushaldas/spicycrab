@@ -13,6 +13,9 @@ from spicycrab.codegen.stdlib import (
     get_stdlib_mapping,
     get_datetime_mapping,
     get_datetime_method_mapping,
+    get_crate_for_python_module,
+    get_stub_mapping,
+    get_stub_type_mapping,
     PATHLIB_MAPPINGS,
 )
 from spicycrab.ir.nodes import (
@@ -113,6 +116,8 @@ class EmitterContext:
     in_result_context: bool = False  # True when inside a Result-returning function
     # Type tracking for instance method resolution
     type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
+    # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
+    stub_imports: dict[str, str] = field(default_factory=dict)
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -181,6 +186,9 @@ class RustEmitter:
         # Process imports and track local module imports
         self._process_imports(module.imports)
 
+        # Sync stub imports to the resolver for type resolution
+        self.resolver.stub_imports = self.ctx.stub_imports.copy()
+
         # Module docstring as comment
         if module.docstring:
             header_lines.append(f"//! {module.docstring.split(chr(10))[0]}")
@@ -222,6 +230,19 @@ class RustEmitter:
         for imp in imports:
             module_name = imp.module.split(".")[0]  # Get top-level module
 
+            # Check if this is a stub package import (e.g., from spicycrab_anyhow import Result)
+            crate_name = get_crate_for_python_module(module_name)
+            if crate_name:
+                # Track which names came from which crate
+                if imp.names:
+                    for name, alias in imp.names:
+                        effective_name = alias if alias else name
+                        self.ctx.stub_imports[effective_name] = crate_name
+                        # Track uppercase names as class names for constructor detection
+                        if name[0].isupper():
+                            self.ctx.class_names.add(effective_name)
+                continue
+
             # Check if this is a local module import
             if module_name in self.ctx.local_modules:
                 if module_name not in self.ctx.local_imports:
@@ -258,6 +279,13 @@ class RustEmitter:
                 imports.add(f"use {imp};")
             else:
                 imports.add(f"use {imp};")
+
+        # Add stub package imports (external crate imports)
+        # Get unique crate names from stub_imports
+        stub_crates = set(self.ctx.stub_imports.values())
+        for crate_name in stub_crates:
+            # For anyhow, we need anyhow::anyhow! macro, so just use the crate
+            imports.add(f"use {crate_name};")
 
         # Add local module imports
         # Use crate_name for main.rs (binary imports from library), "crate" for lib code
@@ -999,6 +1027,12 @@ class RustEmitter:
         if isinstance(expr, IRSubscript):
             obj = self.emit_expression(expr.obj)
             index = self.emit_expression(expr.index)
+            # Cast integer indices to usize for Vec/slice indexing
+            # This handles cases like values[i] where i: int (i64 in Rust)
+            if isinstance(expr.index, IRName):
+                # Variable used as index - cast to usize if it's a simple name
+                # (likely an integer counter)
+                index = f"{index} as usize"
             return f"{obj}[{index}]"
 
         if isinstance(expr, IRList):
@@ -1055,6 +1089,40 @@ class RustEmitter:
 
     def _emit_binop(self, expr: IRBinaryOp) -> str:
         """Emit a binary operation."""
+        # Special handling for str.find() comparisons
+        # Python: str.find(x) >= 0  -> Rust: str.contains(x)
+        # Python: str.find(x) != -1 -> Rust: str.contains(x)
+        # Python: str.find(x) == -1 -> Rust: !str.contains(x)
+        # Python: str.find(x) < 0   -> Rust: !str.contains(x)
+        if isinstance(expr.left, IRMethodCall) and expr.left.method == "find":
+            right_val = self.emit_expression(expr.right)
+            if right_val in ("0", "-1"):
+                obj = self.emit_expression(expr.left.obj)
+                # Emit the search argument without .to_string() for contains()
+                if expr.left.args:
+                    arg = self.emit_expression(expr.left.args[0])
+                    # Strip .to_string() since contains takes &str
+                    if arg.endswith('.to_string()'):
+                        arg = arg[:-12]  # Remove .to_string()
+                    else:
+                        arg = f"&{arg}"
+                else:
+                    arg = '""'
+
+                # Determine if this is a "found" or "not found" check
+                if right_val == "0":
+                    # >= 0 means found, < 0 means not found
+                    if expr.op == BinaryOp.GE:
+                        return f"{obj}.contains({arg})"
+                    if expr.op == BinaryOp.LT:
+                        return f"!{obj}.contains({arg})"
+                elif right_val == "-1":
+                    # != -1 means found, == -1 means not found
+                    if expr.op == BinaryOp.NE:
+                        return f"{obj}.contains({arg})"
+                    if expr.op == BinaryOp.EQ:
+                        return f"!{obj}.contains({arg})"
+
         left = self.emit_expression(expr.left)
         right = self.emit_expression(expr.right)
 
@@ -1081,9 +1149,28 @@ class RustEmitter:
             base = left[:-6]
             return f"!{base}.is_empty()"
 
+        # Handle integer variable compared with .len() - cast to usize
+        # Example: i < values.len() where i is i64 -> (i as usize) < values.len()
+        if right.endswith('.len()') and isinstance(expr.left, IRName):
+            if expr.op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE, BinaryOp.EQ, BinaryOp.NE):
+                return f"({left} as usize) {BINOP_MAP.get(expr.op, '<')} {right}"
+        if left.endswith('.len()') and isinstance(expr.right, IRName):
+            if expr.op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE, BinaryOp.EQ, BinaryOp.NE):
+                return f"{left} {BINOP_MAP.get(expr.op, '<')} ({right} as usize)"
+
         # Special handling for floor division
         if expr.op == BinaryOp.FLOOR_DIV:
             return f"{left} / {right}"
+
+        # Special handling for 'in' operator
+        # Python: x in container -> Rust: container.contains(&x)
+        # Note: operands are swapped!
+        if expr.op == BinaryOp.IN:
+            return f"{right}.contains(&{left})"
+
+        # Special handling for 'not in' operator
+        if expr.op == BinaryOp.NOT_IN:
+            return f"!{right}.contains(&{left})"
 
         # Special handling for power - return f64
         # Convert the entire left expression to f64 first, then apply powf
@@ -1124,11 +1211,27 @@ class RustEmitter:
         """Emit a function call."""
         args = [self.emit_expression(a) for a in expr.args]
 
-        # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
+        # Check for stub package Type.method calls (e.g., Result.Ok(), Error.msg())
         if isinstance(expr.func, IRAttribute) and isinstance(expr.func.obj, IRName):
-            module = expr.func.obj.name
+            type_name = expr.func.obj.name
             func_name = expr.func.attr
-            mapping = get_stdlib_mapping(module, func_name)
+
+            # Check if the type was imported from a stub package
+            if type_name in self.ctx.stub_imports:
+                crate_name = self.ctx.stub_imports[type_name]
+                # Look up the full mapping key: crate.Type.method (e.g., "anyhow.Result.Ok")
+                full_key = f"{crate_name}.{type_name}.{func_name}"
+                mapping = get_stub_mapping(full_key)
+                if mapping:
+                    result = self._apply_stdlib_mapping(mapping, args)
+                    # Add ? for Result-returning stub calls in Result context
+                    if mapping.needs_result and self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    return result
+
+            # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
+            mapping = get_stdlib_mapping(type_name, func_name)
             if mapping:
                 result = self._apply_stdlib_mapping(mapping, args)
                 # Add ? for Result-returning stdlib calls in Result context
@@ -1335,6 +1438,22 @@ class RustEmitter:
         """Emit a method call."""
         args = [self.emit_expression(a) for a in expr.args]
         method = expr.method
+
+        # Check for stub package Type.method calls (e.g., Result.Ok(), Error.msg())
+        if isinstance(expr.obj, IRName):
+            type_name = expr.obj.name
+            if type_name in self.ctx.stub_imports:
+                crate_name = self.ctx.stub_imports[type_name]
+                # Look up the full mapping key: crate.Type.method (e.g., "anyhow.Result.Ok")
+                full_key = f"{crate_name}.{type_name}.{method}"
+                mapping = get_stub_mapping(full_key)
+                if mapping:
+                    result = self._apply_stdlib_mapping(mapping, args)
+                    # Add ? for Result-returning stub calls in Result context
+                    if mapping.needs_result and self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    return result
 
         # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
         if isinstance(expr.obj, IRName):

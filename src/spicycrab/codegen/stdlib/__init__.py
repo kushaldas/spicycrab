@@ -55,6 +55,16 @@ from spicycrab.codegen.stdlib.time_map import (
     get_datetime_mapping,
     get_datetime_method_mapping,
 )
+from spicycrab.codegen.stub_discovery import (
+    get_stub_mapping,
+    get_stub_method_mapping,
+    get_stub_type_mapping,
+    get_stub_cargo_deps,
+    get_all_stub_packages,
+    get_crate_for_python_module,
+    get_stub_package_by_module,
+    clear_stub_cache,
+)
 
 __all__ = [
     # Types
@@ -105,14 +115,27 @@ __all__ = [
     "TIMEDELTA_METHOD_MAPPINGS",
     "get_datetime_mapping",
     "get_datetime_method_mapping",
+    # Stub discovery (external crate packages)
+    "get_stub_mapping",
+    "get_stub_method_mapping",
+    "get_stub_type_mapping",
+    "get_stub_cargo_deps",
+    "get_all_stub_packages",
+    "get_crate_for_python_module",
+    "get_stub_package_by_module",
+    "clear_stub_cache",
 ]
 
 
 def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
-    """Get stdlib mapping for a module.function call."""
+    """Get stdlib mapping for a module.function call.
+
+    First checks built-in stdlib mappings, then falls back to
+    any installed stub packages (e.g., spicycrab-clap).
+    """
     key = f"{module}.{func}"
 
-    # Check each mapping dict
+    # Check each built-in mapping dict
     if key in OS_MAPPINGS:
         return OS_MAPPINGS[key]
     if key in SYS_MAPPINGS:
@@ -136,4 +159,5 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
     if key in ALL_DATETIME_MAPPINGS:
         return ALL_DATETIME_MAPPINGS[key]
 
-    return None
+    # Fallback to installed stub packages
+    return get_stub_mapping(key)

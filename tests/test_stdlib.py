@@ -25,7 +25,8 @@ class TestOSMappings:
         mapping = get_stdlib_mapping("os", "getcwd")
         assert mapping is not None
         assert "current_dir" in mapping.rust_code
-        assert "std::env" in mapping.rust_imports
+        # Uses fully qualified path, no import needed
+        assert "std::env::current_dir" in mapping.rust_code
 
     def test_os_chdir(self):
         """Test os.chdir mapping."""
@@ -126,7 +127,8 @@ class TestSysMappings:
         mapping = get_stdlib_mapping("sys", "argv")
         assert mapping is not None
         assert "args()" in mapping.rust_code
-        assert "std::env" in mapping.rust_imports
+        # Uses fully qualified path, no import needed
+        assert "std::env::args" in mapping.rust_code
 
     def test_sys_exit(self):
         """Test sys.exit mapping."""

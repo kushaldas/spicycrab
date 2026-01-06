@@ -81,6 +81,8 @@ CMPOP_MAP: dict[type, BinaryOp] = {
     ast.LtE: BinaryOp.LE,
     ast.Gt: BinaryOp.GT,
     ast.GtE: BinaryOp.GE,
+    ast.In: BinaryOp.IN,
+    ast.NotIn: BinaryOp.NOT_IN,
 }
 
 BOOLOP_MAP: dict[type, BinaryOp] = {

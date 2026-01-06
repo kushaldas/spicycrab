@@ -6,7 +6,9 @@ Generates a Cargo.toml file for the transpiled Rust project.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from spicycrab.codegen.stub_discovery import get_stub_cargo_deps
 
 if TYPE_CHECKING:
     from spicycrab.ir.nodes import IRModule
@@ -133,6 +135,21 @@ def generate_cargo_toml(
     if extra_deps:
         for dep in extra_deps:
             deps[dep.name] = dep
+
+    # Add dependencies from installed stub packages
+    stub_deps = get_stub_cargo_deps()
+    for dep_name, dep_spec in stub_deps.items():
+        if dep_name not in deps:
+            # Handle both string version and table spec
+            if isinstance(dep_spec, str):
+                deps[dep_name] = CargoDependency(dep_name, dep_spec)
+            elif isinstance(dep_spec, dict):
+                version = dep_spec.get("version", "")
+                features = dep_spec.get("features", [])
+                optional = dep_spec.get("optional", False)
+                deps[dep_name] = CargoDependency(
+                    dep_name, version, features=features, optional=optional
+                )
 
     # Dependencies section
     if deps:
