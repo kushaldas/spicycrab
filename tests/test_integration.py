@@ -880,3 +880,100 @@ def main() -> None:
     # Directory is automatically cleaned up here
 '''
         transpile_and_run(code, "ok")
+
+
+class TestSubprocessModule:
+    """Test subprocess module transpilation using std::process."""
+
+    def test_subprocess_call(self, check_cargo):
+        """Test subprocess.call() function."""
+        code = '''
+import subprocess
+
+def main() -> None:
+    # Run echo command
+    args: list[str] = []
+    exit_code: int = subprocess.call("echo", args)
+
+    # exit_code should be 0 for success
+    if exit_code == 0:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_subprocess_check_output(self, check_cargo):
+        """Test subprocess.check_output() function."""
+        code = '''
+import subprocess
+
+def main() -> None:
+    # Run echo hello and capture output
+    args: list[str] = ["hello"]
+    output: str = subprocess.check_output("echo", args)
+
+    # Output should contain "hello"
+    if len(output) > 0:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_subprocess_getoutput(self, check_cargo):
+        """Test subprocess.getoutput() function."""
+        code = '''
+import subprocess
+
+def main() -> None:
+    # Run shell command
+    output: str = subprocess.getoutput("echo test")
+
+    # Should contain "test"
+    if len(output) > 0:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+
+class TestShutilModule:
+    """Test shutil module transpilation."""
+
+    def test_shutil_rmtree(self, check_cargo):
+        """Test shutil.rmtree() function."""
+        code = '''
+import shutil
+import tempfile
+import os
+
+def main() -> None:
+    # Create temp directory
+    tmpdir: str = tempfile.mkdtemp()
+
+    # Verify it exists
+    exists: bool = os.path.isdir(tmpdir)
+    if not exists:
+        print("fail1")
+        return
+
+    # Remove the directory tree
+    shutil.rmtree(tmpdir)
+
+    # Verify it's gone
+    gone: bool = not os.path.isdir(tmpdir)
+    if gone:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_shutil_which(self, check_cargo):
+        """Test shutil.which() function."""
+        code = '''
+import shutil
+
+def main() -> None:
+    # Find echo command (should exist on all systems)
+    result: str = shutil.which("echo")
+
+    # Should find it (returns empty string if not found)
+    if len(result) > 0:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")

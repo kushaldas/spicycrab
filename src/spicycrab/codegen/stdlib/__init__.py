@@ -27,6 +27,14 @@ from spicycrab.codegen.stdlib.tempfile_map import (
     TEMPFILE_MAPPINGS,
     get_tempfile_mapping,
 )
+from spicycrab.codegen.stdlib.subprocess_map import (
+    SUBPROCESS_MAPPINGS,
+    get_subprocess_mapping,
+)
+from spicycrab.codegen.stdlib.shutil_map import (
+    SHUTIL_MAPPINGS,
+    get_shutil_mapping,
+)
 from spicycrab.codegen.stdlib.time_map import (
     TIME_MAPPINGS,
     DATETIME_MAPPINGS,
@@ -63,6 +71,12 @@ __all__ = [
     # Tempfile mappings
     "TEMPFILE_MAPPINGS",
     "get_tempfile_mapping",
+    # Subprocess mappings
+    "SUBPROCESS_MAPPINGS",
+    "get_subprocess_mapping",
+    # Shutil mappings
+    "SHUTIL_MAPPINGS",
+    "get_shutil_mapping",
     # Collections mappings
     "COLLECTIONS_MAPPINGS",
     "DEQUE_METHOD_MAPPINGS",
@@ -102,6 +116,10 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return GLOB_MAPPINGS[key]
     if key in TEMPFILE_MAPPINGS:
         return TEMPFILE_MAPPINGS[key]
+    if key in SUBPROCESS_MAPPINGS:
+        return SUBPROCESS_MAPPINGS[key]
+    if key in SHUTIL_MAPPINGS:
+        return SHUTIL_MAPPINGS[key]
     if key in COLLECTIONS_MAPPINGS:
         return COLLECTIONS_MAPPINGS[key]
     if key in TIME_MAPPINGS:

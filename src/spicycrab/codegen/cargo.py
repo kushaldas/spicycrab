@@ -58,7 +58,11 @@ IMPORT_DEPS: dict[str, list[CargoDependency]] = {
     "tempfile": [
         CargoDependency("tempfile", "3"),
     ],
+    "shutil": [
+        CargoDependency("which", "6"),
+    ],
     # Note: Python's time module maps to std::time (no external dependency)
+    # Note: subprocess module maps to std::process (no external dependency)
 }
 
 # Dependencies for serde_json::Value (used with Any type)

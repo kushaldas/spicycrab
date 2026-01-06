@@ -654,6 +654,173 @@ Supported tempfile functions
 | ``tempfile.NamedTemporaryFile``| ``tempfile::NamedTempFile::new()``           |
 +--------------------------------+----------------------------------------------+
 
+subprocess
+----------
+
+The ``subprocess`` module is mapped to Rust's ``std::process``.
+
+subprocess.call()
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import subprocess
+
+   def run_command() -> int:
+       args: list[str] = ["-l"]
+       return subprocess.call("ls", args)
+
+.. code-block:: rust
+
+   pub fn run_command() -> i64 {
+       std::process::Command::new("ls")
+           .args(&args)
+           .status()
+           .unwrap()
+           .code()
+           .unwrap_or(-1) as i64
+   }
+
+subprocess.check_output()
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import subprocess
+
+   def get_output() -> str:
+       args: list[str] = ["hello"]
+       return subprocess.check_output("echo", args)
+
+.. code-block:: rust
+
+   pub fn get_output() -> String {
+       String::from_utf8_lossy(
+           &std::process::Command::new("echo")
+               .args(&args)
+               .output()
+               .unwrap()
+               .stdout
+       ).to_string()
+   }
+
+subprocess.getoutput()
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import subprocess
+
+   def shell_output() -> str:
+       return subprocess.getoutput("echo hello")
+
+.. code-block:: rust
+
+   pub fn shell_output() -> String {
+       String::from_utf8_lossy(
+           &std::process::Command::new("sh")
+               .arg("-c")
+               .arg("echo hello")
+               .output()
+               .unwrap()
+               .stdout
+       ).to_string()
+   }
+
+Supported subprocess functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++----------------------------------+------------------------------------------------+
+| Python                           | Rust                                           |
++==================================+================================================+
+| ``subprocess.run(cmd, args)``    | ``Command::new(cmd).args(args).status()``      |
++----------------------------------+------------------------------------------------+
+| ``subprocess.call(cmd, args)``   | ``Command::new(cmd).args(args).status()``      |
++----------------------------------+------------------------------------------------+
+| ``subprocess.check_call(...)``   | Same, but panics on non-zero exit              |
++----------------------------------+------------------------------------------------+
+| ``subprocess.check_output(...)`` | ``Command::new(...).output().stdout``          |
++----------------------------------+------------------------------------------------+
+| ``subprocess.getoutput(cmd)``    | ``Command::new("sh").arg("-c").arg(cmd)``      |
++----------------------------------+------------------------------------------------+
+| ``subprocess.getstatusoutput()`` | Returns ``(exit_code, output)`` tuple          |
++----------------------------------+------------------------------------------------+
+
+shutil
+------
+
+The ``shutil`` module is mapped to Rust's ``std::fs`` and the ``which`` crate.
+
+shutil.copy()
+^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import shutil
+
+   def copy_file(src: str, dst: str) -> None:
+       shutil.copy(src, dst)
+
+.. code-block:: rust
+
+   pub fn copy_file(src: String, dst: String) {
+       std::fs::copy(&src, &dst).unwrap();
+   }
+
+shutil.rmtree()
+^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import shutil
+
+   def remove_dir(path: str) -> None:
+       shutil.rmtree(path)
+
+.. code-block:: rust
+
+   pub fn remove_dir(path: String) {
+       std::fs::remove_dir_all(&path).unwrap();
+   }
+
+shutil.which()
+^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import shutil
+
+   def find_program(name: str) -> str:
+       return shutil.which(name)
+
+.. code-block:: rust
+
+   pub fn find_program(name: String) -> String {
+       which::which(name)
+           .ok()
+           .map(|p| p.to_string_lossy().to_string())
+           .unwrap_or_default()
+   }
+
+Supported shutil functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++-----------------------------+------------------------------------------------+
+| Python                      | Rust                                           |
++=============================+================================================+
+| ``shutil.copy(src, dst)``   | ``std::fs::copy(src, dst)``                    |
++-----------------------------+------------------------------------------------+
+| ``shutil.copy2(src, dst)``  | ``std::fs::copy(src, dst)``                    |
++-----------------------------+------------------------------------------------+
+| ``shutil.copyfile(...)``    | ``std::fs::copy(...)``                         |
++-----------------------------+------------------------------------------------+
+| ``shutil.rmtree(path)``     | ``std::fs::remove_dir_all(path)``              |
++-----------------------------+------------------------------------------------+
+| ``shutil.move(src, dst)``   | ``std::fs::rename(src, dst)``                  |
++-----------------------------+------------------------------------------------+
+| ``shutil.which(cmd)``       | ``which::which(cmd)``                          |
++-----------------------------+------------------------------------------------+
+
 Generated Dependencies
 ----------------------
 

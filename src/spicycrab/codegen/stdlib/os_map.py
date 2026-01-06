@@ -220,6 +220,12 @@ PATHLIB_MAPPINGS: dict[str, StdlibMapping] = {
         rust_code="{self}.join({args})",
         rust_imports=[],
     ),
+    "Path.join": StdlibMapping(
+        python_module="pathlib",
+        python_func="join",
+        rust_code="{self}.join({args})",
+        rust_imports=[],
+    ),
     "Path.__truediv__": StdlibMapping(
         python_module="pathlib",
         python_func="__truediv__",
