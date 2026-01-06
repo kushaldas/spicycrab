@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from spicycrab.analyzer.type_resolver import TypeResolver, RustType
-from spicycrab.codegen.stdlib import get_stdlib_mapping, PATHLIB_MAPPINGS
+from spicycrab.codegen.stdlib import (
+    get_stdlib_mapping,
+    get_datetime_mapping,
+    get_datetime_method_mapping,
+    PATHLIB_MAPPINGS,
+)
 from spicycrab.ir.nodes import (
     BinaryOp,
     IRAssign,
@@ -19,6 +24,7 @@ from spicycrab.ir.nodes import (
     IRBreak,
     IRCall,
     IRClass,
+    IRClassType,
     IRContinue,
     IRDict,
     IRExceptHandler,
@@ -27,6 +33,7 @@ from spicycrab.ir.nodes import (
     IRFor,
     IRFString,
     IRFunction,
+    IRGenericType,
     IRIf,
     IRIfExp,
     IRImport,
@@ -104,6 +111,8 @@ class EmitterContext:
     # Error handling support
     result_functions: set[str] = field(default_factory=set)  # Functions that return Result
     in_result_context: bool = False  # True when inside a Result-returning function
+    # Type tracking for instance method resolution
+    type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -128,10 +137,26 @@ class RustEmitter:
         """Check if a type is Result[T, E]."""
         if ir_type is None:
             return False
-        from spicycrab.ir.nodes import IRGenericType
         if isinstance(ir_type, IRGenericType):
             return ir_type.name == "Result"
         return False
+
+    def _extract_type_string(self, ir_type: IRType | None) -> str | None:
+        """Extract a type string for method mapping lookup.
+
+        Returns strings like "datetime.datetime", "datetime.date", "datetime.timedelta"
+        that can be used to look up method mappings.
+        """
+        if ir_type is None:
+            return None
+        if isinstance(ir_type, IRClassType):
+            if ir_type.module:
+                return f"{ir_type.module}.{ir_type.name}"
+            return ir_type.name
+        if isinstance(ir_type, IRGenericType):
+            # For generics, return just the outer type name
+            return ir_type.name
+        return None
 
     def emit_module(self, module: IRModule) -> str:
         """Emit a complete Rust module."""
@@ -643,6 +668,10 @@ class RustEmitter:
             mut = "mut " if stmt.is_mutable else ""
             if stmt.type_annotation:
                 rust_type = self.resolver.resolve(stmt.type_annotation)
+                # Track the type for instance method resolution
+                type_str = self._extract_type_string(stmt.type_annotation)
+                if type_str:
+                    self.ctx.type_env[stmt.target] = type_str
                 return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
             return f"{indent}let {mut}{stmt.target} = {value};"
         else:
@@ -931,6 +960,21 @@ class RustEmitter:
                     for imp in mapping.rust_imports:
                         self.ctx.stdlib_imports.add(imp)
                     return mapping.rust_code
+
+                # Check for typed variable property access (e.g., dt.year for datetime)
+                if module in self.ctx.type_env:
+                    var_type = self.ctx.type_env[module]
+                    # Extract class name from type (e.g., "datetime.datetime" -> "datetime")
+                    class_name = var_type.split(".")[-1]
+                    # Look up method mapping with full key (e.g., "datetime.year")
+                    method_key = f"{class_name}.{expr.attr}"
+                    mapping = get_datetime_method_mapping(method_key)
+                    if mapping:
+                        obj = self.emit_expression(expr.obj)
+                        rust_code = mapping.rust_code.replace("{self}", obj)
+                        for imp in mapping.rust_imports:
+                            self.ctx.stdlib_imports.add(imp)
+                        return rust_code
             obj = self.emit_expression(expr.obj)
             return f"{obj}.{expr.attr}"
 
@@ -1170,6 +1214,105 @@ class RustEmitter:
 
         return rust_code
 
+    def _apply_datetime_constructor(
+        self, mapping: "StdlibMapping", args: list[str], expr: "IRMethodCall"
+    ) -> str:
+        """Apply a datetime constructor mapping, handling keyword arguments."""
+        from spicycrab.codegen.stdlib import StdlibMapping
+
+        rust_code = mapping.rust_code
+
+        # Build keyword args dict from the expression
+        kwargs: dict[str, str] = {}
+        if hasattr(expr, 'kwargs') and expr.kwargs:
+            for key, val_expr in expr.kwargs.items():
+                kwargs[key] = self.emit_expression(val_expr)
+
+        # Handle datetime.date(year, month, day)
+        if mapping.python_func == "date" and mapping.python_module == "datetime":
+            if len(args) == 3:
+                rust_code = rust_code.replace("{args}", ", ".join(args))
+            for imp in mapping.rust_imports:
+                self.ctx.stdlib_imports.add(imp)
+            return rust_code
+
+        # Handle datetime.time(hour, minute, second, microsecond)
+        if mapping.python_func == "time" and mapping.python_module == "datetime":
+            # Pad with defaults: hour=0, minute=0, second=0, microsecond=0
+            while len(args) < 4:
+                args.append("0")
+            rust_code = rust_code.replace("{args}", ", ".join(args))
+            for imp in mapping.rust_imports:
+                self.ctx.stdlib_imports.add(imp)
+            return rust_code
+
+        # Handle datetime.datetime(year, month, day, hour=0, minute=0, second=0, microsecond=0)
+        if mapping.python_func == "datetime" and "{year}" in rust_code:
+            defaults = {"year": "0", "month": "1", "day": "1",
+                       "hour": "0", "minute": "0", "second": "0", "microsecond": "0"}
+            # Fill from positional args in order
+            arg_names = ["year", "month", "day", "hour", "minute", "second", "microsecond"]
+            for i, arg in enumerate(args):
+                if i < len(arg_names):
+                    defaults[arg_names[i]] = arg
+            # Override with keyword args
+            defaults.update(kwargs)
+            for key, val in defaults.items():
+                rust_code = rust_code.replace(f"{{{key}}}", val)
+            for imp in mapping.rust_imports:
+                self.ctx.stdlib_imports.add(imp)
+            return rust_code
+
+        # Handle datetime.timedelta(days=0, seconds=0, microseconds=0, ...)
+        if mapping.python_func == "timedelta":
+            defaults = {"days": "0", "seconds": "0", "microseconds": "0",
+                       "milliseconds": "0", "minutes": "0", "hours": "0", "weeks": "0"}
+            # Fill from positional args in order
+            arg_names = ["days", "seconds", "microseconds", "milliseconds",
+                        "minutes", "hours", "weeks"]
+            for i, arg in enumerate(args):
+                if i < len(arg_names):
+                    defaults[arg_names[i]] = arg
+            # Override with keyword args
+            defaults.update(kwargs)
+
+            # Build the duration expression
+            # chrono::Duration doesn't have all these, so we combine them
+            parts = []
+            if defaults["weeks"] != "0":
+                parts.append(f"chrono::Duration::weeks({defaults['weeks']})")
+            if defaults["days"] != "0":
+                parts.append(f"chrono::Duration::days({defaults['days']})")
+            if defaults["hours"] != "0":
+                parts.append(f"chrono::Duration::hours({defaults['hours']})")
+            if defaults["minutes"] != "0":
+                parts.append(f"chrono::Duration::minutes({defaults['minutes']})")
+            if defaults["seconds"] != "0":
+                parts.append(f"chrono::Duration::seconds({defaults['seconds']})")
+            if defaults["milliseconds"] != "0":
+                parts.append(f"chrono::Duration::milliseconds({defaults['milliseconds']})")
+            if defaults["microseconds"] != "0":
+                parts.append(f"chrono::Duration::microseconds({defaults['microseconds']})")
+
+            if not parts:
+                result = "chrono::Duration::zero()"
+            else:
+                result = " + ".join(parts)
+            # Track required imports
+            for imp in mapping.rust_imports:
+                self.ctx.stdlib_imports.add(imp)
+            return result
+
+        # For simple mappings, just replace {args}
+        if "{args}" in rust_code:
+            rust_code = rust_code.replace("{args}", ", ".join(args))
+
+        # Track required imports
+        for imp in mapping.rust_imports:
+            self.ctx.stdlib_imports.add(imp)
+
+        return rust_code
+
     def _emit_method_call(self, expr: IRMethodCall) -> str:
         """Emit a method call."""
         args = [self.emit_expression(a) for a in expr.args]
@@ -1187,6 +1330,39 @@ class RustEmitter:
                         result = result[:-9] + "?"
                 return result
 
+            # Check for datetime module constructor/class method calls
+            # e.g., datetime.date(2024, 1, 15), datetime.timedelta(days=5)
+            full_key = f"{module}.{method}"
+            dt_mapping = get_datetime_mapping(full_key)
+            if dt_mapping:
+                result = self._apply_datetime_constructor(dt_mapping, args, expr)
+                if dt_mapping.needs_result and self.ctx.in_result_context:
+                    if result.endswith(".unwrap()"):
+                        result = result[:-9] + "?"
+                return result
+
+            # Check for typed variable method calls (e.g., dt.isoformat() for datetime)
+            if module in self.ctx.type_env:
+                var_type = self.ctx.type_env[module]
+                # Extract class name from type (e.g., "datetime.datetime" -> "datetime")
+                class_name = var_type.split(".")[-1]
+                # Look up method mapping with full key (e.g., "datetime.isoformat")
+                method_key = f"{class_name}.{method}"
+                method_mapping = get_datetime_method_mapping(method_key)
+                if method_mapping:
+                    obj = self.emit_expression(expr.obj)
+                    rust_code = method_mapping.rust_code.replace("{self}", obj)
+                    # Replace argument placeholders if present
+                    if "{args}" in rust_code:
+                        rust_code = rust_code.replace("{args}", ", ".join(args))
+                    elif args:
+                        # Handle indexed args {arg0}, {arg1}, etc.
+                        for i, arg in enumerate(args):
+                            rust_code = rust_code.replace(f"{{arg{i}}}", arg)
+                    for imp in method_mapping.rust_imports:
+                        self.ctx.stdlib_imports.add(imp)
+                    return rust_code
+
         # Check for nested stdlib calls (e.g., os.path.exists())
         if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
             module = f"{expr.obj.obj.name}.{expr.obj.attr}"
@@ -1194,6 +1370,16 @@ class RustEmitter:
             if mapping:
                 result = self._apply_stdlib_mapping(mapping, args)
                 if mapping.needs_result and self.ctx.in_result_context:
+                    if result.endswith(".unwrap()"):
+                        result = result[:-9] + "?"
+                return result
+
+            # Check for datetime module nested calls (e.g., datetime.datetime.now())
+            full_key = f"{module}.{method}"
+            dt_mapping = get_datetime_mapping(full_key)
+            if dt_mapping:
+                result = self._apply_stdlib_mapping(dt_mapping, args)
+                if dt_mapping.needs_result and self.ctx.in_result_context:
                     if result.endswith(".unwrap()"):
                         result = result[:-9] + "?"
                 return result

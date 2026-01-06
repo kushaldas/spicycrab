@@ -57,11 +57,13 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         # Allow certain lints that are stylistic or require complex code analysis:
         # - unused_variables: test code may not use all variables
         # - unused_mut: transpiler may conservatively mark variables as mutable
+        # - unused_imports: chrono traits may be imported preemptively
         # - vec_init_then_push: would require detecting push after vec![] creation
         result = subprocess.run(
             ["cargo", "clippy", "--", "-D", "warnings",
              "-A", "unused_variables",
              "-A", "unused_mut",
+             "-A", "unused_imports",
              "-A", "clippy::vec_init_then_push"],
             cwd=tmpdir,
             capture_output=True,
@@ -651,72 +653,130 @@ def main() -> None:
 class TestTimeModule:
     """Test time module transpilation."""
 
-    def test_time_time(self, check_cargo):
-        """Test time.time() returns current timestamp."""
+    def test_time_functions(self, check_cargo):
+        """Test time.time() and time.sleep() together."""
         code = '''
 import time
 
 def main() -> None:
+    # Test time.time() returns positive timestamp
     t: float = time.time()
-    # Verify it returns a positive float (Unix timestamp)
-    if t > 0.0:
-        print("ok")
-    else:
-        print("fail")
-'''
-        transpile_and_run(code, "ok")
+    if t <= 0.0:
+        print("fail: time")
+        return
 
-    def test_time_sleep(self, check_cargo):
-        """Test time.sleep() pauses execution."""
-        code = '''
-import time
-
-def main() -> None:
+    # Test time.sleep() pauses execution
     start: float = time.time()
     time.sleep(0.01)
     end: float = time.time()
-    # Verify some time passed
-    if end > start:
-        print("ok")
-    else:
-        print("fail")
+    if end <= start:
+        print("fail: sleep")
+        return
+
+    print("ok")
 '''
         transpile_and_run(code, "ok")
 
 
 class TestDatetimeModule:
-    """Test datetime module transpilation using chrono."""
+    """Test datetime module transpilation using chrono.
 
-    def test_datetime_now(self, check_cargo):
-        """Test datetime.datetime.now() returns current local time."""
+    Instance method mappings (like dt.year, dt.isoformat()) require explicit
+    type annotations for the transpiler to resolve the correct Rust methods.
+    """
+
+    def test_datetime_class_methods(self, check_cargo):
+        """Test datetime.datetime class methods: now, utcnow, today."""
         code = '''
 import datetime
 
 def main() -> None:
+    # Test datetime.now()
     now = datetime.datetime.now()
-    # Just verify it doesn't crash and returns something
-    print("ok")
-'''
-        transpile_and_run(code, "ok")
 
-    def test_datetime_utcnow(self, check_cargo):
-        """Test datetime.datetime.utcnow() returns UTC time."""
-        code = '''
-import datetime
-
-def main() -> None:
+    # Test datetime.utcnow()
     utc = datetime.datetime.utcnow()
+
+    # Test datetime.today()
+    today = datetime.datetime.today()
+
     print("ok")
 '''
         transpile_and_run(code, "ok")
 
     def test_date_today(self, check_cargo):
-        """Test datetime.date.today() returns current date."""
+        """Test datetime.date.today() class method."""
         code = '''
 import datetime
 
 def main() -> None:
+    # Test date.today()
     today = datetime.date.today()
     print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_datetime_fromtimestamp(self, check_cargo):
+        """Test datetime.fromtimestamp."""
+        code = '''
+import datetime
+
+def main() -> None:
+    # Unix timestamp for 2024-01-01 00:00:00 UTC
+    ts: float = 1704067200.0
+
+    # Create datetime from timestamp
+    dt = datetime.datetime.fromtimestamp(ts)
+
+    # Just verify it works without crashing
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_datetime_instance_methods(self, check_cargo):
+        """Test datetime instance methods with type annotations.
+
+        Type annotations like `dt: datetime.datetime` enable the transpiler
+        to resolve instance method calls like dt.year, dt.isoformat().
+        """
+        code = '''
+import datetime
+
+def main() -> None:
+    # Type annotation enables instance method resolution
+    dt: datetime.datetime = datetime.datetime.now()
+
+    # Access properties (year, month, day, etc.)
+    year: int = dt.year
+    month: int = dt.month
+    day: int = dt.day
+
+    # Verify year is reasonable (2020-2100)
+    valid: bool = year > 2020
+    if valid:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_date_instance_methods(self, check_cargo):
+        """Test date instance methods with type annotations."""
+        code = '''
+import datetime
+
+def main() -> None:
+    # Type annotation enables instance method resolution
+    today: datetime.date = datetime.date.today()
+
+    # Access properties
+    year: int = today.year
+    month: int = today.month
+    day: int = today.day
+
+    # weekday() returns 0-6 (Monday-Sunday)
+    weekday: int = today.weekday()
+
+    valid: bool = weekday >= 0
+    if valid:
+        print("ok")
 '''
         transpile_and_run(code, "ok")

@@ -326,6 +326,14 @@ Sleep
 datetime
 --------
 
+The ``datetime`` module is mapped to Rust's `chrono <https://docs.rs/chrono>`_ crate.
+
+.. note::
+
+   Python's ``time`` module (e.g., ``time.time()``, ``time.sleep()``) maps to
+   ``std::time``, while the ``datetime`` module uses the ``chrono`` crate.
+   This allows you to use both modules in the same project without conflicts.
+
 Current local time
 ^^^^^^^^^^^^^^^^^^
 
@@ -374,6 +382,121 @@ Today's date
    pub fn today() -> chrono::NaiveDate {
        chrono::Local::now().date_naive()
    }
+
+From timestamp
+^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import datetime
+
+   def from_ts(ts: float):
+       return datetime.datetime.fromtimestamp(ts)
+
+.. code-block:: rust
+
+   pub fn from_ts(ts: f64) -> chrono::DateTime<chrono::Local> {
+       chrono::Local.timestamp_opt(ts as i64, ((ts.fract()) * 1_000_000_000.0) as u32).unwrap()
+   }
+
+timedelta
+^^^^^^^^^
+
+The ``datetime.timedelta`` class maps to ``chrono::Duration``:
+
+.. code-block:: python
+
+   import datetime
+
+   def get_duration():
+       return datetime.timedelta(days=1, hours=2, minutes=30)
+
+.. code-block:: rust
+
+   pub fn get_duration() -> chrono::Duration {
+       chrono::Duration::days(1) + chrono::Duration::hours(2) + chrono::Duration::minutes(30)
+   }
+
+Supported datetime class methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The following ``datetime`` module class methods are supported:
+
++------------------------------------+--------------------------------------------+
+| Python                             | Rust                                       |
++====================================+============================================+
+| ``datetime.datetime.now()``        | ``chrono::Local::now()``                   |
++------------------------------------+--------------------------------------------+
+| ``datetime.datetime.utcnow()``     | ``chrono::Utc::now()``                     |
++------------------------------------+--------------------------------------------+
+| ``datetime.datetime.fromtimestamp``| ``chrono::Local.timestamp_opt(...)``       |
++------------------------------------+--------------------------------------------+
+| ``datetime.date.today()``          | ``chrono::Local::now().date_naive()``      |
++------------------------------------+--------------------------------------------+
+| ``datetime.timedelta(...)``        | ``chrono::Duration::...()``                |
++------------------------------------+--------------------------------------------+
+
+Instance Methods with Type Annotations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Instance methods like ``dt.year``, ``dt.month``, ``dt.isoformat()`` are
+supported when **explicit type annotations** are provided.
+
+**Example with type annotations:**
+
+.. code-block:: python
+
+   import datetime
+
+   def get_year() -> int:
+       # Type annotation enables instance method resolution
+       dt: datetime.datetime = datetime.datetime.now()
+       return dt.year  # ✅ Works: transpiles to dt.year() as i64
+
+.. code-block:: rust
+
+   pub fn get_year() -> i64 {
+       let dt: chrono::DateTime<chrono::Local> = chrono::Local::now();
+       dt.year() as i64
+   }
+
+**Without type annotations (not recommended):**
+
+.. code-block:: python
+
+   import datetime
+
+   def get_year() -> int:
+       dt = datetime.datetime.now()  # No type annotation
+       return dt.year  # ❌ Not transpiled correctly
+
+   # The transpiler doesn't know that `dt` is a datetime object,
+   # so it cannot apply the correct Rust mapping.
+
+**Supported instance methods:**
+
++----------------------------+----------------------------------------+
+| Python                     | Rust                                   |
++============================+========================================+
+| ``dt.year``                | ``dt.year() as i64``                   |
++----------------------------+----------------------------------------+
+| ``dt.month``               | ``dt.month() as i64``                  |
++----------------------------+----------------------------------------+
+| ``dt.day``                 | ``dt.day() as i64``                    |
++----------------------------+----------------------------------------+
+| ``dt.hour``                | ``dt.hour() as i64``                   |
++----------------------------+----------------------------------------+
+| ``dt.minute``              | ``dt.minute() as i64``                 |
++----------------------------+----------------------------------------+
+| ``dt.second``              | ``dt.second() as i64``                 |
++----------------------------+----------------------------------------+
+| ``dt.weekday()``           | ``dt.weekday().num_days_from_monday()``|
++----------------------------+----------------------------------------+
+| ``dt.isoformat()``         | ``dt.format(...).to_string()``         |
++----------------------------+----------------------------------------+
+
+**Best practice:** Always use explicit type annotations for datetime variables
+to ensure correct transpilation of instance methods.
 
 Generated Dependencies
 ----------------------

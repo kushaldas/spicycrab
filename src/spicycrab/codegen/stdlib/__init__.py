@@ -22,7 +22,15 @@ from spicycrab.codegen.stdlib.os_map import (
 from spicycrab.codegen.stdlib.time_map import (
     TIME_MAPPINGS,
     DATETIME_MAPPINGS,
+    DATE_MAPPINGS,
+    TIME_CLASS_MAPPINGS,
+    TIMEDELTA_MAPPINGS,
+    TIMEZONE_MAPPINGS,
     DATETIME_METHOD_MAPPINGS,
+    DATE_METHOD_MAPPINGS,
+    TIME_CLASS_METHOD_MAPPINGS,
+    TIMEDELTA_METHOD_MAPPINGS,
+    ALL_DATETIME_MAPPINGS,
     get_time_mapping,
     get_datetime_mapping,
     get_datetime_method_mapping,
@@ -46,11 +54,20 @@ __all__ = [
     "DEQUE_METHOD_MAPPINGS",
     "get_collections_mapping",
     "get_deque_method",
-    # Time/datetime mappings
+    # Time module mappings
     "TIME_MAPPINGS",
-    "DATETIME_MAPPINGS",
-    "DATETIME_METHOD_MAPPINGS",
     "get_time_mapping",
+    # Datetime module mappings
+    "DATETIME_MAPPINGS",
+    "DATE_MAPPINGS",
+    "TIME_CLASS_MAPPINGS",
+    "TIMEDELTA_MAPPINGS",
+    "TIMEZONE_MAPPINGS",
+    "ALL_DATETIME_MAPPINGS",
+    "DATETIME_METHOD_MAPPINGS",
+    "DATE_METHOD_MAPPINGS",
+    "TIME_CLASS_METHOD_MAPPINGS",
+    "TIMEDELTA_METHOD_MAPPINGS",
     "get_datetime_mapping",
     "get_datetime_method_mapping",
 ]
@@ -71,7 +88,7 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return COLLECTIONS_MAPPINGS[key]
     if key in TIME_MAPPINGS:
         return TIME_MAPPINGS[key]
-    if key in DATETIME_MAPPINGS:
-        return DATETIME_MAPPINGS[key]
+    if key in ALL_DATETIME_MAPPINGS:
+        return ALL_DATETIME_MAPPINGS[key]
 
     return None

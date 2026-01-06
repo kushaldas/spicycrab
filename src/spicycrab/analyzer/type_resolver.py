@@ -172,6 +172,7 @@ class TypeResolver:
         """Resolve a user-defined class type."""
         # Check for known types
         name = ir_type.name
+        module = ir_type.module
 
         # Python's 'object' type - use () in Rust
         if name == "object":
@@ -186,6 +187,20 @@ class TypeResolver:
         if name in ("Path", "PurePath", "PosixPath", "WindowsPath"):
             self.imports.add("std::path")
             return RustType(name="PathBuf")
+
+        # datetime module types -> chrono types
+        if module == "datetime":
+            self.imports.add("chrono")
+            if name == "datetime":
+                return RustType(name="chrono::DateTime<chrono::Local>")
+            if name == "date":
+                return RustType(name="chrono::NaiveDate")
+            if name == "time":
+                return RustType(name="chrono::NaiveTime")
+            if name == "timedelta":
+                return RustType(name="chrono::Duration")
+            if name == "timezone":
+                return RustType(name="chrono::FixedOffset")
 
         # Check custom types
         if name in self.custom_types:
