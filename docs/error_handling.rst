@@ -252,6 +252,166 @@ Complete Example
        }
    }
 
+Explicit Unwrap Methods
+-----------------------
+
+**IMPORTANT:** spicycrab does NOT auto-generate ``.unwrap()`` calls in Rust code
+unless explicitly requested in Python. This promotes safer error handling.
+
+To explicitly unwrap a Result or Option, use the static method syntax:
+
+Basic unwrap
+^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from spicycrab.types import Result, Ok, Err
+
+   def get_value() -> Result[int, str]:
+       return Ok(42)
+
+   def main() -> None:
+       result: Result[int, str] = get_value()
+       value: int = Result.unwrap(result)
+       print(value)
+
+.. code-block:: rust
+
+   pub fn get_value() -> Result<i64, String> {
+       Ok(42)
+   }
+
+   fn main() {
+       let result: Result<i64, String> = get_value();
+       let value: i64 = result.unwrap();
+       println!("{}", value);
+   }
+
+unwrap_or with default
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   def get_err() -> Result[int, str]:
+       return Err("error")
+
+   def main() -> None:
+       result: Result[int, str] = get_err()
+       value: int = Result.unwrap_or(result, 0)
+       print(value)
+
+.. code-block:: rust
+
+   pub fn get_err() -> Result<i64, String> {
+       Err("error".to_string())
+   }
+
+   fn main() {
+       let result: Result<i64, String> = get_err();
+       let value: i64 = result.unwrap_or(0);
+       println!("{}", value);
+   }
+
+expect with custom message
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from spicycrab.types import Result, Ok, Err
+
+   def get_value() -> Result[int, str]:
+       return Ok(100)
+
+   def main() -> None:
+       result: Result[int, str] = get_value()
+       value: int = Result.expect(result, "should have value")
+       print(value)
+
+.. code-block:: rust
+
+   pub fn get_value() -> Result<i64, String> {
+       Ok(100)
+   }
+
+   fn main() {
+       let result: Result<i64, String> = get_value();
+       let value: i64 = result.expect("should have value");
+       println!("{}", value);
+   }
+
+Checking Result status
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from spicycrab.types import Result, Ok, Err
+
+   def get_value() -> Result[int, str]:
+       return Ok(42)
+
+   def get_err() -> Result[int, str]:
+       return Err("failed")
+
+   def main() -> None:
+       ok_result: Result[int, str] = get_value()
+       if Result.is_ok(ok_result):
+           print("got ok")
+
+       err_result: Result[int, str] = get_err()
+       if Result.is_err(err_result):
+           print("got err")
+
+.. code-block:: rust
+
+   pub fn get_value() -> Result<i64, String> {
+       Ok(42)
+   }
+
+   pub fn get_err() -> Result<i64, String> {
+       Err("failed".to_string())
+   }
+
+   fn main() {
+       let ok_result: Result<i64, String> = get_value();
+       if ok_result.is_ok() {
+           println!("{}", "got ok");
+       }
+
+       let err_result: Result<i64, String> = get_err();
+       if err_result.is_err() {
+           println!("{}", "got err");
+       }
+   }
+
+Supported static methods
+^^^^^^^^^^^^^^^^^^^^^^^^
+
++--------------------------------+-----------------------------+
+| Python                         | Rust                        |
++================================+=============================+
+| ``Result.unwrap(x)``           | ``x.unwrap()``              |
++--------------------------------+-----------------------------+
+| ``Result.expect(x, msg)``      | ``x.expect(msg)``           |
++--------------------------------+-----------------------------+
+| ``Result.unwrap_or(x, default)``| ``x.unwrap_or(default)``   |
++--------------------------------+-----------------------------+
+| ``Result.unwrap_err(x)``       | ``x.unwrap_err()``          |
++--------------------------------+-----------------------------+
+| ``Result.is_ok(x)``            | ``x.is_ok()``               |
++--------------------------------+-----------------------------+
+| ``Result.is_err(x)``           | ``x.is_err()``              |
++--------------------------------+-----------------------------+
+| ``Option.unwrap(x)``           | ``x.unwrap()``              |
++--------------------------------+-----------------------------+
+| ``Option.expect(x, msg)``      | ``x.expect(msg)``           |
++--------------------------------+-----------------------------+
+| ``Option.unwrap_or(x, default)``| ``x.unwrap_or(default)``   |
++--------------------------------+-----------------------------+
+| ``Option.is_some(x)``          | ``x.is_some()``             |
++--------------------------------+-----------------------------+
+| ``Option.is_none(x)``          | ``x.is_none()``             |
++--------------------------------+-----------------------------+
+
 String Methods for Validation
 -----------------------------
 

@@ -521,6 +521,89 @@ def main() -> None:
         transpile_and_run(code, "empty")
 
 
+class TestUnwrapMethods:
+    """Test explicit unwrap/expect methods."""
+
+    def test_result_unwrap(self, check_cargo):
+        """Test Result.unwrap() explicit call."""
+        code = '''
+from spicycrab.types import Result, Ok, Err
+
+def get_value() -> Result[int, str]:
+    return Ok(42)
+
+def main() -> None:
+    result: Result[int, str] = get_value()
+    value: int = Result.unwrap(result)
+    print(value)
+'''
+        transpile_and_run(code, "42")
+
+    def test_result_unwrap_or(self, check_cargo):
+        """Test Result.unwrap_or() with default value."""
+        code = '''
+from spicycrab.types import Result, Ok, Err
+
+def get_err() -> Result[int, str]:
+    return Err("error")
+
+def main() -> None:
+    result: Result[int, str] = get_err()
+    value: int = Result.unwrap_or(result, 0)
+    print(value)
+'''
+        transpile_and_run(code, "0")
+
+    def test_result_expect(self, check_cargo):
+        """Test Result.expect() with custom message."""
+        code = '''
+from spicycrab.types import Result, Ok, Err
+
+def get_value() -> Result[int, str]:
+    return Ok(100)
+
+def main() -> None:
+    result: Result[int, str] = get_value()
+    value: int = Result.expect(result, "should have value")
+    print(value)
+'''
+        transpile_and_run(code, "100")
+
+    def test_result_is_ok(self, check_cargo):
+        """Test Result.is_ok() check."""
+        code = '''
+from spicycrab.types import Result, Ok, Err
+
+def get_value() -> Result[int, str]:
+    return Ok(42)
+
+def main() -> None:
+    result: Result[int, str] = get_value()
+    if Result.is_ok(result):
+        print("is ok")
+    else:
+        print("is err")
+'''
+        transpile_and_run(code, "is ok")
+
+    def test_result_is_err(self, check_cargo):
+        """Test Result.is_err() check."""
+        code = '''
+from spicycrab.types import Result, Ok, Err
+
+def get_err() -> Result[int, str]:
+    return Err("failed")
+
+def main() -> None:
+    result: Result[int, str] = get_err()
+    if Result.is_err(result):
+        print("is err")
+    else:
+        print("is ok")
+'''
+        transpile_and_run(code, "is err")
+
+
 class TestSysModule:
     """Test sys module functionality."""
 

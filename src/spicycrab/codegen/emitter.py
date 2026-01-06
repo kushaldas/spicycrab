@@ -1121,6 +1121,37 @@ class RustEmitter:
                         result = result[:-9] + "?"
                 return result
 
+        # Handle Result/Option static method calls
+        # Result.unwrap(x) -> x.unwrap(), Result.expect(x, msg) -> x.expect(msg), etc.
+        if isinstance(expr.obj, IRName):
+            type_name = expr.obj.name
+            if type_name in ("Result", "Option") and args:
+                # Methods that take (self) only
+                if method in ("unwrap", "unwrap_err", "is_ok", "is_err", "is_some", "is_none"):
+                    return f"{args[0]}.{method}()"
+                # Methods that take (self, value)
+                if method == "unwrap_or":
+                    if len(args) >= 2:
+                        return f"{args[0]}.{method}({args[1]})"
+                # expect/expect_err take &str, not String
+                if method in ("expect", "expect_err"):
+                    if len(args) >= 2:
+                        # Strip .to_string() since expect takes &str
+                        msg = args[1].removesuffix('.to_string()') if args[1].endswith('.to_string()') else f"&{args[1]}"
+                        return f"{args[0]}.{method}({msg})"
+                # Methods that take (self, closure)
+                if method in ("unwrap_or_else", "map", "map_err", "and_then", "or_else"):
+                    if len(args) >= 2:
+                        return f"{args[0]}.{method}({args[1]})"
+                # Methods that take (self, default, closure)
+                if method in ("map_or", "map_or_else"):
+                    if len(args) >= 3:
+                        return f"{args[0]}.{method}({args[1]}, {args[2]})"
+                # ok_or / ok_or_else for Option
+                if method in ("ok_or", "ok_or_else"):
+                    if len(args) >= 2:
+                        return f"{args[0]}.{method}({args[1]})"
+
         obj = self.emit_expression(expr.obj)
 
         # String methods
