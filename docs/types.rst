@@ -1,0 +1,285 @@
+Type System
+===========
+
+spicycrab maps Python type annotations to Rust types.
+
+Primitive Types
+---------------
+
+int
+^^^
+
+.. code-block:: python
+
+   x: int = 42
+   count: int = -10
+
+.. code-block:: rust
+
+   let x: i64 = 42;
+   let count: i64 = -10;
+
+float
+^^^^^
+
+.. code-block:: python
+
+   pi: float = 3.14159
+   rate: float = 0.05
+
+.. code-block:: rust
+
+   let pi: f64 = 3.14159;
+   let rate: f64 = 0.05;
+
+str
+^^^
+
+.. code-block:: python
+
+   name: str = "Alice"
+   empty: str = ""
+
+.. code-block:: rust
+
+   let name: String = "Alice".to_string();
+   let empty: String = String::new();
+
+bool
+^^^^
+
+.. code-block:: python
+
+   active: bool = True
+   done: bool = False
+
+.. code-block:: rust
+
+   let active: bool = true;
+   let done: bool = false;
+
+None
+^^^^
+
+.. code-block:: python
+
+   def do_nothing() -> None:
+       pass
+
+.. code-block:: rust
+
+   pub fn do_nothing() {
+   }
+
+Collection Types
+----------------
+
+List
+^^^^
+
+.. code-block:: python
+
+   numbers: list[int] = [1, 2, 3]
+   names: list[str] = ["Alice", "Bob"]
+
+.. code-block:: rust
+
+   let numbers: Vec<i64> = vec![1, 2, 3];
+   let names: Vec<String> = vec!["Alice".to_string(), "Bob".to_string()];
+
+Dict
+^^^^
+
+.. code-block:: python
+
+   ages: dict[str, int] = {"Alice": 30, "Bob": 25}
+
+.. code-block:: rust
+
+   let ages: HashMap<String, i64> = HashMap::from([
+       ("Alice".to_string(), 30),
+       ("Bob".to_string(), 25),
+   ]);
+
+Set
+^^^
+
+.. code-block:: python
+
+   unique: set[int] = {1, 2, 3}
+
+.. code-block:: rust
+
+   let unique: HashSet<i64> = HashSet::from([1, 2, 3]);
+
+Tuple
+^^^^^
+
+.. code-block:: python
+
+   point: tuple[int, int] = (10, 20)
+   rgb: tuple[int, int, int] = (255, 128, 0)
+
+.. code-block:: rust
+
+   let point: (i64, i64) = (10, 20);
+   let rgb: (i64, i64, i64) = (255, 128, 0);
+
+Optional Types
+--------------
+
+Optional
+^^^^^^^^
+
+.. code-block:: python
+
+   from typing import Optional
+
+   name: Optional[str] = None
+   value: Optional[int] = 42
+
+.. code-block:: rust
+
+   let name: Option<String> = None;
+   let value: Option<i64> = Some(42);
+
+Checking Optional
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   def greet(name: Optional[str]) -> str:
+       if name is None:
+           return "Hello, stranger!"
+       return f"Hello, {name}!"
+
+.. code-block:: rust
+
+   pub fn greet(name: Option<String>) -> String {
+       if name.is_none() {
+           return "Hello, stranger!".to_string();
+       }
+       format!("Hello, {}!", name.unwrap())
+   }
+
+Result Types
+------------
+
+For error handling, use ``Result[T, E]``:
+
+.. code-block:: python
+
+   from spicycrab.types import Result, Ok, Err
+
+   def parse_int(s: str) -> Result[int, str]:
+       if s.isdigit():
+           return Ok(int(s))
+       return Err("not a number")
+
+.. code-block:: rust
+
+   pub fn parse_int(s: String) -> Result<i64, String> {
+       if s.chars().all(|c| c.is_ascii_digit()) {
+           return Ok(s.parse::<i64>().unwrap());
+       }
+       Err("not a number".to_string())
+   }
+
+See :doc:`error_handling` for more details.
+
+Path Types
+----------
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   p: Path = Path("/home/user")
+
+.. code-block:: rust
+
+   let p: PathBuf = PathBuf::from("/home/user");
+
+Any Type (Dynamic Values)
+-------------------------
+
+Python's ``Any`` type maps to ``serde_json::Value``, allowing storage of
+arbitrary JSON-compatible values. This is useful for working with dynamic
+data structures like configuration files or API responses.
+
+Basic usage
+^^^^^^^^^^^
+
+.. code-block:: python
+
+   from typing import Any
+
+   def process(data: dict[str, Any]) -> int:
+       return len(data)
+
+.. code-block:: rust
+
+   pub fn process(data: HashMap<String, Value>) -> i64 {
+       data.len() as i64
+   }
+
+Dictionary with Any values
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from typing import Any
+
+   config: dict[str, Any] = {}
+
+.. code-block:: rust
+
+   let config: HashMap<String, Value> = HashMap::new();
+
+.. note::
+
+   When using ``Any``, the generated Rust code requires the ``serde_json``
+   crate. This dependency is automatically added to ``Cargo.toml``.
+
+.. warning::
+
+   Literal values (strings, numbers, etc.) are not automatically converted
+   to ``Value``. For complex dynamic data, consider using JSON parsing:
+
+   .. code-block:: python
+
+      import json
+      data: dict[str, Any] = json.loads('{"key": "value"}')
+
+Type Mapping Reference
+----------------------
+
++-------------------+---------------------+
+| Python            | Rust                |
++===================+=====================+
+| ``int``           | ``i64``             |
++-------------------+---------------------+
+| ``float``         | ``f64``             |
++-------------------+---------------------+
+| ``str``           | ``String``          |
++-------------------+---------------------+
+| ``bool``          | ``bool``            |
++-------------------+---------------------+
+| ``None``          | ``()``              |
++-------------------+---------------------+
+| ``list[T]``       | ``Vec<T>``          |
++-------------------+---------------------+
+| ``dict[K, V]``    | ``HashMap<K, V>``   |
++-------------------+---------------------+
+| ``set[T]``        | ``HashSet<T>``      |
++-------------------+---------------------+
+| ``tuple[A, B]``   | ``(A, B)``          |
++-------------------+---------------------+
+| ``Optional[T]``   | ``Option<T>``       |
++-------------------+---------------------+
+| ``Result[T, E]``  | ``Result<T, E>``    |
++-------------------+---------------------+
+| ``Path``          | ``PathBuf``         |
++-------------------+---------------------+
+| ``Any``           | ``Value``           |
++-------------------+---------------------+
