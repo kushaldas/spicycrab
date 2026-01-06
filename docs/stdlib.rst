@@ -285,6 +285,96 @@ Using set as HashSet
        numbers
    }
 
+time
+----
+
+Current time
+^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import time
+
+   def get_timestamp() -> float:
+       return time.time()
+
+.. code-block:: rust
+
+   pub fn get_timestamp() -> f64 {
+       std::time::SystemTime::now()
+           .duration_since(std::time::UNIX_EPOCH)
+           .unwrap()
+           .as_secs_f64()
+   }
+
+Sleep
+^^^^^
+
+.. code-block:: python
+
+   import time
+
+   def wait(seconds: float) -> None:
+       time.sleep(seconds)
+
+.. code-block:: rust
+
+   pub fn wait(seconds: f64) {
+       std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+   }
+
+datetime
+--------
+
+Current local time
+^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import datetime
+
+   def now():
+       return datetime.datetime.now()
+
+.. code-block:: rust
+
+   // Uses chrono crate
+   pub fn now() -> chrono::DateTime<chrono::Local> {
+       chrono::Local::now()
+   }
+
+Current UTC time
+^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import datetime
+
+   def utc_now():
+       return datetime.datetime.utcnow()
+
+.. code-block:: rust
+
+   pub fn utc_now() -> chrono::DateTime<chrono::Utc> {
+       chrono::Utc::now()
+   }
+
+Today's date
+^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import datetime
+
+   def today():
+       return datetime.date.today()
+
+.. code-block:: rust
+
+   pub fn today() -> chrono::NaiveDate {
+       chrono::Local::now().date_naive()
+   }
+
 Generated Dependencies
 ----------------------
 
@@ -295,6 +385,7 @@ When using stdlib features, spicycrab adds appropriate dependencies to Cargo.tom
    [dependencies]
    serde = { version = "1.0", features = ["derive"] }
    serde_json = "1.0"
+   chrono = "0.4"  # Added when using datetime module
 
 Standard imports are also added:
 

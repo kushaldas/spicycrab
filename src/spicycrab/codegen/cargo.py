@@ -49,6 +49,10 @@ IMPORT_DEPS: dict[str, list[CargoDependency]] = {
     "collections": [
         CargoDependency("indexmap", "2.0"),
     ],
+    "datetime": [
+        CargoDependency("chrono", "0.4"),
+    ],
+    # Note: Python's time module maps to std::time (no external dependency)
 }
 
 # Dependencies for serde_json::Value (used with Any type)

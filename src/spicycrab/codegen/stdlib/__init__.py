@@ -19,6 +19,14 @@ from spicycrab.codegen.stdlib.os_map import (
     get_pathlib_mapping,
     get_sys_mapping,
 )
+from spicycrab.codegen.stdlib.time_map import (
+    TIME_MAPPINGS,
+    DATETIME_MAPPINGS,
+    DATETIME_METHOD_MAPPINGS,
+    get_time_mapping,
+    get_datetime_mapping,
+    get_datetime_method_mapping,
+)
 
 __all__ = [
     # Types
@@ -38,6 +46,13 @@ __all__ = [
     "DEQUE_METHOD_MAPPINGS",
     "get_collections_mapping",
     "get_deque_method",
+    # Time/datetime mappings
+    "TIME_MAPPINGS",
+    "DATETIME_MAPPINGS",
+    "DATETIME_METHOD_MAPPINGS",
+    "get_time_mapping",
+    "get_datetime_mapping",
+    "get_datetime_method_mapping",
 ]
 
 
@@ -54,5 +69,9 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return JSON_MAPPINGS[key]
     if key in COLLECTIONS_MAPPINGS:
         return COLLECTIONS_MAPPINGS[key]
+    if key in TIME_MAPPINGS:
+        return TIME_MAPPINGS[key]
+    if key in DATETIME_MAPPINGS:
+        return DATETIME_MAPPINGS[key]
 
     return None

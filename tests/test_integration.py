@@ -646,3 +646,77 @@ def main() -> None:
 '''
         # Note: exit(0) means success, program terminates before any further output
         transpile_and_run(code, "before exit")
+
+
+class TestTimeModule:
+    """Test time module transpilation."""
+
+    def test_time_time(self, check_cargo):
+        """Test time.time() returns current timestamp."""
+        code = '''
+import time
+
+def main() -> None:
+    t: float = time.time()
+    # Verify it returns a positive float (Unix timestamp)
+    if t > 0.0:
+        print("ok")
+    else:
+        print("fail")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_time_sleep(self, check_cargo):
+        """Test time.sleep() pauses execution."""
+        code = '''
+import time
+
+def main() -> None:
+    start: float = time.time()
+    time.sleep(0.01)
+    end: float = time.time()
+    # Verify some time passed
+    if end > start:
+        print("ok")
+    else:
+        print("fail")
+'''
+        transpile_and_run(code, "ok")
+
+
+class TestDatetimeModule:
+    """Test datetime module transpilation using chrono."""
+
+    def test_datetime_now(self, check_cargo):
+        """Test datetime.datetime.now() returns current local time."""
+        code = '''
+import datetime
+
+def main() -> None:
+    now = datetime.datetime.now()
+    # Just verify it doesn't crash and returns something
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_datetime_utcnow(self, check_cargo):
+        """Test datetime.datetime.utcnow() returns UTC time."""
+        code = '''
+import datetime
+
+def main() -> None:
+    utc = datetime.datetime.utcnow()
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_date_today(self, check_cargo):
+        """Test datetime.date.today() returns current date."""
+        code = '''
+import datetime
+
+def main() -> None:
+    today = datetime.date.today()
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
