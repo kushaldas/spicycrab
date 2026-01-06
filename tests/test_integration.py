@@ -431,6 +431,66 @@ def main() -> None:
         transpile_and_run(code, "validated")
 
 
+class TestMainFunction:
+    """Test that def main() generates a binary executable."""
+
+    def test_main_function_generates_binary(self, check_cargo):
+        """Test that a file with main() compiles and runs as binary."""
+        code = '''
+def add(a: int, b: int) -> int:
+    return a + b
+
+def main() -> None:
+    result: int = add(2, 3)
+    print(result)
+'''
+        transpile_and_run(code, "5")
+
+    def test_main_with_args_and_return(self, check_cargo):
+        """Test main with complex operations."""
+        code = '''
+def factorial(n: int) -> int:
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+def main() -> None:
+    print(factorial(5))
+'''
+        transpile_and_run(code, "120")
+
+    def test_main_with_list_operations(self, check_cargo):
+        """Test main with list operations."""
+        code = '''
+def sum_list(items: list[int]) -> int:
+    total: int = 0
+    for item in items:
+        total = total + item
+    return total
+
+def main() -> None:
+    numbers: list[int] = [1, 2, 3, 4, 5]
+    print(sum_list(numbers))
+'''
+        transpile_and_run(code, "15")
+
+    def test_main_with_class_annotated_init(self, check_cargo):
+        """Test main with class using annotated self.attr: Type = value in __init__."""
+        code = '''
+class Counter:
+    def __init__(self, value: int) -> None:
+        self.value: int = value
+
+    def get(self) -> int:
+        return self.value
+
+def main() -> None:
+    c: Counter = Counter(42)
+    print(c.get())
+'''
+        transpile_and_run(code, "42")
+
+
 class TestAnyType:
     """Test Any type mapping to serde_json::Value."""
 

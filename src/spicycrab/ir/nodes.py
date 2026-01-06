@@ -300,6 +300,7 @@ class IRAttrAssign(IRStatement):
     obj: IRExpression | None = None
     attr: str = ""
     value: IRExpression | None = None
+    type_annotation: IRType | None = None  # For annotated: self.x: int = value
 
 
 @dataclass

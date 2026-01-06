@@ -1,6 +1,12 @@
 Quickstart
 ==========
 
+.. important::
+
+   **Binary Executables**: If your Python file contains a ``def main() -> None:``
+   function, spicycrab generates a **binary executable** (``main.rs``).
+   Without a ``main()`` function, it generates a **library** (``lib.rs``).
+
 Your First Transpilation
 ------------------------
 
@@ -75,3 +81,43 @@ Transpiling a Directory
    crabpy transpile ./myproject -o ./rust_project
 
 This creates a multi-file Rust project with proper module structure.
+
+Binary vs Library
+-----------------
+
+spicycrab automatically detects whether to generate a binary or library:
+
+**With main() → Binary executable:**
+
+.. code-block:: python
+
+   def add(a: int, b: int) -> int:
+       return a + b
+
+   def main() -> None:
+       result: int = add(2, 3)
+       print(result)
+
+Generates ``src/main.rs``:
+
+.. code-block:: rust
+
+   pub fn add(a: i64, b: i64) -> i64 {
+       a + b
+   }
+
+   pub fn main() {
+       let result: i64 = add(2, 3);
+       println!("{}", result);
+   }
+
+Run with ``cargo run``.
+
+**Without main() → Library:**
+
+.. code-block:: python
+
+   def add(a: int, b: int) -> int:
+       return a + b
+
+Generates ``src/lib.rs`` with your functions as a reusable library.

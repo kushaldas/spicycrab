@@ -511,6 +511,16 @@ class PythonASTVisitor(ast.NodeVisitor):
                             inferred = self._infer_type_from_value(stmt.value)
                             fields.append((field_name, inferred))
 
+            # Handle annotated assignment: self.x: Type = value
+            elif isinstance(stmt, ast.AnnAssign):
+                if (isinstance(stmt.target, ast.Attribute) and
+                    isinstance(stmt.target.value, ast.Name) and
+                    stmt.target.value.id == "self"):
+                    field_name = stmt.target.attr
+                    # Use the explicit type annotation
+                    field_type = self.type_parser.parse(stmt.annotation, field_name)
+                    fields.append((field_name, field_type))
+
         return fields
 
     def _infer_type_from_value(self, value: ast.expr) -> IRType:
@@ -640,13 +650,31 @@ class PythonASTVisitor(ast.NodeVisitor):
 
     def _visit_ann_assign(self, node: ast.AnnAssign) -> IRStatement:
         """Visit an annotated assignment statement."""
+        # Handle attribute assignment: self.attr: Type = value
+        if isinstance(node.target, ast.Attribute):
+            obj = self._visit_expression(node.target.value)
+            attr_name = node.target.attr
+            type_annotation = self.type_parser.parse(node.annotation, attr_name)
+
+            value: IRExpression | None = None
+            if node.value:
+                value = self._visit_expression(node.value)
+
+            return IRAttrAssign(
+                obj=obj,
+                attr=attr_name,
+                value=value if value else IRLiteral(value=None),
+                type_annotation=type_annotation,
+                line=node.lineno,
+            )
+
         if not isinstance(node.target, ast.Name):
             raise self._unsupported("complex annotated assignment targets", node)
 
         target_name = node.target.id
         type_annotation = self.type_parser.parse(node.annotation, target_name)
 
-        value: IRExpression | None = None
+        value = None
         if node.value:
             value = self._visit_expression(node.value)
 
