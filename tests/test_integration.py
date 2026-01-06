@@ -36,8 +36,12 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         main_rs.write_text(rust_code)
 
         # Generate Cargo.toml
+        # Check if serde_json is needed (for Any type)
+        uses_serde_json = "serde_json" in resolver.imports
         cargo_toml = tmpdir / "Cargo.toml"
-        cargo_content = generate_cargo_toml(name="test_code", modules=[ir_module])
+        cargo_content = generate_cargo_toml(
+            name="test_code", modules=[ir_module], uses_serde_json=uses_serde_json
+        )
         cargo_toml.write_text(cargo_content)
 
         # Build
@@ -425,3 +429,33 @@ def main() -> None:
     print("validated")
 '''
         transpile_and_run(code, "validated")
+
+
+class TestAnyType:
+    """Test Any type mapping to serde_json::Value."""
+
+    def test_dict_str_any_empty(self, check_cargo):
+        """Test dict[str, Any] type with empty dict."""
+        code = '''
+from typing import Any
+
+def main() -> None:
+    data: dict[str, Any] = {}
+    print("created dict")
+'''
+        transpile_and_run(code, "created dict")
+
+    def test_dict_str_any_len(self, check_cargo):
+        """Test dict[str, Any] length check."""
+        code = '''
+from typing import Any
+
+def check_empty(data: dict[str, Any]) -> bool:
+    return len(data) == 0
+
+def main() -> None:
+    data: dict[str, Any] = {}
+    if check_empty(data):
+        print("empty")
+'''
+        transpile_and_run(code, "empty")

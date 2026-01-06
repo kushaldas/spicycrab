@@ -51,6 +51,12 @@ IMPORT_DEPS: dict[str, list[CargoDependency]] = {
     ],
 }
 
+# Dependencies for serde_json::Value (used with Any type)
+SERDE_JSON_DEPS: list[CargoDependency] = [
+    CargoDependency("serde", "1.0", features=["derive"]),
+    CargoDependency("serde_json", "1.0"),
+]
+
 
 def generate_cargo_toml(
     name: str,
@@ -59,6 +65,7 @@ def generate_cargo_toml(
     modules: list[IRModule] | None = None,
     extra_deps: list[CargoDependency] | None = None,
     is_library: bool = False,
+    uses_serde_json: bool = False,
 ) -> str:
     """Generate a Cargo.toml file.
 
@@ -69,6 +76,7 @@ def generate_cargo_toml(
         modules: List of IR modules to analyze for dependencies
         extra_deps: Additional dependencies to include
         is_library: If True, generate a library crate
+        uses_serde_json: If True, include serde_json dependency (for Any type)
 
     Returns:
         Cargo.toml content as string
@@ -97,6 +105,11 @@ def generate_cargo_toml(
                 if mod_name in IMPORT_DEPS:
                     for dep in IMPORT_DEPS[mod_name]:
                         deps[dep.name] = dep
+
+    # Add serde_json if Any type is used
+    if uses_serde_json:
+        for dep in SERDE_JSON_DEPS:
+            deps[dep.name] = dep
 
     # Add extra dependencies
     if extra_deps:

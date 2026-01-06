@@ -177,6 +177,11 @@ class TypeResolver:
         if name == "object":
             return RustType(name="()")
 
+        # typing.Any -> serde_json::Value
+        if name == "Any":
+            self.imports.add("serde_json")
+            return RustType(name="Value")
+
         # Path types
         if name in ("Path", "PurePath", "PosixPath", "WindowsPath"):
             self.imports.add("std::path")
@@ -204,6 +209,9 @@ class TypeResolver:
 
         if "std::path" in self.imports:
             imports.append("use std::path::PathBuf;")
+
+        if "serde_json" in self.imports:
+            imports.append("use serde_json::Value;")
 
         return sorted(imports)
 

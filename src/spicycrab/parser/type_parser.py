@@ -35,6 +35,11 @@ PRIMITIVE_TYPE_MAP: dict[str, PrimitiveType] = {
     "NoneType": PrimitiveType.NONE,
 }
 
+# Special types that map to specific Rust types
+SPECIAL_TYPE_MAP: set[str] = {
+    "Any",  # typing.Any -> serde_json::Value
+}
+
 # Generic types from typing module
 GENERIC_TYPES: set[str] = {
     "List",
@@ -127,6 +132,10 @@ class TypeParser:
         # Check if it's a primitive
         if type_name in PRIMITIVE_TYPE_MAP:
             return IRPrimitiveType(kind=PRIMITIVE_TYPE_MAP[type_name])
+
+        # Check if it's a special type (Any -> Value)
+        if type_name in SPECIAL_TYPE_MAP:
+            return IRClassType(name=type_name)
 
         # Check if it's a generic without parameters (e.g., just 'list')
         if type_name in GENERIC_TYPES:
