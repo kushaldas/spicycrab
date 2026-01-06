@@ -151,6 +151,38 @@ Command line arguments
        std::env::args().collect()
    }
 
+Platform detection
+^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import sys
+
+   def get_platform() -> str:
+       return sys.platform
+
+.. code-block:: rust
+
+   pub fn get_platform() -> String {
+       std::env::consts::OS.to_string()
+   }
+
+Process exit
+^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import sys
+
+   def quit_program() -> None:
+       sys.exit(0)
+
+.. code-block:: rust
+
+   pub fn quit_program() {
+       std::process::exit(0);
+   }
+
 json
 ----
 

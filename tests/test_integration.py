@@ -519,3 +519,31 @@ def main() -> None:
         print("empty")
 '''
         transpile_and_run(code, "empty")
+
+
+class TestSysModule:
+    """Test sys module functionality."""
+
+    def test_sys_platform(self, check_cargo):
+        """Test sys.platform returns a platform string."""
+        code = '''
+import sys
+
+def main() -> None:
+    platform: str = sys.platform
+    if len(platform) > 0:
+        print("has platform")
+'''
+        transpile_and_run(code, "has platform")
+
+    def test_sys_exit_zero(self, check_cargo):
+        """Test sys.exit(0) exits successfully."""
+        code = '''
+import sys
+
+def main() -> None:
+    print("before exit")
+    sys.exit(0)
+'''
+        # Note: exit(0) means success, program terminates before any further output
+        transpile_and_run(code, "before exit")

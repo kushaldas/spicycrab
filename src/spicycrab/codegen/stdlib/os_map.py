@@ -246,8 +246,8 @@ SYS_MAPPINGS: dict[str, StdlibMapping] = {
     "sys.platform": StdlibMapping(
         python_module="sys",
         python_func="platform",
-        rust_code="std::env::consts::OS",
-        rust_imports=["std::env"],
+        rust_code="std::env::consts::OS.to_string()",
+        rust_imports=[],
     ),
     "sys.version": StdlibMapping(
         python_module="sys",
