@@ -98,6 +98,9 @@ class EmitterContext:
     in_last_stmt: bool = False  # True when emitting the last statement in a block
     class_names: set[str] = field(default_factory=set)  # Known class names for constructor detection
     stdlib_imports: set[str] = field(default_factory=set)  # Required stdlib use statements
+    local_modules: set[str] = field(default_factory=set)  # Module names in the same project
+    local_imports: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)  # module -> [(name, alias)]
+    crate_name: str | None = None  # Crate name for inter-module imports (None uses "crate::")
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -106,9 +109,16 @@ class EmitterContext:
 class RustEmitter:
     """Emits Rust code from IR nodes."""
 
-    def __init__(self, resolver: TypeResolver | None = None) -> None:
+    def __init__(
+        self,
+        resolver: TypeResolver | None = None,
+        local_modules: set[str] | None = None,
+        crate_name: str | None = None,
+    ) -> None:
         self.resolver = resolver or TypeResolver()
         self.ctx = EmitterContext(resolver=self.resolver)
+        self.ctx.local_modules = local_modules or set()
+        self.ctx.crate_name = crate_name  # For main.rs importing from lib
         self.output: list[str] = []
 
     def emit_module(self, module: IRModule) -> str:
@@ -118,6 +128,9 @@ class RustEmitter:
 
         # Collect class names for constructor detection
         self.ctx.class_names = {cls.name for cls in module.classes}
+
+        # Process imports and track local module imports
+        self._process_imports(module.imports)
 
         # Module docstring as comment
         if module.docstring:
@@ -152,6 +165,31 @@ class RustEmitter:
 
         return "\n".join(header_lines + body_lines)
 
+    def _process_imports(self, imports: list[IRImport]) -> None:
+        """Process Python imports and categorize them."""
+        # Known stdlib modules that we handle specially
+        stdlib_modules = {"os", "sys", "pathlib", "json", "collections", "dataclasses", "typing"}
+
+        for imp in imports:
+            module_name = imp.module.split(".")[0]  # Get top-level module
+
+            # Check if this is a local module import
+            if module_name in self.ctx.local_modules:
+                if module_name not in self.ctx.local_imports:
+                    self.ctx.local_imports[module_name] = []
+                if imp.names:
+                    self.ctx.local_imports[module_name].extend(imp.names)
+                    # Track imported names as potential classes for constructor detection
+                    # Use Python convention: class names start with uppercase
+                    for name, alias in imp.names:
+                        effective_name = alias if alias else name
+                        if name[0].isupper():  # Only classes (uppercase first letter)
+                            self.ctx.class_names.add(effective_name)
+                else:
+                    # import module - import all public items
+                    self.ctx.local_imports[module_name].append((module_name, None))
+            # Stdlib modules are handled by the emitter during code generation
+
     def _collect_imports(self, module: IRModule) -> list[str]:
         """Collect required Rust imports."""
         imports = set()
@@ -171,6 +209,17 @@ class RustEmitter:
                 imports.add(f"use {imp};")
             else:
                 imports.add(f"use {imp};")
+
+        # Add local module imports
+        # Use crate_name for main.rs (binary imports from library), "crate" for lib code
+        prefix = self.ctx.crate_name if self.ctx.crate_name else "crate"
+        for module_name, names in self.ctx.local_imports.items():
+            if names:
+                for name, alias in names:
+                    if alias:
+                        imports.add(f"use {prefix}::{module_name}::{name} as {alias};")
+                    else:
+                        imports.add(f"use {prefix}::{module_name}::{name};")
 
         return sorted(imports)
 

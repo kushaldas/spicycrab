@@ -250,13 +250,26 @@ def _transpile_directory(
         except CrabpyError as e:
             click.echo(click.style(f"Error in {py_file}: {e}", fg="red"), err=True)
 
+    # Create set of local module names for import resolution
+    local_module_set = set(module_names)
+
+    # Find which module has main (will become main.rs)
+    main_module_name = None
+    for module, py_file in zip(modules, py_files):
+        if any(f.name == "main" for f in module.functions):
+            main_module_name = py_file.stem.replace("-", "_")
+            break
+
     # Generate Rust code for each module
     for module, py_file in zip(modules, py_files):
         resolver = resolve_types(module)
-        emitter = RustEmitter(resolver)
+        module_name = py_file.stem.replace("-", "_")
+
+        # Use crate_name for main.rs (binary imports from library)
+        crate_name = name if module_name == main_module_name else None
+        emitter = RustEmitter(resolver, local_modules=local_module_set, crate_name=crate_name)
         rust_code = emitter.emit_module(module)
 
-        module_name = py_file.stem.replace("-", "_")
         if module_name == "__init__":
             # __init__.py becomes mod.rs
             rs_file = src_dir / "mod.rs"
