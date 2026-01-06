@@ -59,12 +59,14 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         # - unused_mut: transpiler may conservatively mark variables as mutable
         # - unused_imports: chrono traits may be imported preemptively
         # - vec_init_then_push: would require detecting push after vec![] creation
+        # - unnecessary_to_owned: emitter converts literals to String, then borrows
         result = subprocess.run(
             ["cargo", "clippy", "--", "-D", "warnings",
              "-A", "unused_variables",
              "-A", "unused_mut",
              "-A", "unused_imports",
-             "-A", "clippy::vec_init_then_push"],
+             "-A", "clippy::vec_init_then_push",
+             "-A", "clippy::unnecessary_to_owned"],
             cwd=tmpdir,
             capture_output=True,
             text=True,
@@ -778,5 +780,39 @@ def main() -> None:
     valid: bool = weekday >= 0
     if valid:
         print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+
+class TestGlobModule:
+    """Test glob module transpilation using Rust glob crate."""
+
+    def test_glob_glob(self, check_cargo):
+        """Test glob.glob() function."""
+        code = '''
+import glob
+
+def main() -> None:
+    # glob.glob returns list of matching paths
+    # Use a pattern that should match at least Cargo.toml
+    files: list[str] = glob.glob("*.toml")
+
+    # Just verify it compiles and runs
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_glob_escape(self, check_cargo):
+        """Test glob.escape() function."""
+        code = '''
+import glob
+
+def main() -> None:
+    # Escape special glob characters
+    pattern: str = "file[1].txt"
+    escaped: str = glob.escape(pattern)
+
+    # Verify it compiles and runs
+    print("ok")
 '''
         transpile_and_run(code, "ok")

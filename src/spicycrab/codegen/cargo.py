@@ -52,6 +52,9 @@ IMPORT_DEPS: dict[str, list[CargoDependency]] = {
     "datetime": [
         CargoDependency("chrono", "0.4"),
     ],
+    "glob": [
+        CargoDependency("glob", "0.3"),
+    ],
     # Note: Python's time module maps to std::time (no external dependency)
 }
 

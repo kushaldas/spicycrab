@@ -498,6 +498,64 @@ supported when **explicit type annotations** are provided.
 **Best practice:** Always use explicit type annotations for datetime variables
 to ensure correct transpilation of instance methods.
 
+glob
+----
+
+The ``glob`` module is mapped to Rust's `glob <https://docs.rs/glob>`_ crate.
+
+glob.glob()
+^^^^^^^^^^^
+
+.. code-block:: python
+
+   import glob
+
+   def find_configs() -> list[str]:
+       return glob.glob("*.toml")
+
+.. code-block:: rust
+
+   pub fn find_configs() -> Vec<String> {
+       glob::glob(&"*.toml".to_string())
+           .unwrap()
+           .filter_map(|p| p.ok())
+           .map(|p| p.to_string_lossy().to_string())
+           .collect::<Vec<_>>()
+   }
+
+glob.escape()
+^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import glob
+
+   def escape_pattern(pattern: str) -> str:
+       return glob.escape(pattern)
+
+.. code-block:: rust
+
+   pub fn escape_pattern(pattern: String) -> String {
+       pattern
+           .replace("[", "[[]")
+           .replace("]", "[]]")
+           .replace("*", "[*]")
+           .replace("?", "[?]")
+   }
+
+Supported glob functions
+^^^^^^^^^^^^^^^^^^^^^^^^
+
++----------------------+-----------------------------------------------+
+| Python               | Rust                                          |
++======================+===============================================+
+| ``glob.glob(pat)``   | ``glob::glob(...).filter_map(...).collect()`` |
++----------------------+-----------------------------------------------+
+| ``glob.iglob(pat)``  | Same as glob.glob (collected to Vec)          |
++----------------------+-----------------------------------------------+
+| ``glob.escape(s)``   | String replacement for ``[ ] * ?``            |
++----------------------+-----------------------------------------------+
+
 Generated Dependencies
 ----------------------
 
