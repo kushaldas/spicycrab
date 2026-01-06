@@ -343,6 +343,11 @@ class RustEmitter:
         if name == "__init__":
             name = "new"
 
+        # Escape Rust keywords used as method names
+        rust_keywords = {"use", "type", "impl", "trait", "mod", "pub", "fn", "let", "mut", "ref", "move", "self", "super", "crate", "as", "break", "continue", "else", "for", "if", "in", "loop", "match", "return", "while", "async", "await", "dyn", "struct", "enum", "union", "const", "static", "extern", "unsafe", "where"}
+        if name in rust_keywords:
+            name = f"r#{name}"
+
         # Build parameter list
         params: list[str] = []
         is_constructor = method.name == "__init__"
@@ -785,12 +790,9 @@ class RustEmitter:
         # String literals end with .to_string()
         if expr_str.endswith('.to_string()'):
             return True
-        # Common string field names
-        string_field_names = ('content', 'text', 'message', 'name', 'filename', 'data', 'value', 'title')
-        # Check for self.field patterns
-        for field in string_field_names:
-            if f'.{field}' in expr_str or expr_str == field:
-                return True
+        # Don't mark numbers as strings
+        if expr_str.isdigit():
+            return False
         return False
 
     def _emit_call(self, expr: IRCall) -> str:
@@ -920,14 +922,19 @@ class RustEmitter:
         if method == "lower":
             return f"{obj}.to_lowercase()"
         if method == "replace":
-            return f"{obj}.replace({args[0]}, {args[1]})"
+            # replace takes &str, not String, so strip .to_string() if present
+            arg0 = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
+            arg1 = args[1].removesuffix('.to_string()') if args[1].endswith('.to_string()') else f"&{args[1]}"
+            return f"{obj}.replace({arg0}, {arg1})"
         if method == "startswith":
-            return f"{obj}.starts_with({args[0]})"
+            arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
+            return f"{obj}.starts_with({arg})"
         if method == "endswith":
-            return f"{obj}.ends_with({args[0]})"
+            arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
+            return f"{obj}.ends_with({arg})"
 
-        # Dict methods
-        if method == "get":
+        # Dict methods (only apply if args present to distinguish from user methods)
+        if method == "get" and args:
             if len(args) >= 2:
                 return f"{obj}.get(&{args[0]}).cloned().unwrap_or({args[1]})"
             return f"{obj}.get(&{args[0]}).cloned()"
@@ -938,7 +945,11 @@ class RustEmitter:
         if method == "items":
             return f"{obj}.iter()"
 
-        return f"{obj}.{method}({', '.join(args)})"
+        # Escape Rust keywords used as method names
+        rust_keywords = {"use", "type", "impl", "trait", "mod", "pub", "fn", "let", "mut", "ref", "move", "self", "super", "crate", "as", "break", "continue", "else", "for", "if", "in", "loop", "match", "return", "while", "async", "await", "dyn", "struct", "enum", "union", "const", "static", "extern", "unsafe", "where"}
+        method_name = f"r#{method}" if method in rust_keywords else method
+
+        return f"{obj}.{method_name}({', '.join(args)})"
 
     def _emit_list_comp(self, expr: IRListComp) -> str:
         """Emit a list comprehension as iterator."""

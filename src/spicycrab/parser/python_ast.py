@@ -248,6 +248,9 @@ class PythonASTVisitor(ast.NodeVisitor):
             if ir_stmt:
                 body.append(ir_stmt)
 
+        # Analyze mutability - mark variables that are reassigned as mutable
+        self._analyze_mutability(body)
+
         self._pop_scope()
 
         return IRFunction(
@@ -258,6 +261,63 @@ class PythonASTVisitor(ast.NodeVisitor):
             docstring=docstring,
             line=node.lineno,
         )
+
+    def _analyze_mutability(self, body: list[IRStatement]) -> None:
+        """Analyze statements to detect mutable variables and mark their declarations."""
+        # First pass: find all variable assignments
+        declarations: dict[str, IRAssign] = {}  # name -> declaration statement
+        reassigned: set[str] = set()  # names that are reassigned or mutated
+
+        # Methods that mutate their receiver
+        mutating_methods = {"append", "push", "extend", "insert", "pop", "remove", "clear", "sort", "reverse", "increment", "decrement", "update", "add", "discard"}
+
+        def scan_statements(stmts: list[IRStatement]) -> None:
+            for stmt in stmts:
+                if isinstance(stmt, IRAssign):
+                    if stmt.is_declaration:
+                        declarations[stmt.target] = stmt
+                    else:
+                        # This is a reassignment
+                        reassigned.add(stmt.target)
+
+                # Check for method calls that mutate their receiver
+                if isinstance(stmt, IRExprStmt):
+                    self._check_mutating_call(stmt.expr, reassigned, mutating_methods)
+
+                # Recurse into nested blocks
+                if isinstance(stmt, IRIf):
+                    scan_statements(stmt.then_body)
+                    scan_statements(stmt.else_body)
+                elif isinstance(stmt, IRFor):
+                    scan_statements(stmt.body)
+                elif isinstance(stmt, IRWhile):
+                    scan_statements(stmt.body)
+                elif isinstance(stmt, IRWith):
+                    scan_statements(stmt.body)
+                elif isinstance(stmt, IRTry):
+                    scan_statements(stmt.body)
+                    scan_statements(stmt.finally_body)
+                    for handler in stmt.handlers:
+                        scan_statements(handler.body)
+
+        scan_statements(body)
+
+        # Mark declarations of reassigned variables as mutable
+        for name in reassigned:
+            if name in declarations:
+                declarations[name].is_mutable = True
+
+    def _check_mutating_call(self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]) -> None:
+        """Check if expression contains a mutating method call and mark the target as reassigned."""
+        if isinstance(expr, IRMethodCall):
+            if expr.method in mutating_methods:
+                # Get the receiver name
+                if isinstance(expr.obj, IRName):
+                    reassigned.add(expr.obj.name)
+        elif isinstance(expr, IRCall):
+            # Check args for nested method calls
+            for arg in expr.args:
+                self._check_mutating_call(arg, reassigned, mutating_methods)
 
     def _parse_parameters(
         self, args: ast.arguments, func_node: ast.FunctionDef
