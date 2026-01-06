@@ -46,6 +46,7 @@ GENERIC_TYPES: set[str] = {
     "Tuple",
     "tuple",
     "Optional",
+    "Result",  # Rust-style Result[T, E]
     "Sequence",
     "Mapping",
     "Iterable",

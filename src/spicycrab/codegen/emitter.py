@@ -101,6 +101,9 @@ class EmitterContext:
     local_modules: set[str] = field(default_factory=set)  # Module names in the same project
     local_imports: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)  # module -> [(name, alias)]
     crate_name: str | None = None  # Crate name for inter-module imports (None uses "crate::")
+    # Error handling support
+    result_functions: set[str] = field(default_factory=set)  # Functions that return Result
+    in_result_context: bool = False  # True when inside a Result-returning function
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -121,6 +124,15 @@ class RustEmitter:
         self.ctx.crate_name = crate_name  # For main.rs importing from lib
         self.output: list[str] = []
 
+    def _is_result_type(self, ir_type: IRType | None) -> bool:
+        """Check if a type is Result[T, E]."""
+        if ir_type is None:
+            return False
+        from spicycrab.ir.nodes import IRGenericType
+        if isinstance(ir_type, IRGenericType):
+            return ir_type.name == "Result"
+        return False
+
     def emit_module(self, module: IRModule) -> str:
         """Emit a complete Rust module."""
         header_lines: list[str] = []
@@ -128,6 +140,18 @@ class RustEmitter:
 
         # Collect class names for constructor detection
         self.ctx.class_names = {cls.name for cls in module.classes}
+
+        # Collect Result-returning functions for ? operator support
+        for func in module.functions:
+            if self._is_result_type(func.return_type):
+                self.ctx.result_functions.add(func.name)
+        for cls in module.classes:
+            for method in cls.methods:
+                if self._is_result_type(method.return_type):
+                    # Track as ClassName.method_name
+                    self.ctx.result_functions.add(f"{cls.name}.{method.name}")
+                    # Also track just the method name for simple lookups
+                    self.ctx.result_functions.add(method.name)
 
         # Process imports and track local module imports
         self._process_imports(module.imports)
@@ -443,6 +467,10 @@ class RustEmitter:
             lines.append(f"{inner_indent}}}")
             self.ctx.indent -= 1
         else:
+            # Track if we're in a Result-returning method for ? operator support
+            prev_result_context = self.ctx.in_result_context
+            self.ctx.in_result_context = self._is_result_type(method.return_type)
+
             # Regular method body
             self.ctx.indent += 1
             for i, stmt in enumerate(method.body):
@@ -451,6 +479,9 @@ class RustEmitter:
                 lines.append(self.emit_statement(stmt))
             self.ctx.in_last_stmt = False
             self.ctx.indent -= 1
+
+            # Restore previous context
+            self.ctx.in_result_context = prev_result_context
 
         lines.append(f"{indent}}}")
 
@@ -491,6 +522,10 @@ class RustEmitter:
 
         lines.append(f"{indent}pub fn {func.name}({params_str}){ret_str} {{")
 
+        # Track if we're in a Result-returning function for ? operator support
+        prev_result_context = self.ctx.in_result_context
+        self.ctx.in_result_context = self._is_result_type(func.return_type)
+
         # Body - mark last statement for expression return
         self.ctx.indent += 1
         for i, stmt in enumerate(func.body):
@@ -499,6 +534,9 @@ class RustEmitter:
             lines.append(self.emit_statement(stmt))
         self.ctx.in_last_stmt = False
         self.ctx.indent -= 1
+
+        # Restore previous context
+        self.ctx.in_result_context = prev_result_context
 
         lines.append(f"{indent}}}")
 
@@ -553,6 +591,16 @@ class RustEmitter:
 
         if isinstance(stmt, IRRaise):
             if stmt.exc:
+                # Handle raise SomeException("message") -> return Err("message")
+                exc_expr = stmt.exc
+                if isinstance(exc_expr, IRCall):
+                    # Extract the message from the exception constructor
+                    if exc_expr.args:
+                        err_msg = self.emit_expression(exc_expr.args[0])
+                        return f"{indent}return Err({err_msg});"
+                    # No args, use the exception type name
+                    func_name = self.emit_expression(exc_expr.func)
+                    return f'{indent}return Err("{func_name}".to_string());'
                 return f"{indent}return Err({self.emit_expression(stmt.exc)});"
             return f"{indent}panic!(\"re-raise\");"
 
@@ -665,12 +713,44 @@ class RustEmitter:
         return "\n".join(lines)
 
     def _emit_try(self, stmt: IRTry) -> str:
-        """Emit try/except using std::panic::catch_unwind for runtime errors."""
+        """Emit try/except as match on Result or catch_unwind for panics."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
+        # Check if this is a single-statement try with a Result-returning call
+        # Pattern: try: result = fallible_call() except: handle_error()
+        if (len(stmt.body) == 1 and stmt.handlers and
+            isinstance(stmt.body[0], IRAssign) and stmt.body[0].value):
+            assign = stmt.body[0]
+            # Check if the call returns Result
+            call = assign.value
+            is_result_call = False
+            if isinstance(call, IRCall):
+                func = self.emit_expression(call.func)
+                is_result_call = func in self.ctx.result_functions
+            elif isinstance(call, IRMethodCall):
+                is_result_call = call.method in self.ctx.result_functions
+
+            if is_result_call:
+                return self._emit_try_as_match(stmt, assign, indent)
+
+        # Check if try body is a single expression statement with Result call
+        if (len(stmt.body) == 1 and stmt.handlers and
+            isinstance(stmt.body[0], IRExprStmt) and stmt.body[0].expr):
+            expr_stmt = stmt.body[0]
+            call = expr_stmt.expr
+            is_result_call = False
+            if isinstance(call, IRCall):
+                func = self.emit_expression(call.func)
+                is_result_call = func in self.ctx.result_functions
+            elif isinstance(call, IRMethodCall):
+                is_result_call = call.method in self.ctx.result_functions
+
+            if is_result_call:
+                return self._emit_try_expr_as_match(stmt, expr_stmt, indent)
+
+        # Fallback: use catch_unwind for runtime panics
         if stmt.handlers:
-            # Use catch_unwind to handle panics (similar to Python exceptions)
             lines.append(f"{indent}if let Err(_panic_err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{")
             self.ctx.indent += 1
 
@@ -680,7 +760,6 @@ class RustEmitter:
             self.ctx.indent -= 1
             lines.append(f"{indent}}})) {{")
 
-            # Emit first handler's body (simplified - combines all handlers)
             self.ctx.indent += 1
             if stmt.handlers:
                 handler = stmt.handlers[0]
@@ -689,7 +768,6 @@ class RustEmitter:
             self.ctx.indent -= 1
             lines.append(f"{indent}}}")
         else:
-            # No handlers - just emit the body in a block
             lines.append(f"{indent}{{")
             self.ctx.indent += 1
             for s in stmt.body:
@@ -697,7 +775,72 @@ class RustEmitter:
             self.ctx.indent -= 1
             lines.append(f"{indent}}}")
 
-        # Emit finally block if present
+        if stmt.finally_body:
+            lines.append(f"{indent}// finally block")
+            for s in stmt.finally_body:
+                lines.append(self.emit_statement(s))
+
+        return "\n".join(lines)
+
+    def _emit_try_as_match(self, stmt: IRTry, assign: IRAssign, indent: str) -> str:
+        """Emit try/except with assignment as match on Result."""
+        lines: list[str] = []
+        call_expr = self.emit_expression(assign.value)
+        var_name = assign.target
+
+        # match fallible_call() { Ok(var) => { ... }, Err(e) => { ... } }
+        lines.append(f"{indent}match {call_expr} {{")
+        self.ctx.indent += 1
+        inner_indent = self.ctx.indent_str()
+
+        # Ok arm - just bind the variable, rest of code continues after match
+        lines.append(f"{inner_indent}Ok({var_name}) => {{}}")
+
+        # Err arm - execute handler body
+        handler = stmt.handlers[0]
+        err_name = handler.name if handler.name else "_err"
+        lines.append(f"{inner_indent}Err({err_name}) => {{")
+        self.ctx.indent += 1
+        for s in handler.body:
+            lines.append(self.emit_statement(s))
+        self.ctx.indent -= 1
+        lines.append(f"{inner_indent}}}")
+
+        self.ctx.indent -= 1
+        lines.append(f"{indent}}}")
+
+        # Finally block
+        if stmt.finally_body:
+            lines.append(f"{indent}// finally block")
+            for s in stmt.finally_body:
+                lines.append(self.emit_statement(s))
+
+        return "\n".join(lines)
+
+    def _emit_try_expr_as_match(self, stmt: IRTry, expr_stmt: IRExprStmt, indent: str) -> str:
+        """Emit try/except with expression (no assignment) as match on Result."""
+        lines: list[str] = []
+        call_expr = self.emit_expression(expr_stmt.expr)
+
+        # match fallible_call() { Ok(_) => { }, Err(e) => { ... } }
+        lines.append(f"{indent}match {call_expr} {{")
+        self.ctx.indent += 1
+        inner_indent = self.ctx.indent_str()
+
+        lines.append(f"{inner_indent}Ok(_) => {{}}")
+
+        handler = stmt.handlers[0]
+        err_name = handler.name if handler.name else "_err"
+        lines.append(f"{inner_indent}Err({err_name}) => {{")
+        self.ctx.indent += 1
+        for s in handler.body:
+            lines.append(self.emit_statement(s))
+        self.ctx.indent -= 1
+        lines.append(f"{inner_indent}}}")
+
+        self.ctx.indent -= 1
+        lines.append(f"{indent}}}")
+
         if stmt.finally_body:
             lines.append(f"{indent}// finally block")
             for s in stmt.finally_body:
@@ -854,7 +997,13 @@ class RustEmitter:
             func_name = expr.func.attr
             mapping = get_stdlib_mapping(module, func_name)
             if mapping:
-                return self._apply_stdlib_mapping(mapping, args)
+                result = self._apply_stdlib_mapping(mapping, args)
+                # Add ? for Result-returning stdlib calls in Result context
+                if mapping.needs_result and self.ctx.in_result_context:
+                    # Remove .unwrap() and add ? instead
+                    if result.endswith(".unwrap()"):
+                        result = result[:-9] + "?"
+                return result
 
         func = self.emit_expression(expr.func)
 
@@ -901,13 +1050,27 @@ class RustEmitter:
 
         # Handle int()
         if func == "int":
-            return f"{args[0]} as i64"
+            # If the argument looks like a string, use parse()
+            arg = args[0]
+            if arg.endswith('.to_string()') or arg.startswith('"'):
+                return f"{arg}.parse::<i64>().unwrap()"
+            # For variables, we assume they might be strings if they're not numeric literals
+            if not arg.lstrip('-').isdigit():
+                return f"{arg}.parse::<i64>().unwrap()"
+            return f"{arg} as i64"
 
         # Handle float()
         if func == "float":
             return f"{args[0]} as f64"
 
-        return f"{func}({', '.join(args)})"
+        # Regular function call - check if it returns Result
+        call_expr = f"{func}({', '.join(args)})"
+
+        # Append ? if calling a Result-returning function inside a Result context
+        if self.ctx.in_result_context and func in self.ctx.result_functions:
+            call_expr += "?"
+
+        return call_expr
 
     def _apply_stdlib_mapping(self, mapping: "StdlibMapping", args: list[str]) -> str:
         """Apply a stdlib mapping to generate Rust code."""
@@ -940,14 +1103,23 @@ class RustEmitter:
             module = expr.obj.name
             mapping = get_stdlib_mapping(module, method)
             if mapping:
-                return self._apply_stdlib_mapping(mapping, args)
+                result = self._apply_stdlib_mapping(mapping, args)
+                # Add ? for Result-returning stdlib calls in Result context
+                if mapping.needs_result and self.ctx.in_result_context:
+                    if result.endswith(".unwrap()"):
+                        result = result[:-9] + "?"
+                return result
 
         # Check for nested stdlib calls (e.g., os.path.exists())
         if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
             module = f"{expr.obj.obj.name}.{expr.obj.attr}"
             mapping = get_stdlib_mapping(module, method)
             if mapping:
-                return self._apply_stdlib_mapping(mapping, args)
+                result = self._apply_stdlib_mapping(mapping, args)
+                if mapping.needs_result and self.ctx.in_result_context:
+                    if result.endswith(".unwrap()"):
+                        result = result[:-9] + "?"
+                return result
 
         obj = self.emit_expression(expr.obj)
 
@@ -981,6 +1153,14 @@ class RustEmitter:
         if method == "endswith":
             arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
             return f"{obj}.ends_with({arg})"
+        if method == "isdigit":
+            return f"{obj}.chars().all(|c| c.is_ascii_digit())"
+        if method == "isalpha":
+            return f"{obj}.chars().all(|c| c.is_alphabetic())"
+        if method == "isalnum":
+            return f"{obj}.chars().all(|c| c.is_alphanumeric())"
+        if method == "isspace":
+            return f"{obj}.chars().all(|c| c.is_whitespace())"
 
         # Dict methods (only apply if args present to distinguish from user methods)
         if method == "get" and args:
@@ -998,7 +1178,13 @@ class RustEmitter:
         rust_keywords = {"use", "type", "impl", "trait", "mod", "pub", "fn", "let", "mut", "ref", "move", "self", "super", "crate", "as", "break", "continue", "else", "for", "if", "in", "loop", "match", "return", "while", "async", "await", "dyn", "struct", "enum", "union", "const", "static", "extern", "unsafe", "where"}
         method_name = f"r#{method}" if method in rust_keywords else method
 
-        return f"{obj}.{method_name}({', '.join(args)})"
+        call_expr = f"{obj}.{method_name}({', '.join(args)})"
+
+        # Append ? if calling a Result-returning method inside a Result context
+        if self.ctx.in_result_context and method in self.ctx.result_functions:
+            call_expr += "?"
+
+        return call_expr
 
     def _emit_list_comp(self, expr: IRListComp) -> str:
         """Emit a list comprehension as iterator."""

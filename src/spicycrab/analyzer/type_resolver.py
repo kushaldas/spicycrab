@@ -69,6 +69,7 @@ GENERIC_MAP: dict[str, str] = {
     "Tuple": "",  # Special handling
     "tuple": "",
     "Optional": "Option",
+    "Result": "Result",  # Result[T, E] -> Result<T, E>
     "Sequence": "Vec",
     "Mapping": "HashMap",
     "FrozenSet": "HashSet",

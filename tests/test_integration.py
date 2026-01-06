@@ -373,3 +373,55 @@ def main() -> None:
     print(s.replace("world", "rust"))
 '''
         transpile_and_run(code, "hello rust")
+
+
+class TestErrorHandling:
+    """Test Result type and error handling transpilation."""
+
+    def test_result_type_ok(self, check_cargo):
+        """Test function returning Result with Ok."""
+        code = '''
+def parse_positive(s: str) -> Result[int, str]:
+    if s.isdigit():
+        return Ok(int(s))
+    return Err("not a number")
+
+def main() -> None:
+    result: Result[int, str] = parse_positive("42")
+    print("done")
+'''
+        transpile_and_run(code, "done")
+
+    def test_question_mark_operator(self, check_cargo):
+        """Test ? operator for error propagation."""
+        code = '''
+def might_fail(x: int) -> Result[int, str]:
+    if x < 0:
+        return Err("negative")
+    return Ok(x * 2)
+
+def caller() -> Result[int, str]:
+    # This should use ? operator
+    value: int = might_fail(5)
+    return Ok(value + 1)
+
+def main() -> None:
+    # Call the function and check result
+    result: Result[int, str] = caller()
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_raise_becomes_err(self, check_cargo):
+        """Test that raise translates to return Err."""
+        code = '''
+def validate(x: int) -> Result[int, str]:
+    if x < 0:
+        raise ValueError("must be positive")
+    return Ok(x)
+
+def main() -> None:
+    result: Result[int, str] = validate(10)
+    print("validated")
+'''
+        transpile_and_run(code, "validated")
