@@ -26,14 +26,14 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         python_module="os",
         python_func="getcwd",
         rust_code="std::env::current_dir().unwrap().to_string_lossy().to_string()",
-        rust_imports=["std::env"],
+        rust_imports=[],  # Using full path, no import needed
         needs_result=True,
     ),
     "os.chdir": StdlibMapping(
         python_module="os",
         python_func="chdir",
         rust_code="std::env::set_current_dir({args}).unwrap()",
-        rust_imports=["std::env"],
+        rust_imports=[],  # Using full path, no import needed
         needs_result=True,
     ),
     "os.listdir": StdlibMapping(
@@ -82,43 +82,43 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         python_module="os.path",
         python_func="exists",
         rust_code="std::path::Path::new(&{args}).exists()",
-        rust_imports=["std::path::Path"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "os.path.isfile": StdlibMapping(
         python_module="os.path",
         python_func="isfile",
         rust_code="std::path::Path::new(&{args}).is_file()",
-        rust_imports=["std::path::Path"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "os.path.isdir": StdlibMapping(
         python_module="os.path",
         python_func="isdir",
         rust_code="std::path::Path::new(&{args}).is_dir()",
-        rust_imports=["std::path::Path"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "os.path.join": StdlibMapping(
         python_module="os.path",
         python_func="join",
         rust_code="std::path::Path::new(&{arg0}).join(&{arg1}).to_string_lossy().to_string()",
-        rust_imports=["std::path::Path"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "os.path.basename": StdlibMapping(
         python_module="os.path",
         python_func="basename",
         rust_code="std::path::Path::new(&{args}).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()",
-        rust_imports=["std::path::Path"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "os.path.dirname": StdlibMapping(
         python_module="os.path",
         python_func="dirname",
         rust_code="std::path::Path::new(&{args}).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()",
-        rust_imports=["std::path::Path"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "os.getenv": StdlibMapping(
         python_module="os",
         python_func="getenv",
         rust_code="std::env::var({args}).ok()",
-        rust_imports=["std::env"],
+        rust_imports=[],  # Using full path, no import needed
     ),
 }
 
@@ -235,13 +235,13 @@ SYS_MAPPINGS: dict[str, StdlibMapping] = {
         python_module="sys",
         python_func="argv",
         rust_code="std::env::args().collect::<Vec<_>>()",
-        rust_imports=["std::env"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "sys.exit": StdlibMapping(
         python_module="sys",
         python_func="exit",
         rust_code="std::process::exit({args})",
-        rust_imports=["std::process"],
+        rust_imports=[],  # Using full path, no import needed
     ),
     "sys.platform": StdlibMapping(
         python_module="sys",

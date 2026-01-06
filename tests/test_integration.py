@@ -53,6 +53,22 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         )
         assert result.returncode == 0, f"Cargo build failed:\n{result.stderr}"
 
+        # Run clippy to check for warnings
+        # Allow certain lints that are stylistic or require complex code analysis:
+        # - unused_variables: test code may not use all variables
+        # - unused_mut: transpiler may conservatively mark variables as mutable
+        # - vec_init_then_push: would require detecting push after vec![] creation
+        result = subprocess.run(
+            ["cargo", "clippy", "--", "-D", "warnings",
+             "-A", "unused_variables",
+             "-A", "unused_mut",
+             "-A", "clippy::vec_init_then_push"],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"Cargo clippy failed:\n{result.stderr}\n\nGenerated code:\n{rust_code}"
+
         # Run
         result = subprocess.run(
             ["cargo", "run", "--release", "-q"],

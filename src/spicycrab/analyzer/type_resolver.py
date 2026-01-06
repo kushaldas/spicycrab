@@ -204,8 +204,8 @@ class TypeResolver:
         """Get list of required Rust use statements."""
         imports = []
 
-        if "std::collections" in self.imports:
-            imports.append("use std::collections::{HashMap, HashSet};")
+        # Note: std::collections is handled by the emitter with precise tracking
+        # of which collections (HashMap vs HashSet) are actually used
 
         if "std::path" in self.imports:
             imports.append("use std::path::PathBuf;")

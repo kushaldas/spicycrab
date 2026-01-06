@@ -218,10 +218,10 @@ class RustEmitter:
         """Collect required Rust imports."""
         imports = set()
 
-        # Check if module uses HashMap or HashSet
-        needs_collections = self._needs_collections(module)
-        if needs_collections:
-            imports.add("use std::collections::{HashMap, HashSet};")
+        # Check which collections the module uses (HashMap, HashSet)
+        needed_collections = self._needed_collections(module)
+        if needed_collections:
+            imports.add(f"use std::collections::{{{', '.join(sorted(needed_collections))}}};")
 
         # Add resolver-detected imports
         imports.update(self.resolver.get_imports())
@@ -247,53 +247,56 @@ class RustEmitter:
 
         return sorted(imports)
 
-    def _needs_collections(self, module: IRModule) -> bool:
-        """Check if module uses HashMap or HashSet."""
-        # Quick check via string representation - not ideal but works
+    def _needed_collections(self, module: IRModule) -> set[str]:
+        """Return set of collection types needed (HashMap, HashSet)."""
+        needed: set[str] = set()
         for func in module.functions:
             for stmt in func.body:
-                if self._stmt_needs_collections(stmt):
-                    return True
+                needed.update(self._stmt_collections(stmt))
         for cls in module.classes:
             for method in cls.methods:
                 for stmt in method.body:
-                    if self._stmt_needs_collections(stmt):
-                        return True
-        return False
+                    needed.update(self._stmt_collections(stmt))
+        return needed
 
-    def _stmt_needs_collections(self, stmt: IRStatement) -> bool:
-        """Check if statement uses collections."""
+    def _stmt_collections(self, stmt: IRStatement) -> set[str]:
+        """Return set of collection types used by statement."""
         if isinstance(stmt, IRAssign) and stmt.value:
-            return self._expr_needs_collections(stmt.value)
+            return self._expr_collections(stmt.value)
         if isinstance(stmt, IRExprStmt):
-            return self._expr_needs_collections(stmt.expr)
+            return self._expr_collections(stmt.expr)
         if isinstance(stmt, IRReturn) and stmt.value:
-            return self._expr_needs_collections(stmt.value)
+            return self._expr_collections(stmt.value)
         if isinstance(stmt, IRFor):
-            return self._expr_needs_collections(stmt.iter) or any(
-                self._stmt_needs_collections(s) for s in stmt.body
-            )
+            result = self._expr_collections(stmt.iter)
+            for s in stmt.body:
+                result.update(self._stmt_collections(s))
+            return result
         if isinstance(stmt, IRIf):
-            return (
-                any(self._stmt_needs_collections(s) for s in stmt.then_body) or
-                any(self._stmt_needs_collections(s) for s in stmt.else_body)
-            )
-        return False
+            result: set[str] = set()
+            for s in stmt.then_body:
+                result.update(self._stmt_collections(s))
+            for s in stmt.else_body:
+                result.update(self._stmt_collections(s))
+            return result
+        return set()
 
-    def _expr_needs_collections(self, expr: IRExpression) -> bool:
-        """Check if expression uses collections."""
+    def _expr_collections(self, expr: IRExpression) -> set[str]:
+        """Return set of collection types used by expression."""
         if isinstance(expr, IRDict):
-            return True
+            return {"HashMap"}
         if isinstance(expr, IRSet):
-            return True
+            return {"HashSet"}
         if isinstance(expr, IRCall):
-            return any(self._expr_needs_collections(a) for a in expr.args)
+            result: set[str] = set()
+            for a in expr.args:
+                result.update(self._expr_collections(a))
+            return result
         if isinstance(expr, IRBinaryOp):
-            return (
-                self._expr_needs_collections(expr.left) or
-                self._expr_needs_collections(expr.right)
-            )
-        return False
+            result = self._expr_collections(expr.left)
+            result.update(self._expr_collections(expr.right))
+            return result
+        return set()
 
     def emit_class(self, cls: IRClass) -> str:
         """Emit a class as a Rust struct + impl block."""
@@ -462,7 +465,12 @@ class RustEmitter:
             # Initialize fields from __init__ body
             for stmt in method.body:
                 if isinstance(stmt, IRAttrAssign) and isinstance(stmt.obj, IRName) and stmt.obj.name == "self":
-                    lines.append(f"{field_indent}{stmt.attr}: {self.emit_expression(stmt.value)},")
+                    value_str = self.emit_expression(stmt.value)
+                    # Use Rust shorthand syntax when field name matches value (clippy::redundant_field_names)
+                    if stmt.attr == value_str:
+                        lines.append(f"{field_indent}{stmt.attr},")
+                    else:
+                        lines.append(f"{field_indent}{stmt.attr}: {value_str},")
             self.ctx.indent -= 1
             lines.append(f"{inner_indent}}}")
             self.ctx.indent -= 1
@@ -550,6 +558,25 @@ class RustEmitter:
             return self._emit_assign(stmt)
 
         if isinstance(stmt, IRAttrAssign):
+            # Check for compound assignment pattern: self.attr = self.attr op y -> self.attr op= y
+            # This avoids clippy::assign_op_pattern warnings
+            if isinstance(stmt.value, IRBinaryOp):
+                if isinstance(stmt.value.left, IRAttribute):
+                    left_attr = stmt.value.left
+                    if (isinstance(left_attr.obj, IRName) and
+                        left_attr.obj.name == "self" and
+                        left_attr.attr == stmt.attr):
+                        op = stmt.value.op
+                        compound_ops = {
+                            BinaryOp.ADD: "+=",
+                            BinaryOp.SUB: "-=",
+                            BinaryOp.MUL: "*=",
+                            BinaryOp.DIV: "/=",
+                            BinaryOp.MOD: "%=",
+                        }
+                        if op in compound_ops:
+                            right = self.emit_expression(stmt.value.right)
+                            return f"{indent}self.{stmt.attr} {compound_ops[op]} {right};"
             return f"{indent}self.{stmt.attr} = {self.emit_expression(stmt.value)};"
 
         if isinstance(stmt, IRReturn):
@@ -609,9 +636,9 @@ class RustEmitter:
     def _emit_assign(self, stmt: IRAssign) -> str:
         """Emit an assignment statement."""
         indent = self.ctx.indent_str()
-        value = self.emit_expression(stmt.value)
 
         if stmt.is_declaration:
+            value = self.emit_expression(stmt.value)
             # Only add mut if explicitly marked mutable (reassigned later)
             mut = "mut " if stmt.is_mutable else ""
             if stmt.type_annotation:
@@ -619,6 +646,27 @@ class RustEmitter:
                 return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
             return f"{indent}let {mut}{stmt.target} = {value};"
         else:
+            # Check for compound assignment pattern: x = x op y -> x op= y
+            # This avoids clippy::assign_op_pattern warnings
+            if isinstance(stmt.value, IRBinaryOp):
+                if isinstance(stmt.value.left, IRName) and stmt.value.left.name == stmt.target:
+                    op = stmt.value.op
+                    compound_ops = {
+                        BinaryOp.ADD: "+=",
+                        BinaryOp.SUB: "-=",
+                        BinaryOp.MUL: "*=",
+                        BinaryOp.DIV: "/=",
+                        BinaryOp.MOD: "%=",
+                        BinaryOp.BIT_AND: "&=",
+                        BinaryOp.BIT_OR: "|=",
+                        BinaryOp.BIT_XOR: "^=",
+                        BinaryOp.LSHIFT: "<<=",
+                        BinaryOp.RSHIFT: ">>=",
+                    }
+                    if op in compound_ops:
+                        right = self.emit_expression(stmt.value.right)
+                        return f"{indent}{stmt.target} {compound_ops[op]} {right};"
+            value = self.emit_expression(stmt.value)
             return f"{indent}{stmt.target} = {value};"
 
     def _emit_if(self, stmt: IRIf) -> str:
@@ -948,6 +996,29 @@ class RustEmitter:
         left = self.emit_expression(expr.left)
         right = self.emit_expression(expr.right)
 
+        # Special handling for len() comparisons with 0 to avoid clippy::len_zero
+        # len(x) > 0  -> !x.is_empty()
+        # len(x) != 0 -> !x.is_empty()
+        # len(x) == 0 -> x.is_empty()
+        # len(x) >= 1 -> !x.is_empty()
+        # 0 < len(x)  -> !x.is_empty()
+        if left.endswith('.len()') and right == '0':
+            base = left[:-6]  # Remove .len()
+            if expr.op in (BinaryOp.GT, BinaryOp.NE):
+                return f"!{base}.is_empty()"
+            if expr.op == BinaryOp.EQ:
+                return f"{base}.is_empty()"
+        if right.endswith('.len()') and left == '0':
+            base = right[:-6]  # Remove .len()
+            if expr.op == BinaryOp.LT:
+                return f"!{base}.is_empty()"
+            if expr.op == BinaryOp.EQ:
+                return f"{base}.is_empty()"
+        # Also handle >= 1 pattern
+        if left.endswith('.len()') and right == '1' and expr.op == BinaryOp.GE:
+            base = left[:-6]
+            return f"!{base}.is_empty()"
+
         # Special handling for floor division
         if expr.op == BinaryOp.FLOOR_DIV:
             return f"{left} / {right}"
@@ -1041,7 +1112,13 @@ class RustEmitter:
         # Handle print()
         if func == "print":
             if args:
-                return f'println!("{{}}", {args[0]})'
+                # Strip .to_string() since println! handles Display types directly
+                arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else args[0]
+                # If arg is a string literal, use println!("literal") directly
+                # to avoid clippy::print_literal warning
+                if arg.startswith('"') and arg.endswith('"'):
+                    return f'println!({arg})'
+                return f'println!("{{}}", {arg})'
             return 'println!()'
 
         # Handle str()
