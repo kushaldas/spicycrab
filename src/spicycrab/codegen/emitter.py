@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from spicycrab.analyzer.type_resolver import TypeResolver, RustType
+from spicycrab.codegen.stdlib import get_stdlib_mapping, PATHLIB_MAPPINGS
 from spicycrab.ir.nodes import (
     BinaryOp,
     IRAssign,
@@ -96,6 +97,7 @@ class EmitterContext:
     resolver: TypeResolver = field(default_factory=TypeResolver)
     in_last_stmt: bool = False  # True when emitting the last statement in a block
     class_names: set[str] = field(default_factory=set)  # Known class names for constructor detection
+    stdlib_imports: set[str] = field(default_factory=set)  # Required stdlib use statements
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -111,43 +113,44 @@ class RustEmitter:
 
     def emit_module(self, module: IRModule) -> str:
         """Emit a complete Rust module."""
-        lines: list[str] = []
+        header_lines: list[str] = []
+        body_lines: list[str] = []
 
         # Collect class names for constructor detection
         self.ctx.class_names = {cls.name for cls in module.classes}
 
         # Module docstring as comment
         if module.docstring:
-            lines.append(f"//! {module.docstring.split(chr(10))[0]}")
-            lines.append("")
+            header_lines.append(f"//! {module.docstring.split(chr(10))[0]}")
+            header_lines.append("")
 
-        # Standard imports
-        imports = self._collect_imports(module)
-        if imports:
-            lines.extend(imports)
-            lines.append("")
-
-        # Emit classes as structs
+        # Emit classes as structs (this may add stdlib_imports)
         for cls in module.classes:
-            lines.append(self.emit_class(cls))
-            lines.append("")
+            body_lines.append(self.emit_class(cls))
+            body_lines.append("")
 
-        # Emit functions
+        # Emit functions (this may add stdlib_imports)
         for func in module.functions:
-            lines.append(self.emit_function(func))
-            lines.append("")
+            body_lines.append(self.emit_function(func))
+            body_lines.append("")
 
         # Emit top-level statements in main() if any
         if module.statements:
-            lines.append("fn main() {")
+            body_lines.append("fn main() {")
             self.ctx.indent = 1
             for stmt in module.statements:
-                lines.append(self.emit_statement(stmt))
+                body_lines.append(self.emit_statement(stmt))
             self.ctx.indent = 0
-            lines.append("}")
-            lines.append("")
+            body_lines.append("}")
+            body_lines.append("")
 
-        return "\n".join(lines)
+        # Now collect imports (after emission so stdlib_imports is populated)
+        imports = self._collect_imports(module)
+        if imports:
+            header_lines.extend(imports)
+            header_lines.append("")
+
+        return "\n".join(header_lines + body_lines)
 
     def _collect_imports(self, module: IRModule) -> list[str]:
         """Collect required Rust imports."""
@@ -160,6 +163,14 @@ class RustEmitter:
 
         # Add resolver-detected imports
         imports.update(self.resolver.get_imports())
+
+        # Add stdlib imports collected during emission
+        for imp in self.ctx.stdlib_imports:
+            # Convert module path to use statement
+            if "::" in imp:
+                imports.add(f"use {imp};")
+            else:
+                imports.add(f"use {imp};")
 
         return sorted(imports)
 
@@ -666,6 +677,15 @@ class RustEmitter:
             return self._emit_method_call(expr)
 
         if isinstance(expr, IRAttribute):
+            # Check for stdlib module attributes (e.g., sys.argv, sys.platform)
+            if isinstance(expr.obj, IRName):
+                module = expr.obj.name
+                mapping = get_stdlib_mapping(module, expr.attr)
+                if mapping:
+                    # Track required imports
+                    for imp in mapping.rust_imports:
+                        self.ctx.stdlib_imports.add(imp)
+                    return mapping.rust_code
             obj = self.emit_expression(expr.obj)
             return f"{obj}.{expr.attr}"
 
@@ -775,8 +795,23 @@ class RustEmitter:
 
     def _emit_call(self, expr: IRCall) -> str:
         """Emit a function call."""
-        func = self.emit_expression(expr.func)
         args = [self.emit_expression(a) for a in expr.args]
+
+        # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
+        if isinstance(expr.func, IRAttribute) and isinstance(expr.func.obj, IRName):
+            module = expr.func.obj.name
+            func_name = expr.func.attr
+            mapping = get_stdlib_mapping(module, func_name)
+            if mapping:
+                return self._apply_stdlib_mapping(mapping, args)
+
+        func = self.emit_expression(expr.func)
+
+        # Handle Path() constructor from pathlib
+        if func == "Path":
+            mapping = PATHLIB_MAPPINGS.get("Path")
+            if mapping:
+                return mapping.rust_code.format(args=", ".join(args))
 
         # Handle class constructor calls - ClassName(...) -> ClassName::new(...)
         if func in self.ctx.class_names:
@@ -823,12 +858,47 @@ class RustEmitter:
 
         return f"{func}({', '.join(args)})"
 
+    def _apply_stdlib_mapping(self, mapping: "StdlibMapping", args: list[str]) -> str:
+        """Apply a stdlib mapping to generate Rust code."""
+        from spicycrab.codegen.stdlib import StdlibMapping
+
+        rust_code = mapping.rust_code
+
+        # Handle different placeholder formats
+        if "{args}" in rust_code:
+            rust_code = rust_code.format(args=", ".join(args))
+        elif "{arg0}" in rust_code or "{arg1}" in rust_code:
+            # Handle indexed args
+            replacements = {f"arg{i}": arg for i, arg in enumerate(args)}
+            for key, val in replacements.items():
+                rust_code = rust_code.replace(f"{{{key}}}", val)
+
+        # Track required imports
+        for imp in mapping.rust_imports:
+            self.ctx.stdlib_imports.add(imp)
+
+        return rust_code
+
     def _emit_method_call(self, expr: IRMethodCall) -> str:
         """Emit a method call."""
-        obj = self.emit_expression(expr.obj)
         args = [self.emit_expression(a) for a in expr.args]
-
         method = expr.method
+
+        # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
+        if isinstance(expr.obj, IRName):
+            module = expr.obj.name
+            mapping = get_stdlib_mapping(module, method)
+            if mapping:
+                return self._apply_stdlib_mapping(mapping, args)
+
+        # Check for nested stdlib calls (e.g., os.path.exists())
+        if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
+            module = f"{expr.obj.obj.name}.{expr.obj.attr}"
+            mapping = get_stdlib_mapping(module, method)
+            if mapping:
+                return self._apply_stdlib_mapping(mapping, args)
+
+        obj = self.emit_expression(expr.obj)
 
         # String methods
         if method == "append":
