@@ -176,6 +176,83 @@ def main() -> None:
         transpile_and_run(code, "5")
 
 
+class TestNoneIdentityChecks:
+    """Test is None / is not None transpilation."""
+
+    def test_is_none_check(self, check_cargo):
+        """Test x is None -> x.is_none()."""
+        code = '''
+def main() -> None:
+    value: str | None = None
+    if value is None:
+        print("none")
+    else:
+        print("some")
+'''
+        transpile_and_run(code, "none")
+
+    def test_is_not_none_check(self, check_cargo):
+        """Test x is not None -> x.is_some()."""
+        code = '''
+def main() -> None:
+    value: str | None = "hello"
+    if value is not None:
+        print("some")
+    else:
+        print("none")
+'''
+        transpile_and_run(code, "some")
+
+    def test_is_none_with_function_return(self, check_cargo):
+        """Test is None with function that returns Option."""
+        code = '''
+def maybe_get(flag: bool) -> str | None:
+    if flag:
+        return "value"
+    return None
+
+def main() -> None:
+    result: str | None = maybe_get(False)
+    if result is None:
+        print("got none")
+    else:
+        print("got value")
+'''
+        transpile_and_run(code, "got none")
+
+    def test_is_not_none_with_function_return(self, check_cargo):
+        """Test is not None with function that returns Option."""
+        code = '''
+def maybe_get(flag: bool) -> str | None:
+    if flag:
+        return "value"
+    return None
+
+def main() -> None:
+    result: str | None = maybe_get(True)
+    if result is not None:
+        print("got value")
+    else:
+        print("got none")
+'''
+        transpile_and_run(code, "got value")
+
+    def test_is_none_in_elif(self, check_cargo):
+        """Test is None in elif clause."""
+        code = '''
+def main() -> None:
+    a: int | None = None
+    b: int | None = 42
+    if a is not None:
+        print("a has value")
+    elif b is not None:
+        print("b has value")
+    else:
+        print("both none")
+'''
+        transpile_and_run(code, "b has value")
+
+
 class TestClassTranspilation:
     """Test class transpilation."""
 

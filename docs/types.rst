@@ -146,12 +146,18 @@ Optional
 Checking Optional
 ^^^^^^^^^^^^^^^^^
 
+Both ``is None`` and ``is not None`` are supported:
+
 .. code-block:: python
 
    def greet(name: Optional[str]) -> str:
        if name is None:
            return "Hello, stranger!"
        return f"Hello, {name}!"
+
+   def process(value: str | None) -> None:
+       if value is not None:
+           print(f"Got: {value}")
 
 .. code-block:: rust
 
@@ -160,6 +166,42 @@ Checking Optional
            return "Hello, stranger!".to_string();
        }
        format!("Hello, {}!", name.unwrap())
+   }
+
+   pub fn process(value: Option<String>) {
+       if value.is_some() {
+           println!("Got: {}", value.unwrap());
+       }
+   }
+
+Union syntax ``T | None`` is equivalent to ``Optional[T]``:
+
+.. code-block:: python
+
+   # Both are equivalent
+   name: Optional[str] = None
+   name: str | None = None
+
+Returning Optional
+^^^^^^^^^^^^^^^^^^
+
+Functions returning ``T | None`` or ``Optional[T]`` automatically wrap
+non-None return values in ``Some()``:
+
+.. code-block:: python
+
+   def maybe_get(flag: bool) -> str | None:
+       if flag:
+           return "value"
+       return None
+
+.. code-block:: rust
+
+   pub fn maybe_get(flag: bool) -> Option<String> {
+       if flag {
+           return Some("value".to_string());
+       }
+       None
    }
 
 Result Types

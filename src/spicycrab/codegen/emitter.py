@@ -48,6 +48,7 @@ from spicycrab.ir.nodes import (
     IRName,
     IRParameter,
     IRPass,
+    IRPrimitiveType,
     IRRaise,
     IRReturn,
     IRSet,
@@ -57,6 +58,7 @@ from spicycrab.ir.nodes import (
     IRTuple,
     IRType,
     IRUnaryOp,
+    IRUnionType,
     IRWhile,
     IRWith,
     PrimitiveType,
@@ -114,6 +116,7 @@ class EmitterContext:
     # Error handling support
     result_functions: set[str] = field(default_factory=set)  # Functions that return Result
     in_result_context: bool = False  # True when inside a Result-returning function
+    in_option_context: bool = False  # True when inside an Option-returning function
     # Type tracking for instance method resolution
     type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
     # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
@@ -144,6 +147,21 @@ class RustEmitter:
             return False
         if isinstance(ir_type, IRGenericType):
             return ir_type.name == "Result"
+        return False
+
+    def _is_option_type(self, ir_type: IRType | None) -> bool:
+        """Check if a type is T | None (Option<T> in Rust)."""
+        if ir_type is None:
+            return False
+        # Handle IRGenericType with name "Optional" (from Optional[T] or T | None)
+        if isinstance(ir_type, IRGenericType):
+            return ir_type.name == "Optional"
+        if isinstance(ir_type, IRUnionType):
+            # Check if this is a T | None union (becomes Option<T>)
+            types = ir_type.types
+            if len(types) == 2:
+                none_count = sum(1 for t in types if isinstance(t, IRPrimitiveType) and t.name == PrimitiveType.NONE)
+                return none_count == 1
         return False
 
     def _extract_type_string(self, ir_type: IRType | None) -> str | None:
@@ -528,9 +546,11 @@ class RustEmitter:
             lines.append(f"{inner_indent}}}")
             self.ctx.indent -= 1
         else:
-            # Track if we're in a Result-returning method for ? operator support
+            # Track if we're in a Result-returning or Option-returning method
             prev_result_context = self.ctx.in_result_context
+            prev_option_context = self.ctx.in_option_context
             self.ctx.in_result_context = self._is_result_type(method.return_type)
+            self.ctx.in_option_context = self._is_option_type(method.return_type)
 
             # Regular method body
             self.ctx.indent += 1
@@ -543,6 +563,7 @@ class RustEmitter:
 
             # Restore previous context
             self.ctx.in_result_context = prev_result_context
+            self.ctx.in_option_context = prev_option_context
 
         lines.append(f"{indent}}}")
 
@@ -583,9 +604,11 @@ class RustEmitter:
 
         lines.append(f"{indent}pub fn {func.name}({params_str}){ret_str} {{")
 
-        # Track if we're in a Result-returning function for ? operator support
+        # Track if we're in a Result-returning or Option-returning function
         prev_result_context = self.ctx.in_result_context
+        prev_option_context = self.ctx.in_option_context
         self.ctx.in_result_context = self._is_result_type(func.return_type)
+        self.ctx.in_option_context = self._is_option_type(func.return_type)
 
         # Body - mark last statement for expression return
         self.ctx.indent += 1
@@ -598,6 +621,7 @@ class RustEmitter:
 
         # Restore previous context
         self.ctx.in_result_context = prev_result_context
+        self.ctx.in_option_context = prev_option_context
 
         lines.append(f"{indent}}}")
 
@@ -635,6 +659,9 @@ class RustEmitter:
         if isinstance(stmt, IRReturn):
             if stmt.value:
                 expr = self.emit_expression(stmt.value)
+                # Wrap non-None values in Some() for Option-returning functions
+                if self.ctx.in_option_context and expr != "None":
+                    expr = f"Some({expr})"
                 # If this is the last statement, emit as expression (implicit return)
                 # Otherwise, use explicit return
                 if self.ctx.in_last_stmt:
@@ -700,6 +727,10 @@ class RustEmitter:
                 type_str = self._extract_type_string(stmt.type_annotation)
                 if type_str:
                     self.ctx.type_env[stmt.target] = type_str
+                # Wrap non-None values in Some() for Option types
+                # But don't wrap function calls - the function handles wrapping
+                if rust_type.name == "Option" and value != "None" and not isinstance(stmt.value, IRCall):
+                    value = f"Some({value})"
                 return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
             return f"{indent}let {mut}{stmt.target} = {value};"
         else:
@@ -1171,6 +1202,21 @@ class RustEmitter:
         # Special handling for 'not in' operator
         if expr.op == BinaryOp.NOT_IN:
             return f"!{right}.contains(&{left})"
+
+        # Special handling for 'is' operator (identity comparison)
+        # Python: x is None -> Rust: x.is_none()
+        # Python: x is not None -> Rust: x.is_some()
+        if expr.op == BinaryOp.IS:
+            if right == "None":
+                return f"{left}.is_none()"
+            # For non-None identity checks, fall through to pointer equality
+            # (rare in transpiled code, but handle it)
+            return f"std::ptr::eq(&{left}, &{right})"
+
+        if expr.op == BinaryOp.IS_NOT:
+            if right == "None":
+                return f"{left}.is_some()"
+            return f"!std::ptr::eq(&{left}, &{right})"
 
         # Special handling for power - return f64
         # Convert the entire left expression to f64 first, then apply powf

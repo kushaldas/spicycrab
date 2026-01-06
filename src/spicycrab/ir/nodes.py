@@ -120,6 +120,8 @@ class BinaryOp(Enum):
     RSHIFT = ">>"
     IN = "in"
     NOT_IN = "not in"
+    IS = "is"
+    IS_NOT = "is not"
 
 
 class UnaryOp(Enum):
