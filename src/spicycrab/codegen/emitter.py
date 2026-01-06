@@ -775,9 +775,27 @@ class RustEmitter:
         self.ctx.indent += 1
         inner_indent = self.ctx.indent_str()
 
+        # Check for tempfile context managers that return path in __enter__
+        is_tempfile_ctx = False
+        if isinstance(stmt.context, IRMethodCall):
+            if isinstance(stmt.context.obj, IRName):
+                if stmt.context.obj.name == "tempfile":
+                    if stmt.context.method in ("TemporaryDirectory", "NamedTemporaryFile"):
+                        is_tempfile_ctx = True
+
         # Use mut by default since context managers often need mutation
         if stmt.target:
-            lines.append(f"{inner_indent}let mut {stmt.target} = {ctx_expr};")
+            if is_tempfile_ctx:
+                # tempfile context managers: bind the path, not the object
+                # Keep the TempDir alive with _temp_ctx, bind path to target
+                lines.append(f"{inner_indent}let _temp_ctx = {ctx_expr};")
+                if "TemporaryDirectory" in ctx_expr or "tempdir" in ctx_expr:
+                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
+                else:
+                    # NamedTempFile - get the path
+                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
+            else:
+                lines.append(f"{inner_indent}let mut {stmt.target} = {ctx_expr};")
         else:
             lines.append(f"{inner_indent}let _ctx = {ctx_expr};")
 

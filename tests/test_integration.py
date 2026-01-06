@@ -816,3 +816,67 @@ def main() -> None:
     print("ok")
 '''
         transpile_and_run(code, "ok")
+
+
+class TestTempfileModule:
+    """Test tempfile module transpilation using Rust tempfile crate."""
+
+    def test_gettempdir(self, check_cargo):
+        """Test tempfile.gettempdir() function."""
+        code = '''
+import tempfile
+
+def main() -> None:
+    # Get the system temp directory
+    tmpdir: str = tempfile.gettempdir()
+
+    # Verify it returns a non-empty string
+    if len(tmpdir) > 0:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_mkdtemp(self, check_cargo):
+        """Test tempfile.mkdtemp() function."""
+        code = '''
+import tempfile
+
+def main() -> None:
+    # Create a temporary directory
+    tmpdir: str = tempfile.mkdtemp()
+
+    # Verify it returns a path
+    if len(tmpdir) > 0:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_tempdir(self, check_cargo):
+        """Test tempfile.TemporaryDirectory() function."""
+        code = '''
+import tempfile
+
+def main() -> None:
+    # Create a temporary directory (TempDir in Rust)
+    tmpdir = tempfile.TemporaryDirectory()
+
+    # Just verify it compiles and runs
+    print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_tempdir_context_manager(self, check_cargo):
+        """Test tempfile.TemporaryDirectory() as context manager."""
+        code = '''
+import tempfile
+
+def main() -> None:
+    # Use TemporaryDirectory as context manager
+    # In Python, tmpdir is bound to the path (string), not the object
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # tmpdir should be a string path
+        if len(tmpdir) > 0:
+            print("ok")
+    # Directory is automatically cleaned up here
+'''
+        transpile_and_run(code, "ok")

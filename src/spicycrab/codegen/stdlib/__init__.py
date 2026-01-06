@@ -23,6 +23,10 @@ from spicycrab.codegen.stdlib.os_map import (
     get_pathlib_mapping,
     get_sys_mapping,
 )
+from spicycrab.codegen.stdlib.tempfile_map import (
+    TEMPFILE_MAPPINGS,
+    get_tempfile_mapping,
+)
 from spicycrab.codegen.stdlib.time_map import (
     TIME_MAPPINGS,
     DATETIME_MAPPINGS,
@@ -56,6 +60,9 @@ __all__ = [
     # Glob mappings
     "GLOB_MAPPINGS",
     "get_glob_mapping",
+    # Tempfile mappings
+    "TEMPFILE_MAPPINGS",
+    "get_tempfile_mapping",
     # Collections mappings
     "COLLECTIONS_MAPPINGS",
     "DEQUE_METHOD_MAPPINGS",
@@ -93,6 +100,8 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return JSON_MAPPINGS[key]
     if key in GLOB_MAPPINGS:
         return GLOB_MAPPINGS[key]
+    if key in TEMPFILE_MAPPINGS:
+        return TEMPFILE_MAPPINGS[key]
     if key in COLLECTIONS_MAPPINGS:
         return COLLECTIONS_MAPPINGS[key]
     if key in TIME_MAPPINGS:

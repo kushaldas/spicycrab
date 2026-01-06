@@ -556,6 +556,104 @@ Supported glob functions
 | ``glob.escape(s)``   | String replacement for ``[ ] * ?``            |
 +----------------------+-----------------------------------------------+
 
+tempfile
+--------
+
+The ``tempfile`` module is mapped to Rust's `tempfile <https://docs.rs/tempfile>`_ crate.
+
+tempfile.gettempdir()
+^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import tempfile
+
+   def get_temp() -> str:
+       return tempfile.gettempdir()
+
+.. code-block:: rust
+
+   pub fn get_temp() -> String {
+       std::env::temp_dir().to_string_lossy().to_string()
+   }
+
+tempfile.mkdtemp()
+^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import tempfile
+
+   def make_temp_dir() -> str:
+       return tempfile.mkdtemp()
+
+.. code-block:: rust
+
+   pub fn make_temp_dir() -> String {
+       let d = tempfile::tempdir().unwrap();
+       let p = d.path().to_string_lossy().to_string();
+       let _ = d.keep();  // Persist the directory
+       p
+   }
+
+tempfile.TemporaryDirectory()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   import tempfile
+
+   def use_temp_dir() -> None:
+       tmpdir = tempfile.TemporaryDirectory()
+       # Directory is cleaned up when tmpdir goes out of scope
+
+.. code-block:: rust
+
+   pub fn use_temp_dir() {
+       let tmpdir = tempfile::tempdir().unwrap();
+       // Directory is cleaned up when tmpdir is dropped
+   }
+
+Context manager support
+^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``with`` statement works correctly with tempfile:
+
+.. code-block:: python
+
+   import tempfile
+
+   def use_temp_dir() -> None:
+       with tempfile.TemporaryDirectory() as tmpdir:
+           # tmpdir is the path (string), not the directory object
+           print(tmpdir)
+       # Directory is automatically cleaned up here
+
+.. code-block:: rust
+
+   pub fn use_temp_dir() {
+       {
+           let _temp_ctx = tempfile::tempdir().unwrap();
+           let tmpdir = _temp_ctx.path().to_string_lossy().to_string();
+           println!("{}", tmpdir);
+       } // _temp_ctx dropped here, directory cleaned up
+   }
+
+Supported tempfile functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++--------------------------------+----------------------------------------------+
+| Python                         | Rust                                         |
++================================+==============================================+
+| ``tempfile.gettempdir()``      | ``std::env::temp_dir()``                     |
++--------------------------------+----------------------------------------------+
+| ``tempfile.mkdtemp()``         | ``tempfile::tempdir()`` with ``keep()``      |
++--------------------------------+----------------------------------------------+
+| ``tempfile.TemporaryDirectory``| ``tempfile::tempdir()``                      |
++--------------------------------+----------------------------------------------+
+| ``tempfile.NamedTemporaryFile``| ``tempfile::NamedTempFile::new()``           |
++--------------------------------+----------------------------------------------+
+
 Generated Dependencies
 ----------------------
 
