@@ -56,6 +56,7 @@ Rust output:
    error_handling
    stdlib
    multifile
+   code_quality
 
 .. toctree::
    :maxdepth: 2
