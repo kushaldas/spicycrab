@@ -977,3 +977,94 @@ def main() -> None:
         print("ok")
 '''
         transpile_and_run(code, "ok")
+
+
+class TestRandomModule:
+    """Test random module transpilation using Rust rand crate."""
+
+    def test_random_random(self, check_cargo):
+        """Test random.random() function."""
+        code = '''
+import random
+
+def main() -> None:
+    # Generate random float in [0.0, 1.0)
+    r: float = random.random()
+
+    # Verify it's in valid range
+    valid: bool = r >= 0.0
+    if valid:
+        in_range: bool = r < 1.0
+        if in_range:
+            print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_random_randint(self, check_cargo):
+        """Test random.randint() function."""
+        code = '''
+import random
+
+def main() -> None:
+    # Generate random int in [1, 10]
+    r: int = random.randint(1, 10)
+
+    # Verify it's in valid range
+    valid: bool = r >= 1
+    if valid:
+        in_range: bool = r <= 10
+        if in_range:
+            print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_random_uniform(self, check_cargo):
+        """Test random.uniform() function."""
+        code = '''
+import random
+
+def main() -> None:
+    # Generate random float in [5.0, 10.0]
+    r: float = random.uniform(5.0, 10.0)
+
+    # Verify it's in valid range
+    valid: bool = r >= 5.0
+    if valid:
+        in_range: bool = r <= 10.0
+        if in_range:
+            print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_random_choice(self, check_cargo):
+        """Test random.choice() function."""
+        code = '''
+import random
+
+def main() -> None:
+    items: list[int] = [1, 2, 3, 4, 5]
+    chosen: int = random.choice(items)
+
+    # Verify the choice is from the list
+    valid: bool = chosen >= 1
+    if valid:
+        in_range: bool = chosen <= 5
+        if in_range:
+            print("ok")
+'''
+        transpile_and_run(code, "ok")
+
+    def test_random_sample(self, check_cargo):
+        """Test random.sample() function."""
+        code = '''
+import random
+
+def main() -> None:
+    items: list[int] = [1, 2, 3, 4, 5]
+    sampled: list[int] = random.sample(items, 3)
+
+    # Verify we got 3 unique elements
+    if len(sampled) == 3:
+        print("ok")
+'''
+        transpile_and_run(code, "ok")

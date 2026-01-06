@@ -61,6 +61,10 @@ IMPORT_DEPS: dict[str, list[CargoDependency]] = {
     "shutil": [
         CargoDependency("which", "6"),
     ],
+    "random": [
+        CargoDependency("rand", "0.8"),
+        CargoDependency("rand_distr", "0.4"),  # For distributions like gauss
+    ],
     # Note: Python's time module maps to std::time (no external dependency)
     # Note: subprocess module maps to std::process (no external dependency)
 }

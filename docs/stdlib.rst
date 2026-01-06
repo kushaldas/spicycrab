@@ -821,6 +821,290 @@ Supported shutil functions
 | ``shutil.which(cmd)``       | ``which::which(cmd)``                          |
 +-----------------------------+------------------------------------------------+
 
+random
+------
+
+The ``random`` module is mapped to Rust's `rand <https://docs.rs/rand>`_ crate.
+
+.. note::
+
+   The ``rand`` crate uses a thread-local random number generator (``thread_rng()``)
+   which is automatically seeded from the operating system. This is suitable for
+   most use cases but cannot be explicitly seeded like Python's ``random.seed()``.
+
+random.random()
+^^^^^^^^^^^^^^^
+
+Generate a random float in the range [0.0, 1.0).
+
+.. code-block:: python
+
+   import random
+
+   def get_random() -> float:
+       return random.random()
+
+.. code-block:: rust
+
+   pub fn get_random() -> f64 {
+       rand::random::<f64>()
+   }
+
+random.randint()
+^^^^^^^^^^^^^^^^
+
+Generate a random integer in the inclusive range [a, b].
+
+.. code-block:: python
+
+   import random
+
+   def dice_roll() -> int:
+       return random.randint(1, 6)
+
+.. code-block:: rust
+
+   use rand::Rng;
+
+   pub fn dice_roll() -> i64 {
+       rand::thread_rng().gen_range(1..=6)
+   }
+
+random.randrange()
+^^^^^^^^^^^^^^^^^^
+
+Generate a random integer in the half-open range [a, b).
+
+.. code-block:: python
+
+   import random
+
+   def random_index() -> int:
+       return random.randrange(0, 10)  # 0 to 9
+
+.. code-block:: rust
+
+   use rand::Rng;
+
+   pub fn random_index() -> i64 {
+       rand::thread_rng().gen_range(0..10)
+   }
+
+random.uniform()
+^^^^^^^^^^^^^^^^
+
+Generate a random float in the inclusive range [a, b].
+
+.. code-block:: python
+
+   import random
+
+   def random_float() -> float:
+       return random.uniform(0.0, 100.0)
+
+.. code-block:: rust
+
+   use rand::Rng;
+
+   pub fn random_float() -> f64 {
+       rand::thread_rng().gen_range(0.0..=100.0)
+   }
+
+random.choice()
+^^^^^^^^^^^^^^^
+
+Select a random element from a non-empty sequence.
+
+.. code-block:: python
+
+   import random
+
+   def pick_one(items: list[int]) -> int:
+       return random.choice(items)
+
+.. code-block:: rust
+
+   use rand::seq::SliceRandom;
+
+   pub fn pick_one(items: Vec<i64>) -> i64 {
+       items.choose(&mut rand::thread_rng()).cloned().unwrap()
+   }
+
+random.sample()
+^^^^^^^^^^^^^^^
+
+Select k unique random elements from a sequence (without replacement).
+
+.. code-block:: python
+
+   import random
+
+   def pick_three(items: list[int]) -> list[int]:
+       return random.sample(items, 3)
+
+.. code-block:: rust
+
+   use rand::seq::SliceRandom;
+
+   pub fn pick_three(items: Vec<i64>) -> Vec<i64> {
+       items.choose_multiple(&mut rand::thread_rng(), 3)
+           .cloned()
+           .collect::<Vec<_>>()
+   }
+
+random.choices()
+^^^^^^^^^^^^^^^^
+
+Select k random elements from a sequence (with replacement).
+
+.. code-block:: python
+
+   import random
+
+   def pick_with_replacement(items: list[int], k: int) -> list[int]:
+       return random.choices(items, k)
+
+.. code-block:: rust
+
+   use rand::seq::SliceRandom;
+
+   pub fn pick_with_replacement(items: Vec<i64>, k: usize) -> Vec<i64> {
+       (0..k).map(|_| items.choose(&mut rand::thread_rng()).cloned().unwrap())
+           .collect::<Vec<_>>()
+   }
+
+random.shuffle()
+^^^^^^^^^^^^^^^^
+
+Shuffle a sequence in place.
+
+.. code-block:: python
+
+   import random
+
+   def shuffle_deck(cards: list[int]) -> None:
+       random.shuffle(cards)
+
+.. code-block:: rust
+
+   use rand::seq::SliceRandom;
+
+   pub fn shuffle_deck(cards: &mut Vec<i64>) {
+       cards.shuffle(&mut rand::thread_rng());
+   }
+
+.. warning::
+
+   **Known Limitation:** ``random.shuffle()`` modifies the sequence in place,
+   which requires mutable access in Rust. The transpiler's mutability analysis
+   may not automatically detect that a variable needs to be mutable when
+   ``shuffle()`` is called on it. See :ref:`random-shuffle-limitation` below.
+
+random.gauss()
+^^^^^^^^^^^^^^
+
+Generate a random number from a Gaussian (normal) distribution.
+
+.. code-block:: python
+
+   import random
+
+   def normal_value() -> float:
+       return random.gauss(0.0, 1.0)  # mean=0, stddev=1
+
+.. code-block:: rust
+
+   use rand_distr::{Distribution, Normal};
+
+   pub fn normal_value() -> f64 {
+       Normal::new(0.0, 1.0).unwrap().sample(&mut rand::thread_rng())
+   }
+
+Supported random functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++-----------------------------+------------------------------------------------+
+| Python                      | Rust                                           |
++=============================+================================================+
+| ``random.random()``         | ``rand::random::<f64>()``                      |
++-----------------------------+------------------------------------------------+
+| ``random.randint(a, b)``    | ``thread_rng().gen_range(a..=b)``              |
++-----------------------------+------------------------------------------------+
+| ``random.randrange(a, b)``  | ``thread_rng().gen_range(a..b)``               |
++-----------------------------+------------------------------------------------+
+| ``random.uniform(a, b)``    | ``thread_rng().gen_range(a..=b)``              |
++-----------------------------+------------------------------------------------+
+| ``random.choice(seq)``      | ``seq.choose(&mut rng).cloned().unwrap()``     |
++-----------------------------+------------------------------------------------+
+| ``random.shuffle(seq)``     | ``seq.shuffle(&mut rng)``                      |
++-----------------------------+------------------------------------------------+
+| ``random.sample(seq, k)``   | ``seq.choose_multiple(&mut rng, k)``           |
++-----------------------------+------------------------------------------------+
+| ``random.choices(seq, k)``  | Loop with ``choose()``                         |
++-----------------------------+------------------------------------------------+
+| ``random.gauss(mu, sigma)`` | ``rand_distr::Normal::new(mu, sigma)``         |
++-----------------------------+------------------------------------------------+
+
+.. _random-shuffle-limitation:
+
+Known Limitations
+^^^^^^^^^^^^^^^^^
+
+**random.shuffle() and Mutability**
+
+In Python, ``random.shuffle()`` modifies a list in place:
+
+.. code-block:: python
+
+   items = [1, 2, 3, 4, 5]
+   random.shuffle(items)  # items is now shuffled
+
+In Rust, this requires the variable to be declared as mutable (``let mut``).
+The spicycrab transpiler performs mutability analysis to detect when variables
+need to be mutable, but it currently does not detect that calling
+``random.shuffle()`` on a variable requires mutability.
+
+**Workaround:** If you encounter a compilation error like:
+
+.. code-block:: text
+
+   error[E0596]: cannot borrow `items` as mutable, as it is not declared as mutable
+
+You have two options:
+
+1. **Manual fix:** Edit the generated Rust code to add ``mut``:
+
+   .. code-block:: rust
+
+      // Change this:
+      let items: Vec<i64> = vec![1, 2, 3, 4, 5];
+      // To this:
+      let mut items: Vec<i64> = vec![1, 2, 3, 4, 5];
+
+2. **Use sample instead:** If you don't need in-place shuffling, use
+   ``random.sample()`` with the full length to get a shuffled copy:
+
+   .. code-block:: python
+
+      # Instead of:
+      random.shuffle(items)
+
+      # Use:
+      shuffled: list[int] = random.sample(items, len(items))
+
+**random.seed() Not Supported**
+
+Python's ``random.seed()`` allows setting a seed for reproducible random sequences.
+Rust's ``thread_rng()`` is automatically seeded by the OS and cannot be manually
+seeded. The transpiler emits a comment noting this limitation:
+
+.. code-block:: rust
+
+   /* random.seed() - thread_rng cannot be seeded; use StdRng::seed_from_u64() for reproducibility */
+
+For reproducible random sequences in Rust, you would need to use ``StdRng`` instead
+of ``thread_rng()``, which requires manual code modification after transpilation.
+
 Generated Dependencies
 ----------------------
 
@@ -832,6 +1116,7 @@ When using stdlib features, spicycrab adds appropriate dependencies to Cargo.tom
    serde = { version = "1.0", features = ["derive"] }
    serde_json = "1.0"
    chrono = "0.4"  # Added when using datetime module
+   rand = "0.8"    # Added when using random module
 
 Standard imports are also added:
 

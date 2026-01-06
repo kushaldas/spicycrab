@@ -35,6 +35,10 @@ from spicycrab.codegen.stdlib.shutil_map import (
     SHUTIL_MAPPINGS,
     get_shutil_mapping,
 )
+from spicycrab.codegen.stdlib.random_map import (
+    RANDOM_MAPPINGS,
+    get_random_mapping,
+)
 from spicycrab.codegen.stdlib.time_map import (
     TIME_MAPPINGS,
     DATETIME_MAPPINGS,
@@ -77,6 +81,9 @@ __all__ = [
     # Shutil mappings
     "SHUTIL_MAPPINGS",
     "get_shutil_mapping",
+    # Random mappings
+    "RANDOM_MAPPINGS",
+    "get_random_mapping",
     # Collections mappings
     "COLLECTIONS_MAPPINGS",
     "DEQUE_METHOD_MAPPINGS",
@@ -120,6 +127,8 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return SUBPROCESS_MAPPINGS[key]
     if key in SHUTIL_MAPPINGS:
         return SHUTIL_MAPPINGS[key]
+    if key in RANDOM_MAPPINGS:
+        return RANDOM_MAPPINGS[key]
     if key in COLLECTIONS_MAPPINGS:
         return COLLECTIONS_MAPPINGS[key]
     if key in TIME_MAPPINGS:
