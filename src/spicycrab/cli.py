@@ -190,9 +190,7 @@ def _transpile_directory(
 
     # Filter out __pycache__ and hidden directories
     py_files = [
-        f
-        for f in py_files
-        if "__pycache__" not in str(f) and not any(part.startswith(".") for part in f.parts)
+        f for f in py_files if "__pycache__" not in str(f) and not any(part.startswith(".") for part in f.parts)
     ]
 
     if not py_files:

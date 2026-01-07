@@ -107,23 +107,17 @@ class EmitterContext:
     current_class: str | None = None
     resolver: TypeResolver = field(default_factory=TypeResolver)
     in_last_stmt: bool = False  # True when emitting the last statement in a block
-    class_names: set[str] = field(
-        default_factory=set
-    )  # Known class names for constructor detection
+    class_names: set[str] = field(default_factory=set)  # Known class names for constructor detection
     stdlib_imports: set[str] = field(default_factory=set)  # Required stdlib use statements
     local_modules: set[str] = field(default_factory=set)  # Module names in the same project
-    local_imports: dict[str, list[tuple[str, str | None]]] = field(
-        default_factory=dict
-    )  # module -> [(name, alias)]
+    local_imports: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)  # module -> [(name, alias)]
     crate_name: str | None = None  # Crate name for inter-module imports (None uses "crate::")
     # Error handling support
     result_functions: set[str] = field(default_factory=set)  # Functions that return Result
     in_result_context: bool = False  # True when inside a Result-returning function
     in_option_context: bool = False  # True when inside an Option-returning function
     # Type tracking for instance method resolution
-    type_env: dict[str, str] = field(
-        default_factory=dict
-    )  # var_name -> type string (e.g., "datetime.datetime")
+    type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
     # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
     stub_imports: dict[str, str] = field(default_factory=dict)
     # Assignment target type for turbofish inference (e.g., "String" for get_one::<String>)
@@ -167,11 +161,7 @@ class RustEmitter:
             # Check if this is a T | None union (becomes Option<T>)
             types = ir_type.types
             if len(types) == 2:
-                none_count = sum(
-                    1
-                    for t in types
-                    if isinstance(t, IRPrimitiveType) and t.name == PrimitiveType.NONE
-                )
+                none_count = sum(1 for t in types if isinstance(t, IRPrimitiveType) and t.name == PrimitiveType.NONE)
                 return none_count == 1
         return False
 
@@ -235,9 +225,7 @@ class RustEmitter:
 
         # Emit top-level statements in main() if any
         # Filter out `if __name__ == "__main__"` patterns as they don't apply in Rust
-        filtered_statements = [
-            stmt for stmt in module.statements if not self._is_name_main_check(stmt)
-        ]
+        filtered_statements = [stmt for stmt in module.statements if not self._is_name_main_check(stmt)]
         if filtered_statements:
             body_lines.append("fn main() {")
             self.ctx.indent = 1
@@ -608,11 +596,7 @@ class RustEmitter:
             field_indent = self.ctx.indent_str()
             # Initialize fields from __init__ body
             for stmt in method.body:
-                if (
-                    isinstance(stmt, IRAttrAssign)
-                    and isinstance(stmt.obj, IRName)
-                    and stmt.obj.name == "self"
-                ):
+                if isinstance(stmt, IRAttrAssign) and isinstance(stmt.obj, IRName) and stmt.obj.name == "self":
                     value_str = self.emit_expression(stmt.value)
                     # Use Rust shorthand syntax when field name matches value (clippy::redundant_field_names)
                     if stmt.attr == value_str:
@@ -819,11 +803,7 @@ class RustEmitter:
                     self.ctx.type_env[stmt.target] = type_str
                 # Wrap non-None values in Some() for Option types
                 # But don't wrap function calls - the function handles wrapping
-                if (
-                    rust_type.name == "Option"
-                    and value != "None"
-                    and not isinstance(stmt.value, IRCall)
-                ):
+                if rust_type.name == "Option" and value != "None" and not isinstance(stmt.value, IRCall):
                     value = f"Some({value})"
                 return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
             return f"{indent}let {mut}{stmt.target} = {value};"
@@ -943,14 +923,10 @@ class RustEmitter:
                 # Keep the TempDir alive with _temp_ctx, bind path to target
                 lines.append(f"{inner_indent}let _temp_ctx = {ctx_expr};")
                 if "TemporaryDirectory" in ctx_expr or "tempdir" in ctx_expr:
-                    lines.append(
-                        f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();"
-                    )
+                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
                 else:
                     # NamedTempFile - get the path
-                    lines.append(
-                        f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();"
-                    )
+                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
             else:
                 lines.append(f"{inner_indent}let mut {stmt.target} = {ctx_expr};")
         else:
@@ -971,12 +947,7 @@ class RustEmitter:
 
         # Check if this is a single-statement try with a Result-returning call
         # Pattern: try: result = fallible_call() except: handle_error()
-        if (
-            len(stmt.body) == 1
-            and stmt.handlers
-            and isinstance(stmt.body[0], IRAssign)
-            and stmt.body[0].value
-        ):
+        if len(stmt.body) == 1 and stmt.handlers and isinstance(stmt.body[0], IRAssign) and stmt.body[0].value:
             assign = stmt.body[0]
             # Check if the call returns Result
             call = assign.value
@@ -991,12 +962,7 @@ class RustEmitter:
                 return self._emit_try_as_match(stmt, assign, indent)
 
         # Check if try body is a single expression statement with Result call
-        if (
-            len(stmt.body) == 1
-            and stmt.handlers
-            and isinstance(stmt.body[0], IRExprStmt)
-            and stmt.body[0].expr
-        ):
+        if len(stmt.body) == 1 and stmt.handlers and isinstance(stmt.body[0], IRExprStmt) and stmt.body[0].expr:
             expr_stmt = stmt.body[0]
             call = expr_stmt.expr
             is_result_call = False
@@ -1453,11 +1419,7 @@ class RustEmitter:
         if func == "print":
             if args:
                 # Strip .to_string() since println! handles Display types directly
-                arg = (
-                    args[0].removesuffix(".to_string()")
-                    if args[0].endswith(".to_string()")
-                    else args[0]
-                )
+                arg = args[0].removesuffix(".to_string()") if args[0].endswith(".to_string()") else args[0]
                 # If arg is a string literal, use println!("literal") directly
                 # to avoid clippy::print_literal warning
                 if arg.startswith('"') and arg.endswith('"'):
@@ -1643,9 +1605,7 @@ class RustEmitter:
 
         return rust_code
 
-    def _apply_datetime_constructor(
-        self, mapping: StdlibMapping, args: list[str], expr: IRMethodCall
-    ) -> str:
+    def _apply_datetime_constructor(self, mapping: StdlibMapping, args: list[str], expr: IRMethodCall) -> str:
         """Apply a datetime constructor mapping, handling keyword arguments."""
 
         rust_code = mapping.rust_code
@@ -1921,9 +1881,7 @@ class RustEmitter:
                     if len(args) >= 2:
                         # Strip .to_string() since expect takes &str
                         msg = (
-                            args[1].removesuffix(".to_string()")
-                            if args[1].endswith(".to_string()")
-                            else f"&{args[1]}"
+                            args[1].removesuffix(".to_string()") if args[1].endswith(".to_string()") else f"&{args[1]}"
                         )
                         return f"{args[0]}.{method}({msg})"
                 # Methods that take (self, closure)
@@ -1970,30 +1928,14 @@ class RustEmitter:
             return f"{obj}.to_lowercase()"
         if method == "replace":
             # replace takes &str, not String, so strip .to_string() if present
-            arg0 = (
-                args[0].removesuffix(".to_string()")
-                if args[0].endswith(".to_string()")
-                else f"&{args[0]}"
-            )
-            arg1 = (
-                args[1].removesuffix(".to_string()")
-                if args[1].endswith(".to_string()")
-                else f"&{args[1]}"
-            )
+            arg0 = args[0].removesuffix(".to_string()") if args[0].endswith(".to_string()") else f"&{args[0]}"
+            arg1 = args[1].removesuffix(".to_string()") if args[1].endswith(".to_string()") else f"&{args[1]}"
             return f"{obj}.replace({arg0}, {arg1})"
         if method == "startswith":
-            arg = (
-                args[0].removesuffix(".to_string()")
-                if args[0].endswith(".to_string()")
-                else f"&{args[0]}"
-            )
+            arg = args[0].removesuffix(".to_string()") if args[0].endswith(".to_string()") else f"&{args[0]}"
             return f"{obj}.starts_with({arg})"
         if method == "endswith":
-            arg = (
-                args[0].removesuffix(".to_string()")
-                if args[0].endswith(".to_string()")
-                else f"&{args[0]}"
-            )
+            arg = args[0].removesuffix(".to_string()") if args[0].endswith(".to_string()") else f"&{args[0]}"
             return f"{obj}.ends_with({arg})"
         if method == "isdigit":
             return f"{obj}.chars().all(|c| c.is_ascii_digit())"

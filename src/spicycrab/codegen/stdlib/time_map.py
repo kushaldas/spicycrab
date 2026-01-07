@@ -307,7 +307,7 @@ DATETIME_MAPPINGS: dict[str, StdlibMapping] = {
         rust_code=(
             'chrono::NaiveDateTime::parse_from_str(&{args}, "%Y-%m-%dT%H:%M:%S")'
             '.or_else(|_| chrono::NaiveDateTime::parse_from_str(&{args}, "%Y-%m-%d %H:%M:%S"))'
-            '.or_else(|_| chrono::NaiveDateTime::parse_from_str('
+            ".or_else(|_| chrono::NaiveDateTime::parse_from_str("
             '&format!("{{}}T00:00:00", {args}), "%Y-%m-%dT%H:%M:%S")).unwrap()'
         ),
         rust_imports=["chrono::Datelike", "chrono::Timelike"],

@@ -147,9 +147,7 @@ def generate_cargo_toml(
                 version = dep_spec.get("version", "")
                 features = dep_spec.get("features", [])
                 optional = dep_spec.get("optional", False)
-                deps[dep_name] = CargoDependency(
-                    dep_name, version, features=features, optional=optional
-                )
+                deps[dep_name] = CargoDependency(dep_name, version, features=features, optional=optional)
 
     # Dependencies section
     if deps:

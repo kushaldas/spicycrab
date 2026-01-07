@@ -186,9 +186,7 @@ class TypeParser:
         # User-defined generic class
         return IRClassType(name=base_name)
 
-    def _parse_type_args(
-        self, slice_node: ast.expr, name: str | None, line: int | None
-    ) -> list[IRType]:
+    def _parse_type_args(self, slice_node: ast.expr, name: str | None, line: int | None) -> list[IRType]:
         """Parse type arguments from a subscript slice."""
         if isinstance(slice_node, ast.Tuple):
             return [self.parse(elt, name) for elt in slice_node.elts]
@@ -230,14 +228,8 @@ class TypeParser:
                 variants.append(self.parse(elt, name))
 
         # Check if this is actually Optional (Union with None)
-        none_types = [
-            v for v in variants if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE
-        ]
-        other_types = [
-            v
-            for v in variants
-            if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)
-        ]
+        none_types = [v for v in variants if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE]
+        other_types = [v for v in variants if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)]
 
         if len(none_types) == 1 and len(other_types) == 1:
             # This is Optional[X]
@@ -245,16 +237,12 @@ class TypeParser:
 
         return IRUnionType(variants=variants)
 
-    def _parse_tuple_type(
-        self, elements: list[ast.expr], name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_tuple_type(self, elements: list[ast.expr], name: str | None, line: int | None) -> IRType:
         """Parse a tuple of types (used in Union, Tuple, etc.)."""
         type_args = [self.parse(elt, name) for elt in elements]
         return IRGenericType(name="Tuple", type_args=type_args)
 
-    def _parse_callable(
-        self, type_args: list[IRType], name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_callable(self, type_args: list[IRType], name: str | None, line: int | None) -> IRType:
         """Parse a Callable type annotation."""
         if len(type_args) < 2:
             raise TypeAnnotationError(

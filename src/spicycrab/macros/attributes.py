@@ -51,9 +51,7 @@ class RustAttribute:
             return f"#[{self.name}({args_str})]"
 
         if isinstance(self.args, dict):
-            args_str = ", ".join(
-                f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}" for k, v in self.args.items()
-            )
+            args_str = ", ".join(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}" for k, v in self.args.items())
             return f"#[{self.name}({args_str})]"
 
         return f"#[{self.name}]"

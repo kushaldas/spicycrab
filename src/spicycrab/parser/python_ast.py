@@ -162,9 +162,7 @@ class PythonASTVisitor(ast.NodeVisitor):
     ) -> UnsupportedFeatureError:
         """Create an unsupported feature error."""
         line = getattr(node, "lineno", None) if node else None
-        return UnsupportedFeatureError(
-            feature, filename=self.filename, line=line, suggestion=suggestion
-        )
+        return UnsupportedFeatureError(feature, filename=self.filename, line=line, suggestion=suggestion)
 
     def visit_Module(self, node: ast.Module) -> IRModule:
         """Visit a module (top-level file)."""
@@ -322,9 +320,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             if name in declarations:
                 declarations[name].is_mutable = True
 
-    def _check_mutating_call(
-        self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]
-    ) -> None:
+    def _check_mutating_call(self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]) -> None:
         """Check if expression contains a mutating method call and mark the target as reassigned."""
         if isinstance(expr, IRMethodCall):
             if expr.method in mutating_methods:
@@ -336,9 +332,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             for arg in expr.args:
                 self._check_mutating_call(arg, reassigned, mutating_methods)
 
-    def _parse_parameters(
-        self, args: ast.arguments, func_node: ast.FunctionDef
-    ) -> list[IRParameter]:
+    def _parse_parameters(self, args: ast.arguments, func_node: ast.FunctionDef) -> list[IRParameter]:
         """Parse function parameters with their type annotations."""
         params: list[IRParameter] = []
 
@@ -429,11 +423,7 @@ class PythonASTVisitor(ast.NodeVisitor):
         # Check for dataclass decorator
         is_dataclass = any(
             (isinstance(d, ast.Name) and d.id == "dataclass")
-            or (
-                isinstance(d, ast.Call)
-                and isinstance(d.func, ast.Name)
-                and d.func.id == "dataclass"
-            )
+            or (isinstance(d, ast.Call) and isinstance(d.func, ast.Name) and d.func.id == "dataclass")
             for d in node.decorator_list
         )
 
@@ -789,16 +779,12 @@ class PythonASTVisitor(ast.NodeVisitor):
                 # This is an elif
                 elif_node = current_else[0]
                 elif_cond = self._visit_expression(elif_node.test)
-                elif_body = [
-                    self._visit_statement(s) for s in elif_node.body if self._visit_statement(s)
-                ]
+                elif_body = [self._visit_statement(s) for s in elif_node.body if self._visit_statement(s)]
                 elif_clauses.append((elif_cond, [s for s in elif_body if s]))
                 current_else = elif_node.orelse
             else:
                 # This is the final else
-                else_body = [
-                    self._visit_statement(s) for s in current_else if self._visit_statement(s)
-                ]
+                else_body = [self._visit_statement(s) for s in current_else if self._visit_statement(s)]
                 break
 
         return IRIf(
@@ -871,9 +857,7 @@ class PythonASTVisitor(ast.NodeVisitor):
                 elif isinstance(handler.type, ast.Attribute):
                     exc_type = handler.type.attr
 
-            handler_body = [
-                self._visit_statement(s) for s in handler.body if self._visit_statement(s)
-            ]
+            handler_body = [self._visit_statement(s) for s in handler.body if self._visit_statement(s)]
             handlers.append(
                 IRExceptHandler(
                     exc_type=exc_type,
@@ -882,9 +866,7 @@ class PythonASTVisitor(ast.NodeVisitor):
                 )
             )
 
-        finally_body = [
-            self._visit_statement(s) for s in node.finalbody if self._visit_statement(s)
-        ]
+        finally_body = [self._visit_statement(s) for s in node.finalbody if self._visit_statement(s)]
 
         return IRTry(
             body=[s for s in body if s],

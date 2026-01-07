@@ -92,9 +92,7 @@ def download_crate(crate_name: str, version: str, output_dir: Path) -> Path:
             crate_data = response.read()
     except HTTPError as e:
         if e.code == 404:
-            raise click.ClickException(
-                f"Crate '{crate_name}' version '{version}' not found on crates.io"
-            )
+            raise click.ClickException(f"Crate '{crate_name}' version '{version}' not found on crates.io")
         raise click.ClickException(f"Failed to download crate: HTTP {e.code}")
     except URLError as e:
         raise click.ClickException(f"Network error downloading crate: {e.reason}")
@@ -598,9 +596,7 @@ def search(query: str):
     default=None,
     help="Output crate name (default: same as input crate). Use for re-exports like clap_builder -> clap",
 )
-def generate(
-    crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None
-):
+def generate(crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None):
     """Generate stubs from a Rust crate.
 
     Parses a Rust crate and generates Python type stubs with
@@ -713,19 +709,14 @@ def generate(
     glob_reexports = [r for r in parsed_crate.reexports if r.is_glob]
     source_crates_to_generate = []
 
-    if (
-        glob_reexports
-        and len(parsed_crate.structs) + len(parsed_crate.enums) + len(parsed_crate.impls) < 5
-    ):
+    if glob_reexports and len(parsed_crate.structs) + len(parsed_crate.enums) + len(parsed_crate.impls) < 5:
         click.echo("")
         click.echo(click.style("Detected re-exports from other crates:", fg="yellow"))
         for r in glob_reexports:
             click.echo(f"  pub use {r.source_crate}::*")
             source_crates_to_generate.append(r.source_crate)
         click.echo("")
-        click.echo(
-            "This crate re-exports from other crates. Will generate stubs for source crates."
-        )
+        click.echo("This crate re-exports from other crates. Will generate stubs for source crates.")
     click.echo("")
 
     # Generate stubs for source crates first (if any)
@@ -757,9 +748,7 @@ def generate(
 
                 shutil.rmtree(source_temp_dir, ignore_errors=True)
             except Exception as e:
-                click.echo(
-                    click.style(f"  Warning: Could not generate {source_crate}: {e}", fg="yellow")
-                )
+                click.echo(click.style(f"  Warning: Could not generate {source_crate}: {e}", fg="yellow"))
         click.echo("")
 
     # Generate the stub package

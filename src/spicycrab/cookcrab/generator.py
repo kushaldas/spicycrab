@@ -216,11 +216,7 @@ def sanitize_rust_type(rust_type: str) -> str:
     rust_type = rust_type.replace("dyn ", "")
 
     # Remove trait bounds (+ Send + Sync, etc.) - keep only the first type/trait
-    if (
-        "+" in rust_type
-        and not rust_type.startswith("Option")
-        and not rust_type.startswith("Result")
-    ):
+    if "+" in rust_type and not rust_type.startswith("Option") and not rust_type.startswith("Result"):
         rust_type = rust_type.split("+")[0].strip()
 
     # Remove mut keyword (handle both "mut " and "mut" prefix)
@@ -577,9 +573,7 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
     return "\n".join(lines)
 
 
-def generate_spicycrab_toml(
-    crate: RustCrate, crate_name: str, version: str, python_module: str
-) -> str:
+def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, python_module: str) -> str:
     """Generate _spicycrab.toml content."""
     lines = [
         "[package]",
@@ -647,9 +641,7 @@ def generate_spicycrab_toml(
                 else:
                     lines.append("[[mappings.functions]]")
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
-                    lines.append(
-                        f'rust_code = "{crate_name}::{struct.name}::{method.name}({args})"'
-                    )
+                    lines.append(f'rust_code = "{crate_name}::{struct.name}::{method.name}({args})"')
                     lines.append(f'rust_imports = ["{crate_name}::{struct.name}"]')
                     lines.append("needs_result = false")
                     if param_types:
@@ -800,9 +792,7 @@ def generate_reexport_toml(
             if line.startswith("[[mappings."):
                 if current_block and in_mapping_block:
                     # Process and add the previous block
-                    rewritten_block = _rewrite_mapping_block(
-                        current_block, source_crate, crate_name
-                    )
+                    rewritten_block = _rewrite_mapping_block(current_block, source_crate, crate_name)
                     lines.extend(rewritten_block)
                     lines.append("")
                 current_block = [line]
@@ -811,9 +801,7 @@ def generate_reexport_toml(
                 if line.startswith("[") and not line.startswith("[["):
                     # End of mappings section
                     if current_block:
-                        rewritten_block = _rewrite_mapping_block(
-                            current_block, source_crate, crate_name
-                        )
+                        rewritten_block = _rewrite_mapping_block(current_block, source_crate, crate_name)
                         lines.extend(rewritten_block)
                         lines.append("")
                     in_mapping_block = False
@@ -847,9 +835,7 @@ def _rewrite_mapping_block(block: list[str], source_crate: str, target_crate: st
     return result
 
 
-def generate_reexport_pyproject(
-    crate_name: str, source_crates: list[str], version: str, python_module: str
-) -> str:
+def generate_reexport_pyproject(crate_name: str, source_crates: list[str], version: str, python_module: str) -> str:
     """Generate pyproject.toml with dependencies on source crate stubs."""
     deps = ", ".join(f'"spicycrab-{s}"' for s in source_crates)
     return f'''[build-system]
@@ -889,9 +875,7 @@ def generate_reexport_stub_package(
 
     # Generate content
     init_py = generate_reexport_init_py(crate_name, source_crates)
-    spicycrab_toml = generate_reexport_toml(
-        crate_name, source_crates, version, python_module, output_dir
-    )
+    spicycrab_toml = generate_reexport_toml(crate_name, source_crates, version, python_module, output_dir)
     pyproject_toml = generate_reexport_pyproject(crate_name, source_crates, version, python_module)
 
     # Create output directory structure

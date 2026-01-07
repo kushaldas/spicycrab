@@ -165,18 +165,12 @@ class TypeResolver:
         be smarter about common patterns.
         """
         # Check if this is Option (Union with None)
-        none_count = sum(
-            1
-            for v in ir_type.variants
-            if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE
-        )
+        none_count = sum(1 for v in ir_type.variants if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)
 
         if none_count == 1 and len(ir_type.variants) == 2:
             # This is Optional[T]
             other = next(
-                v
-                for v in ir_type.variants
-                if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)
+                v for v in ir_type.variants if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)
             )
             inner = self.resolve(other)
             return RustType(name="Option", generics=[inner])

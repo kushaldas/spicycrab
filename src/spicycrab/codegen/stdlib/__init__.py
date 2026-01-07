@@ -106,6 +106,7 @@ def clear_stub_cache():
     """Clear stub cache."""
     return _get_stub_discovery().clear_stub_cache()
 
+
 __all__ = [
     # Types
     "StdlibMapping",

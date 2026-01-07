@@ -93,8 +93,7 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         python_module="os.path",
         python_func="basename",
         rust_code=(
-            "std::path::Path::new(&{args}).file_name()"
-            ".map(|s| s.to_string_lossy().to_string()).unwrap_or_default()"
+            "std::path::Path::new(&{args}).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()"
         ),
         rust_imports=[],  # Using full path, no import needed
     ),
@@ -102,8 +101,7 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         python_module="os.path",
         python_func="dirname",
         rust_code=(
-            "std::path::Path::new(&{args}).parent()"
-            ".map(|p| p.to_string_lossy().to_string()).unwrap_or_default()"
+            "std::path::Path::new(&{args}).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()"
         ),
         rust_imports=[],  # Using full path, no import needed
     ),

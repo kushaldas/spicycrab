@@ -157,9 +157,7 @@ class Option(Generic[T]):
         return None
 
     @staticmethod
-    def inspect(
-        opt: Option[T] | Some[T] | None, f: Callable[[T], None]
-    ) -> Option[T] | Some[T] | None:
+    def inspect(opt: Option[T] | Some[T] | None, f: Callable[[T], None]) -> Option[T] | Some[T] | None:
         """Call f on contained value (if Some), return original Option."""
         if isinstance(opt, Some):
             f(opt.value)
@@ -188,9 +186,7 @@ class Option(Generic[T]):
     # =========================================================================
 
     @staticmethod
-    def and_(
-        opt: Option[T] | Some[T] | None, optb: Option[U] | Some[U] | None
-    ) -> Option[U] | Some[U] | None:
+    def and_(opt: Option[T] | Some[T] | None, optb: Option[U] | Some[U] | None) -> Option[U] | Some[U] | None:
         """Return None if opt is None, otherwise return optb."""
         if isinstance(opt, Some):
             return optb
@@ -217,9 +213,7 @@ class Option(Generic[T]):
         return None
 
     @staticmethod
-    def or_(
-        opt: Option[T] | Some[T] | None, optb: Option[T] | Some[T] | None
-    ) -> Option[T] | Some[T] | None:
+    def or_(opt: Option[T] | Some[T] | None, optb: Option[T] | Some[T] | None) -> Option[T] | Some[T] | None:
         """Return opt if Some, otherwise return optb."""
         if isinstance(opt, Some):
             return opt
