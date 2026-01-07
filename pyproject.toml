@@ -1,13 +1,13 @@
 [build-system]
-requires = ["flit_core >=3.4,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "spicycrab"
-version = "0.1.0"
+version = "0.0.1"
 description = "A Python to Rust transpiler for type-annotated Python code"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 license = {text = "MIT"}
 authors = [
     {name = "spicycrab contributors"}
@@ -24,7 +24,9 @@ classifiers = [
     "Topic :: Software Development :: Compilers",
 ]
 dependencies = [
+    "build>=1.0.0",
     "click>=8.0",
+    "jinja2>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -43,28 +45,22 @@ docs = [
 
 [project.scripts]
 crabpy = "spicycrab.cli:main"
+cookcrab = "spicycrab.cookcrab.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/example/spicycrab"
+Homepage = "https://github.com/kushaldas/spicycrab"
 
-[tool.flit.module]
-name = "spicycrab"
-
-[tool.flit.sdist]
-include = ["tests/"]
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "src"
+module-name = "spicycrab.cookcrab._parser"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

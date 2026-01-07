@@ -15,6 +15,7 @@ from spicycrab.codegen.stdlib import (
     get_datetime_method_mapping,
     get_crate_for_python_module,
     get_stub_mapping,
+    get_stub_method_mapping,
     get_stub_type_mapping,
     PATHLIB_MAPPINGS,
 )
@@ -121,6 +122,8 @@ class EmitterContext:
     type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
     # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
     stub_imports: dict[str, str] = field(default_factory=dict)
+    # Assignment target type for turbofish inference (e.g., "String" for get_one::<String>)
+    assignment_target_type: str | None = None
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -223,10 +226,15 @@ class RustEmitter:
             body_lines.append("")
 
         # Emit top-level statements in main() if any
-        if module.statements:
+        # Filter out `if __name__ == "__main__"` patterns as they don't apply in Rust
+        filtered_statements = [
+            stmt for stmt in module.statements
+            if not self._is_name_main_check(stmt)
+        ]
+        if filtered_statements:
             body_lines.append("fn main() {")
             self.ctx.indent = 1
-            for stmt in module.statements:
+            for stmt in filtered_statements:
                 body_lines.append(self.emit_statement(stmt))
             self.ctx.indent = 0
             body_lines.append("}")
@@ -239,6 +247,25 @@ class RustEmitter:
             header_lines.append("")
 
         return "\n".join(header_lines + body_lines)
+
+    def _is_name_main_check(self, stmt: IRStatement) -> bool:
+        """Check if statement is `if __name__ == "__main__": ...`.
+
+        This Python idiom doesn't apply in Rust, so we skip it.
+        """
+        if isinstance(stmt, IRIf):
+            cond = stmt.condition
+            # Check for __name__ == "__main__"
+            if isinstance(cond, IRBinaryOp) and cond.op == BinaryOp.EQ:
+                left, right = cond.left, cond.right
+                # Check both orders: __name__ == "__main__" or "__main__" == __name__
+                if isinstance(left, IRName) and left.name == "__name__":
+                    if isinstance(right, IRLiteral) and right.value == "__main__":
+                        return True
+                if isinstance(right, IRName) and right.name == "__name__":
+                    if isinstance(left, IRLiteral) and left.value == "__main__":
+                        return True
+        return False
 
     def _process_imports(self, imports: list[IRImport]) -> None:
         """Process Python imports and categorize them."""
@@ -304,6 +331,11 @@ class RustEmitter:
         for crate_name in stub_crates:
             # For anyhow, we need anyhow::anyhow! macro, so just use the crate
             imports.add(f"use {crate_name};")
+
+        # Filter out redundant imports for stub crates
+        # If we have "use clap;", we don't need "use clap::Arg;" since we use full paths
+        for crate_name in stub_crates:
+            imports = {imp for imp in imports if not imp.startswith(f"use {crate_name}::")}
 
         # Add local module imports
         # Use crate_name for main.rs (binary imports from library), "crate" for lib code
@@ -718,7 +750,18 @@ class RustEmitter:
         indent = self.ctx.indent_str()
 
         if stmt.is_declaration:
+            # Set target type for turbofish inference before emitting value
+            if stmt.type_annotation:
+                rust_type = self.resolver.resolve(stmt.type_annotation)
+                self.ctx.assignment_target_type = rust_type.to_rust()
+            else:
+                self.ctx.assignment_target_type = None
+
             value = self.emit_expression(stmt.value)
+
+            # Clear target type after emission
+            self.ctx.assignment_target_type = None
+
             # Only add mut if explicitly marked mutable (reassigned later)
             mut = "mut " if stmt.is_mutable else ""
             if stmt.type_annotation:
@@ -1052,6 +1095,13 @@ class RustEmitter:
                         for imp in mapping.rust_imports:
                             self.ctx.stdlib_imports.add(imp)
                         return rust_code
+
+                # Check for stub type enum variant access (e.g., ArgAction.SetTrue)
+                # Convert Python enum syntax to Rust path syntax: Type.Variant -> crate::Type::Variant
+                if module in self.ctx.stub_imports:
+                    crate_name = self.ctx.stub_imports[module]
+                    return f"{crate_name}::{module}::{expr.attr}"
+
             obj = self.emit_expression(expr.obj)
             return f"{obj}.{expr.attr}"
 
@@ -1360,11 +1410,140 @@ class RustEmitter:
 
         return call_expr
 
+    def _infer_stub_type(self, expr: "IRExpression") -> str | None:
+        """Infer the stub type of an expression for method chaining.
+
+        For expressions like Arg.new(...).short(...), we need to know that
+        Arg.new(...) returns an Arg type so we can look up the short() method.
+
+        Returns the type name (e.g., "Arg") if it can be inferred, None otherwise.
+        """
+        # Simple variable with known type
+        if isinstance(expr, IRName):
+            if expr.name in self.ctx.type_env:
+                var_type = self.ctx.type_env[expr.name]
+                return var_type.split(".")[-1]
+            # Check if this is a stub type name (e.g., Arg, Command)
+            if expr.name in self.ctx.stub_imports:
+                return expr.name
+            return None
+
+        # Method call on a stub type: Type.method(...) -> Type (if returns_self)
+        # or method call chain: expr.method(...) where expr is a stub type
+        if isinstance(expr, IRMethodCall):
+            # Check if this is Type.new(...) pattern - static method on stub type
+            if isinstance(expr.obj, IRName) and expr.obj.name in self.ctx.stub_imports:
+                # Type.method() where Type is a stub type - returns the Type
+                return expr.obj.name
+
+            # Otherwise, try to infer the type of the receiver for chained calls
+            receiver_type = self._infer_stub_type(expr.obj)
+            if receiver_type:
+                # Check if this method returns_self (builder pattern)
+                stub_mapping = get_stub_method_mapping(receiver_type, expr.method)
+                if stub_mapping:
+                    # For now, assume builder methods return self
+                    # The mapping has returns_self but we're not using it yet
+                    return receiver_type
+            return None
+
+        # Call on a stub type constructor: Type.new(...) -> Type
+        if isinstance(expr, IRCall):
+            if isinstance(expr.func, IRAttribute):
+                # Type.method() pattern
+                if isinstance(expr.func.obj, IRName):
+                    type_name = expr.func.obj.name
+                    # Check if this is a constructor-like static method (new, from, etc.)
+                    if type_name in self.ctx.stub_imports:
+                        # It's a known stub type, the result type is the type itself
+                        return type_name
+            return None
+
+        return None
+
+    def _inject_turbofish(self, rust_code: str, method: str) -> str:
+        """Inject turbofish type parameter for generic methods.
+
+        For methods like get_one that need ::<Type>, inject based on
+        the assignment target type context.
+        """
+        # Methods that need turbofish type inference
+        turbofish_methods = {"get_one", "try_get_one", "get_many", "try_get_many"}
+
+        if method not in turbofish_methods:
+            return rust_code
+
+        target_type = self.ctx.assignment_target_type
+        if not target_type:
+            # Default to String for get_one/get_many when no type annotation
+            # This is the most common case for clap argument retrieval
+            target_type = "String"
+
+        # Insert turbofish after the method name
+        # Pattern: .get_one( -> .get_one::<Type>(
+        old_pattern = f".{method}("
+        new_pattern = f".{method}::<{target_type}>("
+        return rust_code.replace(old_pattern, new_pattern)
+
+    def _transform_arg_for_type(self, arg: str, rust_type: str) -> str:
+        """Transform an argument based on expected Rust type.
+
+        Handles char and &str types that don't accept String.
+        """
+        # Handle char type: "x".to_string() -> 'x'
+        # Also handles wrapped types like implIntoResettable<char>
+        if rust_type == "char" or "char>" in rust_type or "<char" in rust_type:
+            # Extract the character from "x".to_string()
+            # Pattern: "x".to_string() -> suffix is ".to_string() (13 chars)
+            if arg.startswith('"') and arg.endswith('.to_string()'):
+                char_val = arg[1:-13]  # Remove " prefix and ".to_string() suffix
+                if len(char_val) == 1:
+                    return f"'{char_val}'"
+            # Already a char literal
+            if arg.startswith("'") and arg.endswith("'"):
+                return arg
+
+        # Handle &str type: "x".to_string() -> "x"
+        # Also handles wrapped types containing &str
+        if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type:
+            if arg.endswith('.to_string()'):
+                return arg[:-12]  # Remove .to_string()
+
+        # Handle impl Into<Str> which accepts &str but NOT String
+        # clap's Str type only implements From<&str>, not From<String>
+        if "Str>" in rust_type or rust_type.endswith("Str"):
+            if arg.endswith('.to_string()'):
+                return arg[:-12]  # Remove .to_string()
+
+        # Handle impl Into<Id> which accepts &str but NOT String
+        # clap's Id type only implements From<&str>, not From<String>
+        if "Id>" in rust_type or rust_type.endswith("Id"):
+            if arg.endswith('.to_string()'):
+                return arg[:-12]  # Remove .to_string()
+            # Handle vec of strings for args([...]) pattern
+            if arg.startswith("vec!["):
+                # Strip .to_string() from each element in the vec
+                import re
+                return re.sub(r'"([^"]*)"\.to_string\(\)', r'"\1"', arg)
+
+        return arg
+
     def _apply_stdlib_mapping(self, mapping: "StdlibMapping", args: list[str]) -> str:
         """Apply a stdlib mapping to generate Rust code."""
         from spicycrab.codegen.stdlib import StdlibMapping
 
         rust_code = mapping.rust_code
+
+        # Transform args based on param_types if available
+        # Use getattr since not all mapping types have param_types
+        param_types = getattr(mapping, 'param_types', None)
+        if param_types:
+            transformed_args = []
+            for i, arg in enumerate(args):
+                if i < len(param_types):
+                    arg = self._transform_arg_for_type(arg, param_types[i])
+                transformed_args.append(arg)
+            args = transformed_args
 
         # Handle different placeholder formats
         if "{args}" in rust_code:
@@ -1546,6 +1725,61 @@ class RustEmitter:
                         self.ctx.stdlib_imports.add(imp)
                     return rust_code
 
+                # Check for stub method mapping (e.g., Command.about() for clap)
+                stub_mapping = get_stub_method_mapping(class_name, method)
+                if stub_mapping:
+                    obj = self.emit_expression(expr.obj)
+                    # Transform args based on param_types
+                    if stub_mapping.param_types:
+                        transformed_args = []
+                        for i, arg in enumerate(args):
+                            if i < len(stub_mapping.param_types):
+                                arg = self._transform_arg_for_type(arg, stub_mapping.param_types[i])
+                            transformed_args.append(arg)
+                        args = transformed_args
+                    rust_code = stub_mapping.rust_code.replace("{self}", obj)
+                    # Inject turbofish for generic methods like get_one
+                    rust_code = self._inject_turbofish(rust_code, method)
+                    # Replace argument placeholders if present
+                    if "{args}" in rust_code:
+                        rust_code = rust_code.replace("{args}", ", ".join(args))
+                    elif args:
+                        # Handle indexed args {arg0}, {arg1}, etc.
+                        for i, arg in enumerate(args):
+                            rust_code = rust_code.replace(f"{{arg{i}}}", arg)
+                    for imp in stub_mapping.rust_imports:
+                        self.ctx.stdlib_imports.add(imp)
+                    return rust_code
+
+        # Check for chained stub method calls (e.g., Arg.new(...).short(...))
+        # Try to infer the type from the expression chain
+        inferred_type = self._infer_stub_type(expr.obj)
+        if inferred_type:
+            stub_mapping = get_stub_method_mapping(inferred_type, method)
+            if stub_mapping:
+                obj = self.emit_expression(expr.obj)
+                # Transform args based on param_types
+                if stub_mapping.param_types:
+                    transformed_args = []
+                    for i, arg in enumerate(args):
+                        if i < len(stub_mapping.param_types):
+                            arg = self._transform_arg_for_type(arg, stub_mapping.param_types[i])
+                        transformed_args.append(arg)
+                    args = transformed_args
+                rust_code = stub_mapping.rust_code.replace("{self}", obj)
+                # Inject turbofish for generic methods like get_one
+                rust_code = self._inject_turbofish(rust_code, method)
+                # Replace argument placeholders if present
+                if "{args}" in rust_code:
+                    rust_code = rust_code.replace("{args}", ", ".join(args))
+                elif args:
+                    # Handle indexed args {arg0}, {arg1}, etc.
+                    for i, arg in enumerate(args):
+                        rust_code = rust_code.replace(f"{{arg{i}}}", arg)
+                for imp in stub_mapping.rust_imports:
+                    self.ctx.stdlib_imports.add(imp)
+                return rust_code
+
         # Check for nested stdlib calls (e.g., os.path.exists())
         if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
             module = f"{expr.obj.obj.name}.{expr.obj.attr}"
@@ -1599,6 +1833,14 @@ class RustEmitter:
                         return f"{args[0]}.{method}({args[1]})"
 
         obj = self.emit_expression(expr.obj)
+
+        # Handle .clone() -> .to_string() when target type is String
+        # This handles &str -> String conversion which .clone() doesn't do
+        # Methods like subcommand_name() return &str, so .clone() gives &str not String
+        if method == "clone":
+            target_type = self.ctx.assignment_target_type
+            if target_type and target_type == "String":
+                return f"{obj}.to_string()"
 
         # String methods
         if method == "append":

@@ -118,6 +118,7 @@ def _parse_config(config: dict[str, Any]) -> StubPackage:
             rust_code=func["rust_code"],
             rust_imports=func.get("rust_imports", []),
             needs_result=func.get("needs_result", False),
+            param_types=func.get("param_types"),
         )
         function_mappings[func["python"]] = mapping
 
@@ -129,6 +130,7 @@ def _parse_config(config: dict[str, Any]) -> StubPackage:
             rust_code=method["rust_code"],
             rust_imports=method.get("rust_imports", []),
             needs_result=method.get("needs_result", False),
+            param_types=method.get("param_types"),
         )
         method_mappings[method["python"]] = mapping
 

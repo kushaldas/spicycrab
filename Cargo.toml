@@ -1,0 +1,16 @@
+[package]
+name = "spicycrab"
+version = "0.1.0"
+edition = "2021"
+description = "A Python to Rust transpiler for type-annotated Python code"
+
+[lib]
+name = "_parser"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27.2", features = ["extension-module"] }
+syn = { version = "2.0", features = ["full", "parsing", "visit"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+walkdir = "2.5"

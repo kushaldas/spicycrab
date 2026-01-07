@@ -18,6 +18,7 @@ class StdlibMapping:
     rust_code: str  # Template with {args} placeholder
     rust_imports: list[str]
     needs_result: bool = False  # Whether it returns Result
+    param_types: list[str] | None = None  # Rust types for params (for char/&str handling)
 
 
 # os module mappings
