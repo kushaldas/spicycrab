@@ -14,21 +14,28 @@ Install from PyPI
 
    python3 -m pip install spicycrab
 
-Install from Source
--------------------
+Development Setup
+-----------------
+
+For contributing or development, use ``uv`` to set up the environment:
 
 .. code-block:: bash
 
-   git clone https://github.com/example/spicycrab.git
+   # Clone the repository
+   git clone https://github.com/kushaldas/spicycrab.git
    cd spicycrab
-   python3 -m pip install -e .
 
-Install with Development Dependencies
--------------------------------------
+   # Create virtual environment
+   uv venv
+   source .venv/bin/activate
 
-.. code-block:: bash
+   # Install with all development and documentation dependencies
+   uv pip install -e ".[dev,docs]"
 
-   python3 -m pip install -e ".[dev]"
+This installs:
+
+- **dev**: pytest, pytest-cov, mypy, ruff (for testing and linting)
+- **docs**: sphinx, sphinx-rtd-theme, myst-parser (for building documentation)
 
 Verify Installation
 -------------------

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "spicycrab"
-version = "0.1.0"
+version = "0.0.1"
 description = "A Python to Rust transpiler for type-annotated Python code"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -48,7 +48,7 @@ crabpy = "spicycrab.cli:main"
 cookcrab = "spicycrab.cookcrab.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/example/spicycrab"
+Homepage = "https://github.com/kushaldas/spicycrab"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -61,12 +61,6 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

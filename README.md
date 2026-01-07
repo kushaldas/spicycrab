@@ -13,11 +13,25 @@ A Python to Rust transpiler for type-annotated Python code.
 
 ```bash
 python3 -m pip install spicycrab
+```
 
-# Or from source
+## Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/kushaldas/spicycrab.git
+cd spicycrab
+
+# Create virtual environment
 uv venv
 source .venv/bin/activate
-uv pip install -e ".[dev]"
+
+# Install with all development and documentation dependencies
+uv pip install -e ".[dev,docs]"
+
+# Verify installation
+crabpy --version
+cookcrab --version
 ```
 
 ## Quick Start
