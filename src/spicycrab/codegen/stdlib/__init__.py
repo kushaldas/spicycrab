@@ -14,6 +14,10 @@ from spicycrab.codegen.stdlib.json_map import (
     JSON_MAPPINGS,
     get_json_mapping,
 )
+from spicycrab.codegen.stdlib.logging_map import (
+    LOGGING_MAPPINGS,
+    get_logging_mapping,
+)
 from spicycrab.codegen.stdlib.os_map import (
     OS_MAPPINGS,
     PATHLIB_MAPPINGS,
@@ -25,6 +29,31 @@ from spicycrab.codegen.stdlib.os_map import (
 from spicycrab.codegen.stdlib.random_map import (
     RANDOM_MAPPINGS,
     get_random_mapping,
+)
+from spicycrab.codegen.stdlib.rust_std_map import (
+    FS_MAPPINGS,
+    FS_METHOD_MAPPINGS,
+    IO_MAPPINGS,
+    IO_METHOD_MAPPINGS,
+    PATH_MAPPINGS,
+    PATH_METHOD_MAPPINGS,
+    RUST_STD_TYPE_MAPPINGS,
+    RUST_TIME_MAPPINGS,
+    RUST_TIME_METHOD_MAPPINGS,
+    THREAD_MAPPINGS,
+    THREAD_METHOD_MAPPINGS,
+    get_fs_mapping,
+    get_fs_method_mapping,
+    get_io_mapping,
+    get_io_method_mapping,
+    get_path_mapping,
+    get_path_method_mapping,
+    get_rust_std_type,
+    get_rust_time_mapping,
+    get_rust_time_method_mapping,
+    get_thread_mapping,
+    get_thread_method_mapping,
+    is_rust_std_type,
 )
 from spicycrab.codegen.stdlib.shutil_map import (
     SHUTIL_MAPPINGS,
@@ -135,6 +164,9 @@ __all__ = [
     # Random mappings
     "RANDOM_MAPPINGS",
     "get_random_mapping",
+    # Logging mappings
+    "LOGGING_MAPPINGS",
+    "get_logging_mapping",
     # Collections mappings
     "COLLECTIONS_MAPPINGS",
     "DEQUE_METHOD_MAPPINGS",
@@ -156,6 +188,30 @@ __all__ = [
     "TIMEDELTA_METHOD_MAPPINGS",
     "get_datetime_mapping",
     "get_datetime_method_mapping",
+    # Rust std module mappings
+    "FS_MAPPINGS",
+    "FS_METHOD_MAPPINGS",
+    "IO_MAPPINGS",
+    "IO_METHOD_MAPPINGS",
+    "PATH_MAPPINGS",
+    "PATH_METHOD_MAPPINGS",
+    "THREAD_MAPPINGS",
+    "THREAD_METHOD_MAPPINGS",
+    "RUST_TIME_MAPPINGS",
+    "RUST_TIME_METHOD_MAPPINGS",
+    "RUST_STD_TYPE_MAPPINGS",
+    "get_fs_mapping",
+    "get_fs_method_mapping",
+    "get_io_mapping",
+    "get_io_method_mapping",
+    "get_path_mapping",
+    "get_path_method_mapping",
+    "get_thread_mapping",
+    "get_thread_method_mapping",
+    "get_rust_time_mapping",
+    "get_rust_time_method_mapping",
+    "get_rust_std_type",
+    "is_rust_std_type",
     # Stub discovery (external crate packages)
     "get_stub_mapping",
     "get_stub_method_mapping",
@@ -195,10 +251,23 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return RANDOM_MAPPINGS[key]
     if key in COLLECTIONS_MAPPINGS:
         return COLLECTIONS_MAPPINGS[key]
+    if key in LOGGING_MAPPINGS:
+        return LOGGING_MAPPINGS[key]
     if key in TIME_MAPPINGS:
         return TIME_MAPPINGS[key]
     if key in ALL_DATETIME_MAPPINGS:
         return ALL_DATETIME_MAPPINGS[key]
+    # Rust std module mappings
+    if key in FS_MAPPINGS:
+        return FS_MAPPINGS[key]
+    if key in IO_MAPPINGS:
+        return IO_MAPPINGS[key]
+    if key in PATH_MAPPINGS:
+        return PATH_MAPPINGS[key]
+    if key in THREAD_MAPPINGS:
+        return THREAD_MAPPINGS[key]
+    if key in RUST_TIME_MAPPINGS:
+        return RUST_TIME_MAPPINGS[key]
 
     # Fallback to installed stub packages
     return get_stub_mapping(key)

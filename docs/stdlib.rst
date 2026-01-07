@@ -1105,6 +1105,427 @@ seeded. The transpiler emits a comment noting this limitation:
 For reproducible random sequences in Rust, you would need to use ``StdRng`` instead
 of ``thread_rng()``, which requires manual code modification after transpilation.
 
+logging
+-------
+
+The ``logging`` module is mapped to Rust's `log <https://docs.rs/log>`_ crate
+with `env_logger <https://docs.rs/env_logger>`_ for initialization.
+
+.. note::
+
+   In Rust, logging levels are controlled via the ``RUST_LOG`` environment variable.
+   For example, ``RUST_LOG=debug ./my_program`` enables debug logging.
+
+Basic Logging
+^^^^^^^^^^^^^
+
+The logging functions map directly to Rust's ``log`` macros:
+
+.. code-block:: python
+
+   import logging
+
+   def example() -> None:
+       logging.debug("Debug message")
+       logging.info("Info message")
+       logging.warning("Warning message")
+       logging.error("Error message")
+       logging.critical("Critical message")
+
+.. code-block:: rust
+
+   pub fn example() {
+       log::debug!("{}", "Debug message");
+       log::info!("{}", "Info message");
+       log::warn!("{}", "Warning message");
+       log::error!("{}", "Error message");
+       log::error!("{}", "Critical message");  // No critical level in Rust
+   }
+
+Logger Initialization
+^^^^^^^^^^^^^^^^^^^^^
+
+Use ``logging.basicConfig()`` to initialize the logger:
+
+.. code-block:: python
+
+   import logging
+
+   def main() -> None:
+       logging.basicConfig()
+       logging.info("Application started")
+
+.. code-block:: rust
+
+   pub fn main() {
+       env_logger::init();
+       log::info!("{}", "Application started");
+   }
+
+.. warning::
+
+   Unlike Python's ``basicConfig()``, Rust's ``env_logger::init()`` can only be
+   called once. Multiple calls will panic. Ensure initialization happens at program
+   start, typically in ``main()``.
+
+Format String Logging
+^^^^^^^^^^^^^^^^^^^^^
+
+Python format strings are converted to Rust format strings:
+
+.. code-block:: python
+
+   import logging
+
+   def log_user(name: str, age: int) -> None:
+       logging.info(f"User {name} is {age} years old")
+
+.. code-block:: rust
+
+   pub fn log_user(name: String, age: i64) {
+       log::info!("{}", format!("User {} is {} years old", name, age));
+   }
+
+Logging Levels
+^^^^^^^^^^^^^^
+
+Python logging levels map to Rust's ``log::LevelFilter``:
+
++------------------------+-----------------------------+
+| Python                 | Rust                        |
++========================+=============================+
+| ``logging.DEBUG``      | ``log::LevelFilter::Debug`` |
++------------------------+-----------------------------+
+| ``logging.INFO``       | ``log::LevelFilter::Info``  |
++------------------------+-----------------------------+
+| ``logging.WARNING``    | ``log::LevelFilter::Warn``  |
++------------------------+-----------------------------+
+| ``logging.ERROR``      | ``log::LevelFilter::Error`` |
++------------------------+-----------------------------+
+| ``logging.CRITICAL``   | ``log::LevelFilter::Error`` |
++------------------------+-----------------------------+
+
+.. note::
+
+   Rust's ``log`` crate does not have a ``CRITICAL`` level. Both ``logging.critical()``
+   and ``logging.CRITICAL`` map to ``log::error!`` / ``log::LevelFilter::Error``.
+
+Supported logging functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++----------------------------+-------------------------------+
+| Python                     | Rust                          |
++============================+===============================+
+| ``logging.debug(msg)``     | ``log::debug!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.info(msg)``      | ``log::info!("{}", msg)``     |
++----------------------------+-------------------------------+
+| ``logging.warning(msg)``   | ``log::warn!("{}", msg)``     |
++----------------------------+-------------------------------+
+| ``logging.warn(msg)``      | ``log::warn!("{}", msg)``     |
++----------------------------+-------------------------------+
+| ``logging.error(msg)``     | ``log::error!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.critical(msg)``  | ``log::error!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.exception(msg)`` | ``log::error!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.basicConfig()``  | ``env_logger::init()``        |
++----------------------------+-------------------------------+
+
+Known Limitations
+^^^^^^^^^^^^^^^^^
+
+**Logger Configuration**
+
+Python's ``logging`` module provides extensive configuration options through
+``basicConfig()`` (format, level, handlers, etc.). In Rust, ``env_logger``
+configuration is done via environment variables or builder pattern. The transpiler
+uses simple ``env_logger::init()`` which respects the ``RUST_LOG`` environment
+variable.
+
+**Named Loggers**
+
+Python supports named loggers with ``logging.getLogger("name")``. Rust's ``log``
+crate uses module paths as logger names automatically. Named logger creation is
+not currently transpiled.
+
+**Custom Handlers**
+
+Python's ``logging.FileHandler``, ``StreamHandler``, etc. are not supported.
+In Rust, these would require using ``env_logger``'s builder pattern or other
+logging backends like ``fern`` or ``tracing``.
+
+Rust Standard Library (rust_std)
+---------------------------------
+
+spicycrab provides direct mappings to Rust's standard library types through
+the ``rust_std`` namespace. These are useful when you need direct access to
+Rust-specific functionality that doesn't have a Python equivalent.
+
+.. note::
+
+   The ``rust_std`` module names are designed to avoid conflicts with Python's
+   stdlib modules. For example, ``rust_std.time`` maps to Rust's ``std::time``
+   (Duration, Instant), while Python's ``time`` module maps to ``chrono``.
+
+rust_std.thread
+^^^^^^^^^^^^^^^
+
+Threading primitives from Rust's ``std::thread`` module.
+
+**Spawning threads:**
+
+.. code-block:: python
+
+   from rust_std.thread import spawn, sleep
+   from rust_std.time import Duration
+
+   def worker() -> None:
+       print("Worker thread running")
+
+   def main() -> None:
+       handle = spawn(worker)
+       handle.join()
+
+.. code-block:: rust
+
+   pub fn worker() {
+       println!("Worker thread running");
+   }
+
+   pub fn main() {
+       let handle = std::thread::spawn(worker);
+       handle.join().unwrap();
+   }
+
+**Thread sleep:**
+
+.. code-block:: python
+
+   from rust_std.thread import sleep
+   from rust_std.time import Duration
+
+   def wait_a_bit() -> None:
+       sleep(Duration.from_secs(2))
+
+.. code-block:: rust
+
+   pub fn wait_a_bit() {
+       std::thread::sleep(std::time::Duration::from_secs(2));
+   }
+
+**Thread utilities:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``rust_std.thread.spawn(f)``         | ``std::thread::spawn(f)``                     |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.sleep(d)``         | ``std::thread::sleep(d)``                     |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.current()``        | ``std::thread::current()``                    |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.yield_now()``      | ``std::thread::yield_now()``                  |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.park()``           | ``std::thread::park()``                       |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.Builder()``        | ``std::thread::Builder::new()``               |
++--------------------------------------+-----------------------------------------------+
+| ``handle.join()``                    | ``handle.join().unwrap()``                    |
++--------------------------------------+-----------------------------------------------+
+| ``handle.is_finished()``             | ``handle.is_finished()``                      |
++--------------------------------------+-----------------------------------------------+
+
+rust_std.time
+^^^^^^^^^^^^^
+
+Time and duration types from Rust's ``std::time`` module.
+
+**Duration creation:**
+
+.. code-block:: python
+
+   from rust_std.time import Duration
+
+   def get_durations() -> None:
+       one_second = Duration.from_secs(1)
+       half_second = Duration.from_millis(500)
+       one_micro = Duration.from_micros(1)
+       one_nano = Duration.from_nanos(1)
+
+.. code-block:: rust
+
+   pub fn get_durations() {
+       let one_second = std::time::Duration::from_secs(1);
+       let half_second = std::time::Duration::from_millis(500);
+       let one_micro = std::time::Duration::from_micros(1);
+       let one_nano = std::time::Duration::from_nanos(1);
+   }
+
+**Measuring elapsed time with Instant:**
+
+.. code-block:: python
+
+   from rust_std.time import Instant
+
+   def measure_time() -> None:
+       start = Instant.now()
+       # ... do some work ...
+       elapsed = start.elapsed()
+       print(f"Elapsed: {elapsed.as_millis()} ms")
+
+.. code-block:: rust
+
+   pub fn measure_time() {
+       let start = std::time::Instant::now();
+       // ... do some work ...
+       let elapsed = start.elapsed();
+       println!("Elapsed: {} ms", elapsed.as_millis());
+   }
+
+**System time and UNIX epoch:**
+
+.. code-block:: python
+
+   from rust_std.time import SystemTime, UNIX_EPOCH
+
+   def get_timestamp() -> int:
+       now = SystemTime.now()
+       since_epoch = now.duration_since(UNIX_EPOCH)
+       return since_epoch.as_secs()
+
+.. code-block:: rust
+
+   pub fn get_timestamp() -> u64 {
+       let now = std::time::SystemTime::now();
+       let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap();
+       since_epoch.as_secs()
+   }
+
+**Duration methods:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``Duration.from_secs(n)``            | ``std::time::Duration::from_secs(n)``         |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.from_millis(n)``          | ``std::time::Duration::from_millis(n)``       |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.from_micros(n)``          | ``std::time::Duration::from_micros(n)``       |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.from_nanos(n)``           | ``std::time::Duration::from_nanos(n)``        |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.ZERO``                    | ``std::time::Duration::ZERO``                 |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.MAX``                     | ``std::time::Duration::MAX``                  |
++--------------------------------------+-----------------------------------------------+
+| ``d.as_secs()``                      | ``d.as_secs()``                               |
++--------------------------------------+-----------------------------------------------+
+| ``d.as_millis()``                    | ``d.as_millis()``                             |
++--------------------------------------+-----------------------------------------------+
+| ``d.as_nanos()``                     | ``d.as_nanos()``                              |
++--------------------------------------+-----------------------------------------------+
+| ``d.is_zero()``                      | ``d.is_zero()``                               |
++--------------------------------------+-----------------------------------------------+
+
+**Instant methods:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``Instant.now()``                    | ``std::time::Instant::now()``                 |
++--------------------------------------+-----------------------------------------------+
+| ``i.elapsed()``                      | ``i.elapsed()``                               |
++--------------------------------------+-----------------------------------------------+
+| ``i.duration_since(earlier)``        | ``i.duration_since(earlier)``                 |
++--------------------------------------+-----------------------------------------------+
+
+**SystemTime methods:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``SystemTime.now()``                 | ``std::time::SystemTime::now()``              |
++--------------------------------------+-----------------------------------------------+
+| ``UNIX_EPOCH``                       | ``std::time::UNIX_EPOCH``                     |
++--------------------------------------+-----------------------------------------------+
+| ``s.elapsed()``                      | ``s.elapsed()?``                              |
++--------------------------------------+-----------------------------------------------+
+| ``s.duration_since(earlier)``        | ``s.duration_since(earlier)?``                |
++--------------------------------------+-----------------------------------------------+
+
+rust_std.fs
+^^^^^^^^^^^
+
+File system operations from Rust's ``std::fs`` module.
+
+**File operations:**
+
+.. code-block:: python
+
+   from rust_std.fs import File, read_to_string, write
+
+   def read_file(path: str) -> str:
+       return read_to_string(path)
+
+   def write_file(path: str, content: str) -> None:
+       write(path, content)
+
+.. code-block:: rust
+
+   pub fn read_file(path: String) -> String {
+       std::fs::read_to_string(path).unwrap()
+   }
+
+   pub fn write_file(path: String, content: String) {
+       std::fs::write(path, content).unwrap();
+   }
+
+rust_std.io
+^^^^^^^^^^^
+
+I/O operations from Rust's ``std::io`` module.
+
+**Standard streams:**
+
+.. code-block:: python
+
+   from rust_std.io import stdin, stdout, stderr
+
+   def get_streams():
+       input_stream = stdin()
+       output_stream = stdout()
+       error_stream = stderr()
+
+.. code-block:: rust
+
+   pub fn get_streams() {
+       let input_stream = std::io::stdin();
+       let output_stream = std::io::stdout();
+       let error_stream = std::io::stderr();
+   }
+
+rust_std.path
+^^^^^^^^^^^^^
+
+Path manipulation from Rust's ``std::path`` module.
+
+**Path creation:**
+
+.. code-block:: python
+
+   from rust_std.path import Path, PathBuf
+
+   def make_path(s: str) -> PathBuf:
+       return PathBuf.from(s)
+
+.. code-block:: rust
+
+   pub fn make_path(s: String) -> PathBuf {
+       std::path::PathBuf::from(s)
+   }
+
 Generated Dependencies
 ----------------------
 
@@ -1115,8 +1536,10 @@ When using stdlib features, spicycrab adds appropriate dependencies to Cargo.tom
    [dependencies]
    serde = { version = "1.0", features = ["derive"] }
    serde_json = "1.0"
-   chrono = "0.4"  # Added when using datetime module
-   rand = "0.8"    # Added when using random module
+   chrono = "0.4"      # Added when using datetime module
+   rand = "0.8"        # Added when using random module
+   log = "0.4"         # Added when using logging module
+   env_logger = "0.11" # Added when using logging module
 
 Standard imports are also added:
 
