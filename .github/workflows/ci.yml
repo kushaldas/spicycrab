@@ -33,7 +33,8 @@ jobs:
 
       - name: Build and install
         run: |
-          maturin develop
+          maturin build --release
+          pip install target/wheels/*.whl
 
       - name: Run tests
         run: |
