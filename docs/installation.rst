@@ -12,7 +12,7 @@ Install from PyPI
 
 .. code-block:: bash
 
-   pip install spicycrab
+   python3 -m pip install spicycrab
 
 Install from Source
 -------------------
@@ -21,21 +21,27 @@ Install from Source
 
    git clone https://github.com/example/spicycrab.git
    cd spicycrab
-   pip install -e .
+   python3 -m pip install -e .
 
 Install with Development Dependencies
 -------------------------------------
 
 .. code-block:: bash
 
-   pip install -e ".[dev]"
+   python3 -m pip install -e ".[dev]"
 
 Verify Installation
 -------------------
 
+spicycrab provides two CLI tools:
+
 .. code-block:: bash
 
+   # Transpiler CLI
    crabpy --version
+
+   # Stub generator CLI
+   cookcrab --version
 
 Rust Toolchain
 --------------

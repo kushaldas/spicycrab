@@ -1,20 +1,64 @@
-# crabpy
+# spicycrab
 
 A Python to Rust transpiler for type-annotated Python code.
+
+> **Note**: spicycrab and cookcrab are under active development. APIs, CLI options, and generated code may change frequently.
+
+## Features
+
+- **crabpy** - Transpile Python code to Rust
+- **cookcrab** - Generate Python stubs from Rust crates
 
 ## Installation
 
 ```bash
+python3 -m pip install spicycrab
+
+# Or from source
 uv venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-## Usage
+## Quick Start
+
+### Transpile Python to Rust
 
 ```bash
 crabpy transpile input.py -o rust_output -n my_project
 crabpy transpile src/ -o rust_project/ -n my_project
+```
+
+### Use Rust Crates in Python
+
+```bash
+# Generate stubs for a Rust crate
+cookcrab generate clap -o /tmp/stubs
+
+# Install the stubs
+python3 -m pip install -e /tmp/stubs/clap_builder
+python3 -m pip install -e /tmp/stubs/clap
+
+# Write Python code using Rust crate types
+cat > myapp.py << 'EOF'
+from spicycrab_clap import Command, Arg, ArgMatches
+
+def main() -> None:
+    matches: ArgMatches = (
+        Command.new("myapp")
+        .arg(Arg.new("name").required(True))
+        .get_matches()
+    )
+    name: str = matches.get_one("name").unwrap().clone()
+    print(f"Hello, {name}!")
+EOF
+
+# Transpile to Rust
+crabpy transpile myapp.py -o rust_myapp -n myapp
+
+# Build and run
+cd rust_myapp && cargo build --release
+./target/release/myapp World
 ```
 
 ## Requirements
