@@ -9,19 +9,20 @@ for pattern matching support.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from spicycrab.types.result import Result
 
+# TypeVars for static method signatures (class params only work for instance methods)
 T = TypeVar("T")
 U = TypeVar("U")
 E = TypeVar("E")
 
 
-class Some(Generic[T]):
+class Some[T]:
     """Wrapper for the Some variant of Option.
 
     Used for pattern matching:
@@ -54,7 +55,7 @@ class Some(Generic[T]):
         return hash(("Some", self._value))
 
 
-class Option(Generic[T]):
+class Option[T]:
     """Rust-like Option type representing an optional value.
 
     Option[T] can be:

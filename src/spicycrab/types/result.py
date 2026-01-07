@@ -6,7 +6,7 @@ Result[T, E] can be Ok(value) or Err(error).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -15,13 +15,14 @@ if TYPE_CHECKING:
 
 from spicycrab.types.error import Error
 
+# TypeVars for static method signatures (class params only work for instance methods)
 T = TypeVar("T")
 U = TypeVar("U")
 E = TypeVar("E", bound=Error)
 F = TypeVar("F", bound=Error)
 
 
-class Ok(Generic[T]):
+class Ok[T]:
     """Wrapper for the Ok variant of Result.
 
     Used for pattern matching:
@@ -54,7 +55,7 @@ class Ok(Generic[T]):
         return hash(("Ok", self._value))
 
 
-class Err(Generic[E]):
+class Err[E: Error]:
     """Wrapper for the Err variant of Result.
 
     Used for pattern matching:
@@ -87,7 +88,7 @@ class Err(Generic[E]):
         return hash(("Err", self._error))
 
 
-class Result(Generic[T, E]):
+class Result[T, E: Error]:
     """Rust-like Result type for error handling.
 
     Result[T, E] can be:

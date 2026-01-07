@@ -7,12 +7,11 @@ transpile Python code using that crate's API to Rust.
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from importlib.metadata import distributions, entry_points
 from importlib.resources import files
 from typing import Any
-
-import tomllib
 
 from spicycrab.codegen.stdlib.types import StdlibMapping
 
