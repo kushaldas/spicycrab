@@ -9,6 +9,8 @@ Supported modules:
 - std::fs - File system operations
 - std::io - Input/Output traits and types
 - std::path - Path manipulation (extended from os_map.py)
+- std::thread - Threading primitives
+- std::time - Time and duration types
 """
 
 from __future__ import annotations
@@ -963,6 +965,479 @@ PATH_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
 }
 
 # =============================================================================
+# std::thread - Threading primitives
+# =============================================================================
+
+THREAD_MAPPINGS: dict[str, StdlibMapping] = {
+    # Thread spawning
+    "rust_std.thread.spawn": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="spawn",
+        rust_code="std::thread::spawn({args})",
+        rust_imports=["std::thread"],
+    ),
+    # Current thread operations
+    "rust_std.thread.current": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="current",
+        rust_code="std::thread::current()",
+        rust_imports=["std::thread"],
+    ),
+    "rust_std.thread.sleep": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="sleep",
+        rust_code="std::thread::sleep({args})",
+        rust_imports=["std::thread"],
+    ),
+    "rust_std.thread.yield_now": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="yield_now",
+        rust_code="std::thread::yield_now()",
+        rust_imports=["std::thread"],
+    ),
+    "rust_std.thread.park": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="park",
+        rust_code="std::thread::park()",
+        rust_imports=["std::thread"],
+    ),
+    "rust_std.thread.park_timeout": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="park_timeout",
+        rust_code="std::thread::park_timeout({args})",
+        rust_imports=["std::thread"],
+    ),
+    # Thread panicking
+    "rust_std.thread.panicking": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="panicking",
+        rust_code="std::thread::panicking()",
+        rust_imports=["std::thread"],
+    ),
+    # Available parallelism
+    "rust_std.thread.available_parallelism": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="available_parallelism",
+        rust_code="std::thread::available_parallelism()?.get()",
+        rust_imports=["std::thread"],
+        needs_result=True,
+    ),
+    # Thread builder
+    "rust_std.thread.Builder": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="Builder",
+        rust_code="std::thread::Builder::new()",
+        rust_imports=["std::thread::Builder"],
+    ),
+    "rust_std.thread.Builder.new": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="Builder.new",
+        rust_code="std::thread::Builder::new()",
+        rust_imports=["std::thread::Builder"],
+    ),
+    # Type references
+    "rust_std.thread.JoinHandle": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="JoinHandle",
+        rust_code="std::thread::JoinHandle",
+        rust_imports=["std::thread::JoinHandle"],
+    ),
+    "rust_std.thread.Thread": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="Thread",
+        rust_code="std::thread::Thread",
+        rust_imports=["std::thread::Thread"],
+    ),
+    "rust_std.thread.ThreadId": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="ThreadId",
+        rust_code="std::thread::ThreadId",
+        rust_imports=["std::thread::ThreadId"],
+    ),
+}
+
+# std::thread method mappings
+THREAD_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
+    # JoinHandle methods
+    "JoinHandle.join": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="join",
+        rust_code="{self}.join().unwrap()",
+        rust_imports=[],
+    ),
+    "JoinHandle.thread": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="thread",
+        rust_code="{self}.thread()",
+        rust_imports=[],
+    ),
+    "JoinHandle.is_finished": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="is_finished",
+        rust_code="{self}.is_finished()",
+        rust_imports=[],
+    ),
+    # Thread methods
+    "Thread.id": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="id",
+        rust_code="{self}.id()",
+        rust_imports=[],
+    ),
+    "Thread.name": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="name",
+        rust_code="{self}.name()",
+        rust_imports=[],
+    ),
+    "Thread.unpark": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="unpark",
+        rust_code="{self}.unpark()",
+        rust_imports=[],
+    ),
+    # Builder methods
+    "Builder.name": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="name",
+        rust_code="{self}.name({args})",
+        rust_imports=[],
+    ),
+    "Builder.stack_size": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="stack_size",
+        rust_code="{self}.stack_size({args})",
+        rust_imports=[],
+    ),
+    "Builder.spawn": StdlibMapping(
+        python_module="rust_std.thread",
+        python_func="spawn",
+        rust_code="{self}.spawn({args})?",
+        rust_imports=[],
+        needs_result=True,
+    ),
+}
+
+# =============================================================================
+# std::time - Time and duration types
+# =============================================================================
+
+RUST_TIME_MAPPINGS: dict[str, StdlibMapping] = {
+    # Duration constructors
+    "rust_std.time.Duration": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration",
+        rust_code="std::time::Duration",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.new": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.new",
+        rust_code="std::time::Duration::new({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.from_secs": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.from_secs",
+        rust_code="std::time::Duration::from_secs({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.from_millis": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.from_millis",
+        rust_code="std::time::Duration::from_millis({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.from_micros": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.from_micros",
+        rust_code="std::time::Duration::from_micros({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.from_nanos": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.from_nanos",
+        rust_code="std::time::Duration::from_nanos({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.from_secs_f32": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.from_secs_f32",
+        rust_code="std::time::Duration::from_secs_f32({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.from_secs_f64": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.from_secs_f64",
+        rust_code="std::time::Duration::from_secs_f64({args})",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.ZERO": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.ZERO",
+        rust_code="std::time::Duration::ZERO",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.MAX": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.MAX",
+        rust_code="std::time::Duration::MAX",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.SECOND": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.SECOND",
+        rust_code="std::time::Duration::SECOND",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.MILLISECOND": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.MILLISECOND",
+        rust_code="std::time::Duration::MILLISECOND",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.MICROSECOND": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.MICROSECOND",
+        rust_code="std::time::Duration::MICROSECOND",
+        rust_imports=["std::time::Duration"],
+    ),
+    "rust_std.time.Duration.NANOSECOND": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Duration.NANOSECOND",
+        rust_code="std::time::Duration::NANOSECOND",
+        rust_imports=["std::time::Duration"],
+    ),
+    # Instant constructors
+    "rust_std.time.Instant": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Instant",
+        rust_code="std::time::Instant",
+        rust_imports=["std::time::Instant"],
+    ),
+    "rust_std.time.Instant.now": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="Instant.now",
+        rust_code="std::time::Instant::now()",
+        rust_imports=["std::time::Instant"],
+    ),
+    # SystemTime constructors
+    "rust_std.time.SystemTime": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="SystemTime",
+        rust_code="std::time::SystemTime",
+        rust_imports=["std::time::SystemTime"],
+    ),
+    "rust_std.time.SystemTime.now": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="SystemTime.now",
+        rust_code="std::time::SystemTime::now()",
+        rust_imports=["std::time::SystemTime"],
+    ),
+    "rust_std.time.UNIX_EPOCH": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="UNIX_EPOCH",
+        rust_code="std::time::UNIX_EPOCH",
+        rust_imports=["std::time::UNIX_EPOCH"],
+    ),
+}
+
+# std::time method mappings
+RUST_TIME_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
+    # Duration methods
+    "Duration.as_secs": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="as_secs",
+        rust_code="{self}.as_secs()",
+        rust_imports=[],
+    ),
+    "Duration.as_millis": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="as_millis",
+        rust_code="{self}.as_millis()",
+        rust_imports=[],
+    ),
+    "Duration.as_micros": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="as_micros",
+        rust_code="{self}.as_micros()",
+        rust_imports=[],
+    ),
+    "Duration.as_nanos": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="as_nanos",
+        rust_code="{self}.as_nanos()",
+        rust_imports=[],
+    ),
+    "Duration.as_secs_f32": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="as_secs_f32",
+        rust_code="{self}.as_secs_f32()",
+        rust_imports=[],
+    ),
+    "Duration.as_secs_f64": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="as_secs_f64",
+        rust_code="{self}.as_secs_f64()",
+        rust_imports=[],
+    ),
+    "Duration.subsec_millis": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="subsec_millis",
+        rust_code="{self}.subsec_millis()",
+        rust_imports=[],
+    ),
+    "Duration.subsec_micros": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="subsec_micros",
+        rust_code="{self}.subsec_micros()",
+        rust_imports=[],
+    ),
+    "Duration.subsec_nanos": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="subsec_nanos",
+        rust_code="{self}.subsec_nanos()",
+        rust_imports=[],
+    ),
+    "Duration.is_zero": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="is_zero",
+        rust_code="{self}.is_zero()",
+        rust_imports=[],
+    ),
+    "Duration.checked_add": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_add",
+        rust_code="{self}.checked_add({args})",
+        rust_imports=[],
+    ),
+    "Duration.checked_sub": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_sub",
+        rust_code="{self}.checked_sub({args})",
+        rust_imports=[],
+    ),
+    "Duration.checked_mul": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_mul",
+        rust_code="{self}.checked_mul({args})",
+        rust_imports=[],
+    ),
+    "Duration.checked_div": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_div",
+        rust_code="{self}.checked_div({args})",
+        rust_imports=[],
+    ),
+    "Duration.saturating_add": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="saturating_add",
+        rust_code="{self}.saturating_add({args})",
+        rust_imports=[],
+    ),
+    "Duration.saturating_sub": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="saturating_sub",
+        rust_code="{self}.saturating_sub({args})",
+        rust_imports=[],
+    ),
+    "Duration.saturating_mul": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="saturating_mul",
+        rust_code="{self}.saturating_mul({args})",
+        rust_imports=[],
+    ),
+    "Duration.mul_f32": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="mul_f32",
+        rust_code="{self}.mul_f32({args})",
+        rust_imports=[],
+    ),
+    "Duration.mul_f64": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="mul_f64",
+        rust_code="{self}.mul_f64({args})",
+        rust_imports=[],
+    ),
+    "Duration.div_f32": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="div_f32",
+        rust_code="{self}.div_f32({args})",
+        rust_imports=[],
+    ),
+    "Duration.div_f64": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="div_f64",
+        rust_code="{self}.div_f64({args})",
+        rust_imports=[],
+    ),
+    # Instant methods
+    "Instant.elapsed": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="elapsed",
+        rust_code="{self}.elapsed()",
+        rust_imports=[],
+    ),
+    "Instant.duration_since": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="duration_since",
+        rust_code="{self}.duration_since({args})",
+        rust_imports=[],
+    ),
+    "Instant.checked_duration_since": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_duration_since",
+        rust_code="{self}.checked_duration_since({args})",
+        rust_imports=[],
+    ),
+    "Instant.saturating_duration_since": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="saturating_duration_since",
+        rust_code="{self}.saturating_duration_since({args})",
+        rust_imports=[],
+    ),
+    "Instant.checked_add": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_add",
+        rust_code="{self}.checked_add({args})",
+        rust_imports=[],
+    ),
+    "Instant.checked_sub": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_sub",
+        rust_code="{self}.checked_sub({args})",
+        rust_imports=[],
+    ),
+    # SystemTime methods
+    "SystemTime.elapsed": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="elapsed",
+        rust_code="{self}.elapsed()?",
+        rust_imports=[],
+        needs_result=True,
+    ),
+    "SystemTime.duration_since": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="duration_since",
+        rust_code="{self}.duration_since({args})?",
+        rust_imports=[],
+        needs_result=True,
+    ),
+    "SystemTime.checked_add": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_add",
+        rust_code="{self}.checked_add({args})",
+        rust_imports=[],
+    ),
+    "SystemTime.checked_sub": StdlibMapping(
+        python_module="rust_std.time",
+        python_func="checked_sub",
+        rust_code="{self}.checked_sub({args})",
+        rust_imports=[],
+    ),
+}
+
+# =============================================================================
 # Type mappings for Rust std types (used by cookcrab stub generator)
 # =============================================================================
 
@@ -1018,6 +1493,28 @@ RUST_STD_TYPE_MAPPINGS: dict[str, str] = {
     "std::path::Display": "PathDisplay",
     "path::StripPrefixError": "StripPrefixError",
     "std::path::StripPrefixError": "StripPrefixError",
+    # std::thread types
+    "thread::JoinHandle": "JoinHandle",
+    "std::thread::JoinHandle": "JoinHandle",
+    "thread::Thread": "Thread",
+    "std::thread::Thread": "Thread",
+    "thread::ThreadId": "ThreadId",
+    "std::thread::ThreadId": "ThreadId",
+    "thread::Builder": "Builder",
+    "std::thread::Builder": "Builder",
+    "thread::Scope": "Scope",
+    "std::thread::Scope": "Scope",
+    "thread::ScopedJoinHandle": "ScopedJoinHandle",
+    "std::thread::ScopedJoinHandle": "ScopedJoinHandle",
+    # std::time types
+    "time::Duration": "Duration",
+    "std::time::Duration": "Duration",
+    "time::Instant": "Instant",
+    "std::time::Instant": "Instant",
+    "time::SystemTime": "SystemTime",
+    "std::time::SystemTime": "SystemTime",
+    "time::SystemTimeError": "SystemTimeError",
+    "std::time::SystemTimeError": "SystemTimeError",
 }
 
 
@@ -1052,6 +1549,28 @@ def get_path_method_mapping(type_name: str, method_name: str) -> StdlibMapping |
     """Get mapping for a std::path method."""
     key = f"{type_name}.{method_name}"
     return PATH_METHOD_MAPPINGS.get(key)
+
+
+def get_thread_mapping(key: str) -> StdlibMapping | None:
+    """Get mapping for a std::thread function."""
+    return THREAD_MAPPINGS.get(key)
+
+
+def get_thread_method_mapping(type_name: str, method_name: str) -> StdlibMapping | None:
+    """Get mapping for a std::thread method."""
+    key = f"{type_name}.{method_name}"
+    return THREAD_METHOD_MAPPINGS.get(key)
+
+
+def get_rust_time_mapping(key: str) -> StdlibMapping | None:
+    """Get mapping for a std::time function."""
+    return RUST_TIME_MAPPINGS.get(key)
+
+
+def get_rust_time_method_mapping(type_name: str, method_name: str) -> StdlibMapping | None:
+    """Get mapping for a std::time method."""
+    key = f"{type_name}.{method_name}"
+    return RUST_TIME_METHOD_MAPPINGS.get(key)
 
 
 def get_rust_std_type(rust_type: str) -> str | None:

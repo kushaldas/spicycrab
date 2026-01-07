@@ -37,6 +37,10 @@ from spicycrab.codegen.stdlib.rust_std_map import (
     IO_METHOD_MAPPINGS,
     PATH_MAPPINGS,
     PATH_METHOD_MAPPINGS,
+    THREAD_MAPPINGS,
+    THREAD_METHOD_MAPPINGS,
+    RUST_TIME_MAPPINGS,
+    RUST_TIME_METHOD_MAPPINGS,
     RUST_STD_TYPE_MAPPINGS,
     get_fs_mapping,
     get_fs_method_mapping,
@@ -44,6 +48,10 @@ from spicycrab.codegen.stdlib.rust_std_map import (
     get_io_method_mapping,
     get_path_mapping,
     get_path_method_mapping,
+    get_thread_mapping,
+    get_thread_method_mapping,
+    get_rust_time_mapping,
+    get_rust_time_method_mapping,
     get_rust_std_type,
     is_rust_std_type,
 )
@@ -187,6 +195,10 @@ __all__ = [
     "IO_METHOD_MAPPINGS",
     "PATH_MAPPINGS",
     "PATH_METHOD_MAPPINGS",
+    "THREAD_MAPPINGS",
+    "THREAD_METHOD_MAPPINGS",
+    "RUST_TIME_MAPPINGS",
+    "RUST_TIME_METHOD_MAPPINGS",
     "RUST_STD_TYPE_MAPPINGS",
     "get_fs_mapping",
     "get_fs_method_mapping",
@@ -194,6 +206,10 @@ __all__ = [
     "get_io_method_mapping",
     "get_path_mapping",
     "get_path_method_mapping",
+    "get_thread_mapping",
+    "get_thread_method_mapping",
+    "get_rust_time_mapping",
+    "get_rust_time_method_mapping",
     "get_rust_std_type",
     "is_rust_std_type",
     # Stub discovery (external crate packages)
@@ -248,6 +264,10 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return IO_MAPPINGS[key]
     if key in PATH_MAPPINGS:
         return PATH_MAPPINGS[key]
+    if key in THREAD_MAPPINGS:
+        return THREAD_MAPPINGS[key]
+    if key in RUST_TIME_MAPPINGS:
+        return RUST_TIME_MAPPINGS[key]
 
     # Fallback to installed stub packages
     return get_stub_mapping(key)

@@ -16,6 +16,10 @@ from spicycrab.codegen.stdlib import (
     get_io_method_mapping,
     get_path_mapping,
     get_path_method_mapping,
+    get_thread_mapping,
+    get_thread_method_mapping,
+    get_rust_time_mapping,
+    get_rust_time_method_mapping,
     get_rust_std_type,
     is_rust_std_type,
     OS_MAPPINGS,
@@ -27,6 +31,10 @@ from spicycrab.codegen.stdlib import (
     FS_MAPPINGS,
     IO_MAPPINGS,
     PATH_MAPPINGS,
+    THREAD_MAPPINGS,
+    THREAD_METHOD_MAPPINGS,
+    RUST_TIME_MAPPINGS,
+    RUST_TIME_METHOD_MAPPINGS,
 )
 
 
@@ -954,3 +962,340 @@ class TestRustStdMappingCoverage:
         ]
         for func in path_funcs:
             assert func in PATH_MAPPINGS, f"Missing {func}"
+
+    def test_thread_mappings_count(self):
+        """Verify expected number of thread mappings."""
+        assert len(THREAD_MAPPINGS) >= 10
+        thread_funcs = [
+            "rust_std.thread.spawn",
+            "rust_std.thread.current",
+            "rust_std.thread.sleep",
+            "rust_std.thread.yield_now",
+            "rust_std.thread.park",
+            "rust_std.thread.Builder",
+            "rust_std.thread.JoinHandle",
+        ]
+        for func in thread_funcs:
+            assert func in THREAD_MAPPINGS, f"Missing {func}"
+
+    def test_rust_time_mappings_count(self):
+        """Verify expected number of Rust time mappings."""
+        assert len(RUST_TIME_MAPPINGS) >= 15
+        time_funcs = [
+            "rust_std.time.Duration",
+            "rust_std.time.Duration.from_secs",
+            "rust_std.time.Duration.from_millis",
+            "rust_std.time.Instant",
+            "rust_std.time.Instant.now",
+            "rust_std.time.SystemTime",
+            "rust_std.time.SystemTime.now",
+            "rust_std.time.UNIX_EPOCH",
+        ]
+        for func in time_funcs:
+            assert func in RUST_TIME_MAPPINGS, f"Missing {func}"
+
+
+class TestRustStdThreadMappings:
+    """Tests for Rust std::thread module mappings."""
+
+    def test_thread_spawn(self):
+        """Test std::thread::spawn mapping."""
+        mapping = get_thread_mapping("rust_std.thread.spawn")
+        assert mapping is not None
+        assert "std::thread::spawn" in mapping.rust_code
+        assert "std::thread" in mapping.rust_imports
+
+    def test_thread_sleep(self):
+        """Test std::thread::sleep mapping."""
+        mapping = get_thread_mapping("rust_std.thread.sleep")
+        assert mapping is not None
+        assert "std::thread::sleep" in mapping.rust_code
+
+    def test_thread_current(self):
+        """Test std::thread::current mapping."""
+        mapping = get_thread_mapping("rust_std.thread.current")
+        assert mapping is not None
+        assert "std::thread::current()" in mapping.rust_code
+
+    def test_thread_yield_now(self):
+        """Test std::thread::yield_now mapping."""
+        mapping = get_thread_mapping("rust_std.thread.yield_now")
+        assert mapping is not None
+        assert "std::thread::yield_now()" in mapping.rust_code
+
+    def test_thread_park(self):
+        """Test std::thread::park mapping."""
+        mapping = get_thread_mapping("rust_std.thread.park")
+        assert mapping is not None
+        assert "std::thread::park()" in mapping.rust_code
+
+    def test_thread_builder(self):
+        """Test std::thread::Builder constructor mapping."""
+        mapping = get_thread_mapping("rust_std.thread.Builder")
+        assert mapping is not None
+        assert "std::thread::Builder::new()" in mapping.rust_code
+
+    def test_thread_available_parallelism(self):
+        """Test std::thread::available_parallelism mapping."""
+        mapping = get_thread_mapping("rust_std.thread.available_parallelism")
+        assert mapping is not None
+        assert "available_parallelism" in mapping.rust_code
+        assert mapping.needs_result
+
+
+class TestRustStdThreadMethodMappings:
+    """Tests for Rust std::thread method mappings."""
+
+    def test_join_handle_join(self):
+        """Test JoinHandle.join method mapping."""
+        mapping = get_thread_method_mapping("JoinHandle", "join")
+        assert mapping is not None
+        assert ".join()" in mapping.rust_code
+
+    def test_join_handle_is_finished(self):
+        """Test JoinHandle.is_finished method mapping."""
+        mapping = get_thread_method_mapping("JoinHandle", "is_finished")
+        assert mapping is not None
+        assert ".is_finished()" in mapping.rust_code
+
+    def test_join_handle_thread(self):
+        """Test JoinHandle.thread method mapping."""
+        mapping = get_thread_method_mapping("JoinHandle", "thread")
+        assert mapping is not None
+        assert ".thread()" in mapping.rust_code
+
+    def test_thread_id(self):
+        """Test Thread.id method mapping."""
+        mapping = get_thread_method_mapping("Thread", "id")
+        assert mapping is not None
+        assert ".id()" in mapping.rust_code
+
+    def test_thread_name(self):
+        """Test Thread.name method mapping."""
+        mapping = get_thread_method_mapping("Thread", "name")
+        assert mapping is not None
+        assert ".name()" in mapping.rust_code
+
+    def test_thread_unpark(self):
+        """Test Thread.unpark method mapping."""
+        mapping = get_thread_method_mapping("Thread", "unpark")
+        assert mapping is not None
+        assert ".unpark()" in mapping.rust_code
+
+    def test_builder_name(self):
+        """Test Builder.name method mapping."""
+        mapping = get_thread_method_mapping("Builder", "name")
+        assert mapping is not None
+        assert ".name(" in mapping.rust_code
+
+    def test_builder_stack_size(self):
+        """Test Builder.stack_size method mapping."""
+        mapping = get_thread_method_mapping("Builder", "stack_size")
+        assert mapping is not None
+        assert ".stack_size(" in mapping.rust_code
+
+    def test_builder_spawn(self):
+        """Test Builder.spawn method mapping."""
+        mapping = get_thread_method_mapping("Builder", "spawn")
+        assert mapping is not None
+        assert ".spawn(" in mapping.rust_code
+        assert mapping.needs_result
+
+
+class TestRustStdTimeMappings:
+    """Tests for Rust std::time module mappings."""
+
+    def test_duration_type(self):
+        """Test std::time::Duration type mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration")
+        assert mapping is not None
+        assert "std::time::Duration" in mapping.rust_code
+
+    def test_duration_from_secs(self):
+        """Test std::time::Duration::from_secs mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration.from_secs")
+        assert mapping is not None
+        assert "std::time::Duration::from_secs" in mapping.rust_code
+
+    def test_duration_from_millis(self):
+        """Test std::time::Duration::from_millis mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration.from_millis")
+        assert mapping is not None
+        assert "std::time::Duration::from_millis" in mapping.rust_code
+
+    def test_duration_from_micros(self):
+        """Test std::time::Duration::from_micros mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration.from_micros")
+        assert mapping is not None
+        assert "std::time::Duration::from_micros" in mapping.rust_code
+
+    def test_duration_from_nanos(self):
+        """Test std::time::Duration::from_nanos mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration.from_nanos")
+        assert mapping is not None
+        assert "std::time::Duration::from_nanos" in mapping.rust_code
+
+    def test_duration_zero(self):
+        """Test std::time::Duration::ZERO mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration.ZERO")
+        assert mapping is not None
+        assert "std::time::Duration::ZERO" in mapping.rust_code
+
+    def test_duration_max(self):
+        """Test std::time::Duration::MAX mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Duration.MAX")
+        assert mapping is not None
+        assert "std::time::Duration::MAX" in mapping.rust_code
+
+    def test_instant_now(self):
+        """Test std::time::Instant::now mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.Instant.now")
+        assert mapping is not None
+        assert "std::time::Instant::now()" in mapping.rust_code
+
+    def test_system_time_now(self):
+        """Test std::time::SystemTime::now mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.SystemTime.now")
+        assert mapping is not None
+        assert "std::time::SystemTime::now()" in mapping.rust_code
+
+    def test_unix_epoch(self):
+        """Test std::time::UNIX_EPOCH mapping."""
+        mapping = get_rust_time_mapping("rust_std.time.UNIX_EPOCH")
+        assert mapping is not None
+        assert "std::time::UNIX_EPOCH" in mapping.rust_code
+
+
+class TestRustStdTimeMethodMappings:
+    """Tests for Rust std::time method mappings."""
+
+    def test_duration_as_secs(self):
+        """Test Duration.as_secs method mapping."""
+        mapping = get_rust_time_method_mapping("Duration", "as_secs")
+        assert mapping is not None
+        assert ".as_secs()" in mapping.rust_code
+
+    def test_duration_as_millis(self):
+        """Test Duration.as_millis method mapping."""
+        mapping = get_rust_time_method_mapping("Duration", "as_millis")
+        assert mapping is not None
+        assert ".as_millis()" in mapping.rust_code
+
+    def test_duration_as_nanos(self):
+        """Test Duration.as_nanos method mapping."""
+        mapping = get_rust_time_method_mapping("Duration", "as_nanos")
+        assert mapping is not None
+        assert ".as_nanos()" in mapping.rust_code
+
+    def test_duration_is_zero(self):
+        """Test Duration.is_zero method mapping."""
+        mapping = get_rust_time_method_mapping("Duration", "is_zero")
+        assert mapping is not None
+        assert ".is_zero()" in mapping.rust_code
+
+    def test_duration_checked_add(self):
+        """Test Duration.checked_add method mapping."""
+        mapping = get_rust_time_method_mapping("Duration", "checked_add")
+        assert mapping is not None
+        assert ".checked_add(" in mapping.rust_code
+
+    def test_duration_saturating_sub(self):
+        """Test Duration.saturating_sub method mapping."""
+        mapping = get_rust_time_method_mapping("Duration", "saturating_sub")
+        assert mapping is not None
+        assert ".saturating_sub(" in mapping.rust_code
+
+    def test_instant_elapsed(self):
+        """Test Instant.elapsed method mapping."""
+        mapping = get_rust_time_method_mapping("Instant", "elapsed")
+        assert mapping is not None
+        assert ".elapsed()" in mapping.rust_code
+
+    def test_instant_duration_since(self):
+        """Test Instant.duration_since method mapping."""
+        mapping = get_rust_time_method_mapping("Instant", "duration_since")
+        assert mapping is not None
+        assert ".duration_since(" in mapping.rust_code
+
+    def test_system_time_elapsed(self):
+        """Test SystemTime.elapsed method mapping."""
+        mapping = get_rust_time_method_mapping("SystemTime", "elapsed")
+        assert mapping is not None
+        assert ".elapsed()" in mapping.rust_code
+        assert mapping.needs_result
+
+    def test_system_time_duration_since(self):
+        """Test SystemTime.duration_since method mapping."""
+        mapping = get_rust_time_method_mapping("SystemTime", "duration_since")
+        assert mapping is not None
+        assert ".duration_since(" in mapping.rust_code
+        assert mapping.needs_result
+
+
+class TestRustStdThreadTimeViaGetStdlibMapping:
+    """Tests for thread/time mappings via get_stdlib_mapping."""
+
+    def test_thread_via_get_stdlib_mapping(self):
+        """Test rust_std.thread mappings accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.thread", "spawn")
+        assert mapping is not None
+        assert "std::thread::spawn" in mapping.rust_code
+
+    def test_thread_sleep_via_get_stdlib_mapping(self):
+        """Test rust_std.thread.sleep accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.thread", "sleep")
+        assert mapping is not None
+        assert "std::thread::sleep" in mapping.rust_code
+
+    def test_rust_time_via_get_stdlib_mapping(self):
+        """Test rust_std.time mappings accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.time", "Duration.from_secs")
+        assert mapping is not None
+        assert "std::time::Duration::from_secs" in mapping.rust_code
+
+    def test_instant_now_via_get_stdlib_mapping(self):
+        """Test rust_std.time.Instant.now accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.time", "Instant.now")
+        assert mapping is not None
+        assert "std::time::Instant::now()" in mapping.rust_code
+
+
+class TestRustStdThreadTimeTypeHelpers:
+    """Tests for thread/time type helper functions."""
+
+    def test_get_rust_std_type_thread_joinhandle(self):
+        """Test getting Python type for std::thread::JoinHandle."""
+        assert get_rust_std_type("std::thread::JoinHandle") == "JoinHandle"
+        assert get_rust_std_type("thread::JoinHandle") == "JoinHandle"
+
+    def test_get_rust_std_type_thread_thread(self):
+        """Test getting Python type for std::thread::Thread."""
+        assert get_rust_std_type("std::thread::Thread") == "Thread"
+        assert get_rust_std_type("thread::Thread") == "Thread"
+
+    def test_get_rust_std_type_time_duration(self):
+        """Test getting Python type for std::time::Duration."""
+        assert get_rust_std_type("std::time::Duration") == "Duration"
+        assert get_rust_std_type("time::Duration") == "Duration"
+
+    def test_get_rust_std_type_time_instant(self):
+        """Test getting Python type for std::time::Instant."""
+        assert get_rust_std_type("std::time::Instant") == "Instant"
+        assert get_rust_std_type("time::Instant") == "Instant"
+
+    def test_get_rust_std_type_time_systemtime(self):
+        """Test getting Python type for std::time::SystemTime."""
+        assert get_rust_std_type("std::time::SystemTime") == "SystemTime"
+        assert get_rust_std_type("time::SystemTime") == "SystemTime"
+
+    def test_is_rust_std_type_thread(self):
+        """Test is_rust_std_type for thread types."""
+        assert is_rust_std_type("std::thread::JoinHandle")
+        assert is_rust_std_type("thread::Thread")
+        assert is_rust_std_type("thread::Builder")
+
+    def test_is_rust_std_type_time(self):
+        """Test is_rust_std_type for time types."""
+        assert is_rust_std_type("std::time::Duration")
+        assert is_rust_std_type("time::Instant")
+        assert is_rust_std_type("time::SystemTime")

@@ -1256,6 +1256,276 @@ Python's ``logging.FileHandler``, ``StreamHandler``, etc. are not supported.
 In Rust, these would require using ``env_logger``'s builder pattern or other
 logging backends like ``fern`` or ``tracing``.
 
+Rust Standard Library (rust_std)
+---------------------------------
+
+spicycrab provides direct mappings to Rust's standard library types through
+the ``rust_std`` namespace. These are useful when you need direct access to
+Rust-specific functionality that doesn't have a Python equivalent.
+
+.. note::
+
+   The ``rust_std`` module names are designed to avoid conflicts with Python's
+   stdlib modules. For example, ``rust_std.time`` maps to Rust's ``std::time``
+   (Duration, Instant), while Python's ``time`` module maps to ``chrono``.
+
+rust_std.thread
+^^^^^^^^^^^^^^^
+
+Threading primitives from Rust's ``std::thread`` module.
+
+**Spawning threads:**
+
+.. code-block:: python
+
+   from rust_std.thread import spawn, sleep
+   from rust_std.time import Duration
+
+   def worker() -> None:
+       print("Worker thread running")
+
+   def main() -> None:
+       handle = spawn(worker)
+       handle.join()
+
+.. code-block:: rust
+
+   pub fn worker() {
+       println!("Worker thread running");
+   }
+
+   pub fn main() {
+       let handle = std::thread::spawn(worker);
+       handle.join().unwrap();
+   }
+
+**Thread sleep:**
+
+.. code-block:: python
+
+   from rust_std.thread import sleep
+   from rust_std.time import Duration
+
+   def wait_a_bit() -> None:
+       sleep(Duration.from_secs(2))
+
+.. code-block:: rust
+
+   pub fn wait_a_bit() {
+       std::thread::sleep(std::time::Duration::from_secs(2));
+   }
+
+**Thread utilities:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``rust_std.thread.spawn(f)``         | ``std::thread::spawn(f)``                     |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.sleep(d)``         | ``std::thread::sleep(d)``                     |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.current()``        | ``std::thread::current()``                    |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.yield_now()``      | ``std::thread::yield_now()``                  |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.park()``           | ``std::thread::park()``                       |
++--------------------------------------+-----------------------------------------------+
+| ``rust_std.thread.Builder()``        | ``std::thread::Builder::new()``               |
++--------------------------------------+-----------------------------------------------+
+| ``handle.join()``                    | ``handle.join().unwrap()``                    |
++--------------------------------------+-----------------------------------------------+
+| ``handle.is_finished()``             | ``handle.is_finished()``                      |
++--------------------------------------+-----------------------------------------------+
+
+rust_std.time
+^^^^^^^^^^^^^
+
+Time and duration types from Rust's ``std::time`` module.
+
+**Duration creation:**
+
+.. code-block:: python
+
+   from rust_std.time import Duration
+
+   def get_durations() -> None:
+       one_second = Duration.from_secs(1)
+       half_second = Duration.from_millis(500)
+       one_micro = Duration.from_micros(1)
+       one_nano = Duration.from_nanos(1)
+
+.. code-block:: rust
+
+   pub fn get_durations() {
+       let one_second = std::time::Duration::from_secs(1);
+       let half_second = std::time::Duration::from_millis(500);
+       let one_micro = std::time::Duration::from_micros(1);
+       let one_nano = std::time::Duration::from_nanos(1);
+   }
+
+**Measuring elapsed time with Instant:**
+
+.. code-block:: python
+
+   from rust_std.time import Instant
+
+   def measure_time() -> None:
+       start = Instant.now()
+       # ... do some work ...
+       elapsed = start.elapsed()
+       print(f"Elapsed: {elapsed.as_millis()} ms")
+
+.. code-block:: rust
+
+   pub fn measure_time() {
+       let start = std::time::Instant::now();
+       // ... do some work ...
+       let elapsed = start.elapsed();
+       println!("Elapsed: {} ms", elapsed.as_millis());
+   }
+
+**System time and UNIX epoch:**
+
+.. code-block:: python
+
+   from rust_std.time import SystemTime, UNIX_EPOCH
+
+   def get_timestamp() -> int:
+       now = SystemTime.now()
+       since_epoch = now.duration_since(UNIX_EPOCH)
+       return since_epoch.as_secs()
+
+.. code-block:: rust
+
+   pub fn get_timestamp() -> u64 {
+       let now = std::time::SystemTime::now();
+       let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap();
+       since_epoch.as_secs()
+   }
+
+**Duration methods:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``Duration.from_secs(n)``            | ``std::time::Duration::from_secs(n)``         |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.from_millis(n)``          | ``std::time::Duration::from_millis(n)``       |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.from_micros(n)``          | ``std::time::Duration::from_micros(n)``       |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.from_nanos(n)``           | ``std::time::Duration::from_nanos(n)``        |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.ZERO``                    | ``std::time::Duration::ZERO``                 |
++--------------------------------------+-----------------------------------------------+
+| ``Duration.MAX``                     | ``std::time::Duration::MAX``                  |
++--------------------------------------+-----------------------------------------------+
+| ``d.as_secs()``                      | ``d.as_secs()``                               |
++--------------------------------------+-----------------------------------------------+
+| ``d.as_millis()``                    | ``d.as_millis()``                             |
++--------------------------------------+-----------------------------------------------+
+| ``d.as_nanos()``                     | ``d.as_nanos()``                              |
++--------------------------------------+-----------------------------------------------+
+| ``d.is_zero()``                      | ``d.is_zero()``                               |
++--------------------------------------+-----------------------------------------------+
+
+**Instant methods:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``Instant.now()``                    | ``std::time::Instant::now()``                 |
++--------------------------------------+-----------------------------------------------+
+| ``i.elapsed()``                      | ``i.elapsed()``                               |
++--------------------------------------+-----------------------------------------------+
+| ``i.duration_since(earlier)``        | ``i.duration_since(earlier)``                 |
++--------------------------------------+-----------------------------------------------+
+
+**SystemTime methods:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``SystemTime.now()``                 | ``std::time::SystemTime::now()``              |
++--------------------------------------+-----------------------------------------------+
+| ``UNIX_EPOCH``                       | ``std::time::UNIX_EPOCH``                     |
++--------------------------------------+-----------------------------------------------+
+| ``s.elapsed()``                      | ``s.elapsed()?``                              |
++--------------------------------------+-----------------------------------------------+
+| ``s.duration_since(earlier)``        | ``s.duration_since(earlier)?``                |
++--------------------------------------+-----------------------------------------------+
+
+rust_std.fs
+^^^^^^^^^^^
+
+File system operations from Rust's ``std::fs`` module.
+
+**File operations:**
+
+.. code-block:: python
+
+   from rust_std.fs import File, read_to_string, write
+
+   def read_file(path: str) -> str:
+       return read_to_string(path)
+
+   def write_file(path: str, content: str) -> None:
+       write(path, content)
+
+.. code-block:: rust
+
+   pub fn read_file(path: String) -> String {
+       std::fs::read_to_string(path).unwrap()
+   }
+
+   pub fn write_file(path: String, content: String) {
+       std::fs::write(path, content).unwrap();
+   }
+
+rust_std.io
+^^^^^^^^^^^
+
+I/O operations from Rust's ``std::io`` module.
+
+**Standard streams:**
+
+.. code-block:: python
+
+   from rust_std.io import stdin, stdout, stderr
+
+   def get_streams():
+       input_stream = stdin()
+       output_stream = stdout()
+       error_stream = stderr()
+
+.. code-block:: rust
+
+   pub fn get_streams() {
+       let input_stream = std::io::stdin();
+       let output_stream = std::io::stdout();
+       let error_stream = std::io::stderr();
+   }
+
+rust_std.path
+^^^^^^^^^^^^^
+
+Path manipulation from Rust's ``std::path`` module.
+
+**Path creation:**
+
+.. code-block:: python
+
+   from rust_std.path import Path, PathBuf
+
+   def make_path(s: str) -> PathBuf:
+       return PathBuf.from(s)
+
+.. code-block:: rust
+
+   pub fn make_path(s: String) -> PathBuf {
+       std::path::PathBuf::from(s)
+   }
+
 Generated Dependencies
 ----------------------
 
