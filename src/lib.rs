@@ -8,8 +8,8 @@ use pyo3::prelude::*;
 use std::fs;
 use std::path::Path;
 use syn::{
-    visit::Visit, FnArg, ImplItem, ItemEnum, ItemFn, ItemImpl, ItemStruct, ItemType, ItemUse,
-    Pat, ReturnType, Type, UseTree, Visibility,
+    visit::Visit, FnArg, ImplItem, ItemEnum, ItemFn, ItemImpl, ItemStruct, ItemType, ItemUse, Pat,
+    ReturnType, Type, UseTree, Visibility,
 };
 use walkdir::WalkDir;
 
@@ -536,7 +536,9 @@ fn parse_method(node: &syn::ImplItemFn) -> RustMethod {
     }
 }
 
-fn parse_fn_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>) -> Vec<RustParam> {
+fn parse_fn_params(
+    inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
+) -> Vec<RustParam> {
     inputs
         .iter()
         .filter_map(|arg| {
@@ -712,11 +714,13 @@ fn parse_type_alias(node: &ItemType) -> RustTypeAlias {
 /// Parse a single Rust source file
 #[pyfunction]
 fn parse_file(path: &str) -> PyResult<RustCrate> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Failed to read file: {}", e)))?;
+    let content = fs::read_to_string(path).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Failed to read file: {}", e))
+    })?;
 
-    let syntax = syn::parse_file(&content)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to parse Rust: {}", e)))?;
+    let syntax = syn::parse_file(&content).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to parse Rust: {}", e))
+    })?;
 
     let mut collector = ItemCollector::new();
     collector.visit_file(&syntax);
@@ -761,7 +765,11 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
     };
 
     let src_path = crate_path.join("src");
-    let search_path = if src_path.exists() { &src_path } else { crate_path };
+    let search_path = if src_path.exists() {
+        &src_path
+    } else {
+        crate_path
+    };
 
     let mut all_functions = Vec::new();
     let mut all_structs = Vec::new();
