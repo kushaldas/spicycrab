@@ -13,7 +13,6 @@ This ensures packages come from the official spicycrab index, not PyPI.
 
 from __future__ import annotations
 
-import gzip
 import json
 import shutil
 import subprocess
@@ -199,9 +198,7 @@ def validate(path: Path):
             config = tomllib.loads(content)
             name = config.get("project", {}).get("name", "")
             if not name.startswith("spicycrab-"):
-                warnings.append(
-                    f"Package name '{name}' should start with 'spicycrab-'"
-                )
+                warnings.append(f"Package name '{name}' should start with 'spicycrab-'")
         except Exception as e:
             errors.append(f"Invalid pyproject.toml: {e}")
 
@@ -406,8 +403,10 @@ def sparse_checkout(repo_url: str, subdir: str, tag: str | None = None) -> Path:
 
     # Clone with sparse checkout enabled
     clone_cmd = [
-        "git", "clone",
-        "--depth", "1",
+        "git",
+        "clone",
+        "--depth",
+        "1",
         "--filter=blob:none",
         "--sparse",
     ]
@@ -430,7 +429,8 @@ def sparse_checkout(repo_url: str, subdir: str, tag: str | None = None) -> Path:
 @main.command()
 @click.argument("package")
 @click.option(
-    "--version", "-v",
+    "--version",
+    "-v",
     default=None,
     help="Specific version to install (e.g., '4.5.0')",
 )
@@ -504,7 +504,8 @@ def install(package: str, version: str | None, repo: str):
     try:
         build_cmd = get_build_command() + [
             "--wheel",
-            "--outdir", str(wheel_dir),
+            "--outdir",
+            str(wheel_dir),
             str(stub_path),
         ]
         subprocess.run(build_cmd, check=True, capture_output=True, text=True)
@@ -521,7 +522,8 @@ def install(package: str, version: str | None, repo: str):
         # Step 3: Install wheel
         click.echo("Installing...")
         install_cmd = get_pip_command() + [
-            "install", "--force-reinstall",
+            "install",
+            "--force-reinstall",
             str(wheel_file),
         ]
         subprocess.run(install_cmd, check=True, capture_output=True, text=True)
@@ -596,7 +598,9 @@ def search(query: str):
     default=None,
     help="Output crate name (default: same as input crate). Use for re-exports like clap_builder -> clap",
 )
-def generate(crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None):
+def generate(
+    crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None
+):
     """Generate stubs from a Rust crate.
 
     Parses a Rust crate and generates Python type stubs with
@@ -655,7 +659,7 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
         click.echo("")
     else:
         # Download from crates.io
-        click.echo(f"Fetching crate info from crates.io...")
+        click.echo("Fetching crate info from crates.io...")
 
         crate_info = fetch_crate_info(crate)
         crate_name = crate_info.get("id", crate)
@@ -709,14 +713,19 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
     glob_reexports = [r for r in parsed_crate.reexports if r.is_glob]
     source_crates_to_generate = []
 
-    if glob_reexports and len(parsed_crate.structs) + len(parsed_crate.enums) + len(parsed_crate.impls) < 5:
+    if (
+        glob_reexports
+        and len(parsed_crate.structs) + len(parsed_crate.enums) + len(parsed_crate.impls) < 5
+    ):
         click.echo("")
         click.echo(click.style("Detected re-exports from other crates:", fg="yellow"))
         for r in glob_reexports:
             click.echo(f"  pub use {r.source_crate}::*")
             source_crates_to_generate.append(r.source_crate)
         click.echo("")
-        click.echo("This crate re-exports from other crates. Will generate stubs for source crates.")
+        click.echo(
+            "This crate re-exports from other crates. Will generate stubs for source crates."
+        )
     click.echo("")
 
     # Generate stubs for source crates first (if any)
@@ -737,6 +746,7 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
 
                 # Generate the source crate stubs
                 from spicycrab.cookcrab.generator import generate_stub_package
+
                 generate_stub_package(
                     crate=source_parsed,
                     crate_name=source_crate,
@@ -747,7 +757,9 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
 
                 shutil.rmtree(source_temp_dir, ignore_errors=True)
             except Exception as e:
-                click.echo(click.style(f"  Warning: Could not generate {source_crate}: {e}", fg="yellow"))
+                click.echo(
+                    click.style(f"  Warning: Could not generate {source_crate}: {e}", fg="yellow")
+                )
         click.echo("")
 
     # Generate the stub package
@@ -756,15 +768,16 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
         if source_crates_to_generate:
             # This is a wrapper crate - generate re-export stub
             from spicycrab.cookcrab.generator import generate_reexport_stub_package
+
             generate_reexport_stub_package(
                 crate_name=crate_name,
                 source_crates=source_crates_to_generate,
                 version=crate_version,
                 output_dir=output,
             )
-            result = None  # No GeneratedStub returned for re-export packages
+            pass  # No GeneratedStub returned for re-export packages
         else:
-            result = generate_stub_package(
+            generate_stub_package(
                 crate=parsed_crate,
                 crate_name=crate_name,
                 version=crate_version,

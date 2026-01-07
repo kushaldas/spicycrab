@@ -2,19 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass
-class StdlibMapping:
-    """A mapping from Python stdlib to Rust."""
-
-    python_module: str
-    python_func: str
-    rust_code: str
-    rust_imports: list[str]
-    cargo_deps: list[str] | None = None
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # collections module mappings
 COLLECTIONS_MAPPINGS: dict[str, StdlibMapping] = {
@@ -41,7 +29,7 @@ COLLECTIONS_MAPPINGS: dict[str, StdlibMapping] = {
         python_func="OrderedDict",
         rust_code="IndexMap::new()",
         rust_imports=["indexmap::IndexMap"],
-        cargo_deps=["indexmap = \"2.0\""],
+        cargo_deps=['indexmap = "2.0"'],
     ),
     "collections.namedtuple": StdlibMapping(
         python_module="collections",

@@ -21,7 +21,7 @@ Usage:
 
 from spicycrab.types.error import Error
 from spicycrab.types.option import Option, Some
-from spicycrab.types.result import Result, Ok, Err
+from spicycrab.types.result import Err, Ok, Result
 
 __all__ = [
     "Error",

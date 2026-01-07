@@ -18,53 +18,93 @@ from spicycrab.codegen.stdlib.os_map import (
     OS_MAPPINGS,
     PATHLIB_MAPPINGS,
     SYS_MAPPINGS,
-    StdlibMapping,
     get_os_mapping,
     get_pathlib_mapping,
     get_sys_mapping,
-)
-from spicycrab.codegen.stdlib.tempfile_map import (
-    TEMPFILE_MAPPINGS,
-    get_tempfile_mapping,
-)
-from spicycrab.codegen.stdlib.subprocess_map import (
-    SUBPROCESS_MAPPINGS,
-    get_subprocess_mapping,
-)
-from spicycrab.codegen.stdlib.shutil_map import (
-    SHUTIL_MAPPINGS,
-    get_shutil_mapping,
 )
 from spicycrab.codegen.stdlib.random_map import (
     RANDOM_MAPPINGS,
     get_random_mapping,
 )
+from spicycrab.codegen.stdlib.shutil_map import (
+    SHUTIL_MAPPINGS,
+    get_shutil_mapping,
+)
+from spicycrab.codegen.stdlib.subprocess_map import (
+    SUBPROCESS_MAPPINGS,
+    get_subprocess_mapping,
+)
+from spicycrab.codegen.stdlib.tempfile_map import (
+    TEMPFILE_MAPPINGS,
+    get_tempfile_mapping,
+)
 from spicycrab.codegen.stdlib.time_map import (
-    TIME_MAPPINGS,
-    DATETIME_MAPPINGS,
-    DATE_MAPPINGS,
-    TIME_CLASS_MAPPINGS,
-    TIMEDELTA_MAPPINGS,
-    TIMEZONE_MAPPINGS,
-    DATETIME_METHOD_MAPPINGS,
-    DATE_METHOD_MAPPINGS,
-    TIME_CLASS_METHOD_MAPPINGS,
-    TIMEDELTA_METHOD_MAPPINGS,
     ALL_DATETIME_MAPPINGS,
-    get_time_mapping,
+    DATE_MAPPINGS,
+    DATE_METHOD_MAPPINGS,
+    DATETIME_MAPPINGS,
+    DATETIME_METHOD_MAPPINGS,
+    TIME_CLASS_MAPPINGS,
+    TIME_CLASS_METHOD_MAPPINGS,
+    TIME_MAPPINGS,
+    TIMEDELTA_MAPPINGS,
+    TIMEDELTA_METHOD_MAPPINGS,
+    TIMEZONE_MAPPINGS,
     get_datetime_mapping,
     get_datetime_method_mapping,
+    get_time_mapping,
 )
-from spicycrab.codegen.stub_discovery import (
-    get_stub_mapping,
-    get_stub_method_mapping,
-    get_stub_type_mapping,
-    get_stub_cargo_deps,
-    get_all_stub_packages,
-    get_crate_for_python_module,
-    get_stub_package_by_module,
-    clear_stub_cache,
-)
+from spicycrab.codegen.stdlib.types import StdlibMapping
+
+# Lazy imports for stub_discovery to avoid circular imports
+# Import these directly from spicycrab.codegen.stub_discovery when needed
+
+
+def _get_stub_discovery():
+    """Lazy import of stub_discovery module."""
+    from spicycrab.codegen import stub_discovery
+
+    return stub_discovery
+
+
+def get_stub_mapping(key: str):
+    """Get stub mapping for a key."""
+    return _get_stub_discovery().get_stub_mapping(key)
+
+
+def get_stub_method_mapping(type_name: str, method_name: str):
+    """Get stub method mapping for a type and method."""
+    return _get_stub_discovery().get_stub_method_mapping(type_name, method_name)
+
+
+def get_stub_type_mapping(key: str):
+    """Get stub type mapping for a key."""
+    return _get_stub_discovery().get_stub_type_mapping(key)
+
+
+def get_stub_cargo_deps():
+    """Get stub cargo dependencies."""
+    return _get_stub_discovery().get_stub_cargo_deps()
+
+
+def get_all_stub_packages():
+    """Get all stub packages."""
+    return _get_stub_discovery().get_all_stub_packages()
+
+
+def get_crate_for_python_module(module: str):
+    """Get crate for python module."""
+    return _get_stub_discovery().get_crate_for_python_module(module)
+
+
+def get_stub_package_by_module(module: str):
+    """Get stub package by module."""
+    return _get_stub_discovery().get_stub_package_by_module(module)
+
+
+def clear_stub_cache():
+    """Clear stub cache."""
+    return _get_stub_discovery().clear_stub_cache()
 
 __all__ = [
     # Types

@@ -8,16 +8,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from spicycrab.analyzer.type_resolver import TypeResolver, RustType
+from spicycrab.analyzer.type_resolver import TypeResolver
 from spicycrab.codegen.stdlib import (
-    get_stdlib_mapping,
+    PATHLIB_MAPPINGS,
+    StdlibMapping,
+    get_crate_for_python_module,
     get_datetime_mapping,
     get_datetime_method_mapping,
-    get_crate_for_python_module,
+    get_stdlib_mapping,
     get_stub_mapping,
     get_stub_method_mapping,
-    get_stub_type_mapping,
-    PATHLIB_MAPPINGS,
 )
 from spicycrab.ir.nodes import (
     BinaryOp,
@@ -31,7 +31,6 @@ from spicycrab.ir.nodes import (
     IRClassType,
     IRContinue,
     IRDict,
-    IRExceptHandler,
     IRExpression,
     IRExprStmt,
     IRFor,
@@ -47,7 +46,6 @@ from spicycrab.ir.nodes import (
     IRMethodCall,
     IRModule,
     IRName,
-    IRParameter,
     IRPass,
     IRPrimitiveType,
     IRRaise,
@@ -109,17 +107,23 @@ class EmitterContext:
     current_class: str | None = None
     resolver: TypeResolver = field(default_factory=TypeResolver)
     in_last_stmt: bool = False  # True when emitting the last statement in a block
-    class_names: set[str] = field(default_factory=set)  # Known class names for constructor detection
+    class_names: set[str] = field(
+        default_factory=set
+    )  # Known class names for constructor detection
     stdlib_imports: set[str] = field(default_factory=set)  # Required stdlib use statements
     local_modules: set[str] = field(default_factory=set)  # Module names in the same project
-    local_imports: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)  # module -> [(name, alias)]
+    local_imports: dict[str, list[tuple[str, str | None]]] = field(
+        default_factory=dict
+    )  # module -> [(name, alias)]
     crate_name: str | None = None  # Crate name for inter-module imports (None uses "crate::")
     # Error handling support
     result_functions: set[str] = field(default_factory=set)  # Functions that return Result
     in_result_context: bool = False  # True when inside a Result-returning function
     in_option_context: bool = False  # True when inside an Option-returning function
     # Type tracking for instance method resolution
-    type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
+    type_env: dict[str, str] = field(
+        default_factory=dict
+    )  # var_name -> type string (e.g., "datetime.datetime")
     # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
     stub_imports: dict[str, str] = field(default_factory=dict)
     # Assignment target type for turbofish inference (e.g., "String" for get_one::<String>)
@@ -163,7 +167,11 @@ class RustEmitter:
             # Check if this is a T | None union (becomes Option<T>)
             types = ir_type.types
             if len(types) == 2:
-                none_count = sum(1 for t in types if isinstance(t, IRPrimitiveType) and t.name == PrimitiveType.NONE)
+                none_count = sum(
+                    1
+                    for t in types
+                    if isinstance(t, IRPrimitiveType) and t.name == PrimitiveType.NONE
+                )
                 return none_count == 1
         return False
 
@@ -228,8 +236,7 @@ class RustEmitter:
         # Emit top-level statements in main() if any
         # Filter out `if __name__ == "__main__"` patterns as they don't apply in Rust
         filtered_statements = [
-            stmt for stmt in module.statements
-            if not self._is_name_main_check(stmt)
+            stmt for stmt in module.statements if not self._is_name_main_check(stmt)
         ]
         if filtered_statements:
             body_lines.append("fn main() {")
@@ -269,9 +276,6 @@ class RustEmitter:
 
     def _process_imports(self, imports: list[IRImport]) -> None:
         """Process Python imports and categorize them."""
-        # Known stdlib modules that we handle specially
-        stdlib_modules = {"os", "sys", "pathlib", "json", "collections", "dataclasses", "typing"}
-
         for imp in imports:
             module_name = imp.module.split(".")[0]  # Get top-level module
 
@@ -523,7 +527,44 @@ class RustEmitter:
             name = "new"
 
         # Escape Rust keywords used as method names
-        rust_keywords = {"use", "type", "impl", "trait", "mod", "pub", "fn", "let", "mut", "ref", "move", "self", "super", "crate", "as", "break", "continue", "else", "for", "if", "in", "loop", "match", "return", "while", "async", "await", "dyn", "struct", "enum", "union", "const", "static", "extern", "unsafe", "where"}
+        rust_keywords = {
+            "use",
+            "type",
+            "impl",
+            "trait",
+            "mod",
+            "pub",
+            "fn",
+            "let",
+            "mut",
+            "ref",
+            "move",
+            "self",
+            "super",
+            "crate",
+            "as",
+            "break",
+            "continue",
+            "else",
+            "for",
+            "if",
+            "in",
+            "loop",
+            "match",
+            "return",
+            "while",
+            "async",
+            "await",
+            "dyn",
+            "struct",
+            "enum",
+            "union",
+            "const",
+            "static",
+            "extern",
+            "unsafe",
+            "where",
+        }
         if name in rust_keywords:
             name = f"r#{name}"
 
@@ -546,7 +587,7 @@ class RustEmitter:
 
         # Return type
         if is_constructor:
-            ret_str = f" -> Self"
+            ret_str = " -> Self"
         elif method.return_type:
             rust_ret = self.resolver.resolve(method.return_type)
             if rust_ret.name != "()":
@@ -567,7 +608,11 @@ class RustEmitter:
             field_indent = self.ctx.indent_str()
             # Initialize fields from __init__ body
             for stmt in method.body:
-                if isinstance(stmt, IRAttrAssign) and isinstance(stmt.obj, IRName) and stmt.obj.name == "self":
+                if (
+                    isinstance(stmt, IRAttrAssign)
+                    and isinstance(stmt.obj, IRName)
+                    and stmt.obj.name == "self"
+                ):
                     value_str = self.emit_expression(stmt.value)
                     # Use Rust shorthand syntax when field name matches value (clippy::redundant_field_names)
                     if stmt.attr == value_str:
@@ -587,7 +632,7 @@ class RustEmitter:
             # Regular method body
             self.ctx.indent += 1
             for i, stmt in enumerate(method.body):
-                is_last = (i == len(method.body) - 1)
+                is_last = i == len(method.body) - 1
                 self.ctx.in_last_stmt = is_last
                 lines.append(self.emit_statement(stmt))
             self.ctx.in_last_stmt = False
@@ -645,7 +690,7 @@ class RustEmitter:
         # Body - mark last statement for expression return
         self.ctx.indent += 1
         for i, stmt in enumerate(func.body):
-            is_last = (i == len(func.body) - 1)
+            is_last = i == len(func.body) - 1
             self.ctx.in_last_stmt = is_last
             lines.append(self.emit_statement(stmt))
         self.ctx.in_last_stmt = False
@@ -672,9 +717,11 @@ class RustEmitter:
             if isinstance(stmt.value, IRBinaryOp):
                 if isinstance(stmt.value.left, IRAttribute):
                     left_attr = stmt.value.left
-                    if (isinstance(left_attr.obj, IRName) and
-                        left_attr.obj.name == "self" and
-                        left_attr.attr == stmt.attr):
+                    if (
+                        isinstance(left_attr.obj, IRName)
+                        and left_attr.obj.name == "self"
+                        and left_attr.attr == stmt.attr
+                    ):
                         op = stmt.value.op
                         compound_ops = {
                             BinaryOp.ADD: "+=",
@@ -741,7 +788,7 @@ class RustEmitter:
                     func_name = self.emit_expression(exc_expr.func)
                     return f'{indent}return Err("{func_name}".to_string());'
                 return f"{indent}return Err({self.emit_expression(stmt.exc)});"
-            return f"{indent}panic!(\"re-raise\");"
+            return f'{indent}panic!("re-raise");'
 
         return f"{indent}// Unsupported: {type(stmt).__name__}"
 
@@ -772,7 +819,11 @@ class RustEmitter:
                     self.ctx.type_env[stmt.target] = type_str
                 # Wrap non-None values in Some() for Option types
                 # But don't wrap function calls - the function handles wrapping
-                if rust_type.name == "Option" and value != "None" and not isinstance(stmt.value, IRCall):
+                if (
+                    rust_type.name == "Option"
+                    and value != "None"
+                    and not isinstance(stmt.value, IRCall)
+                ):
                     value = f"Some({value})"
                 return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
             return f"{indent}let {mut}{stmt.target} = {value};"
@@ -892,10 +943,14 @@ class RustEmitter:
                 # Keep the TempDir alive with _temp_ctx, bind path to target
                 lines.append(f"{inner_indent}let _temp_ctx = {ctx_expr};")
                 if "TemporaryDirectory" in ctx_expr or "tempdir" in ctx_expr:
-                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
+                    lines.append(
+                        f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();"
+                    )
                 else:
                     # NamedTempFile - get the path
-                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
+                    lines.append(
+                        f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();"
+                    )
             else:
                 lines.append(f"{inner_indent}let mut {stmt.target} = {ctx_expr};")
         else:
@@ -916,8 +971,12 @@ class RustEmitter:
 
         # Check if this is a single-statement try with a Result-returning call
         # Pattern: try: result = fallible_call() except: handle_error()
-        if (len(stmt.body) == 1 and stmt.handlers and
-            isinstance(stmt.body[0], IRAssign) and stmt.body[0].value):
+        if (
+            len(stmt.body) == 1
+            and stmt.handlers
+            and isinstance(stmt.body[0], IRAssign)
+            and stmt.body[0].value
+        ):
             assign = stmt.body[0]
             # Check if the call returns Result
             call = assign.value
@@ -932,8 +991,12 @@ class RustEmitter:
                 return self._emit_try_as_match(stmt, assign, indent)
 
         # Check if try body is a single expression statement with Result call
-        if (len(stmt.body) == 1 and stmt.handlers and
-            isinstance(stmt.body[0], IRExprStmt) and stmt.body[0].expr):
+        if (
+            len(stmt.body) == 1
+            and stmt.handlers
+            and isinstance(stmt.body[0], IRExprStmt)
+            and stmt.body[0].expr
+        ):
             expr_stmt = stmt.body[0]
             call = expr_stmt.expr
             is_result_call = False
@@ -948,7 +1011,9 @@ class RustEmitter:
 
         # Fallback: use catch_unwind for runtime panics
         if stmt.handlers:
-            lines.append(f"{indent}if let Err(_panic_err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{")
+            lines.append(
+                f"{indent}if let Err(_panic_err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{"
+            )
             self.ctx.indent += 1
 
             for s in stmt.body:
@@ -1183,7 +1248,7 @@ class RustEmitter:
                 if expr.left.args:
                     arg = self.emit_expression(expr.left.args[0])
                     # Strip .to_string() since contains takes &str
-                    if arg.endswith('.to_string()'):
+                    if arg.endswith(".to_string()"):
                         arg = arg[:-12]  # Remove .to_string()
                     else:
                         arg = f"&{arg}"
@@ -1213,30 +1278,44 @@ class RustEmitter:
         # len(x) == 0 -> x.is_empty()
         # len(x) >= 1 -> !x.is_empty()
         # 0 < len(x)  -> !x.is_empty()
-        if left.endswith('.len()') and right == '0':
+        if left.endswith(".len()") and right == "0":
             base = left[:-6]  # Remove .len()
             if expr.op in (BinaryOp.GT, BinaryOp.NE):
                 return f"!{base}.is_empty()"
             if expr.op == BinaryOp.EQ:
                 return f"{base}.is_empty()"
-        if right.endswith('.len()') and left == '0':
+        if right.endswith(".len()") and left == "0":
             base = right[:-6]  # Remove .len()
             if expr.op == BinaryOp.LT:
                 return f"!{base}.is_empty()"
             if expr.op == BinaryOp.EQ:
                 return f"{base}.is_empty()"
         # Also handle >= 1 pattern
-        if left.endswith('.len()') and right == '1' and expr.op == BinaryOp.GE:
+        if left.endswith(".len()") and right == "1" and expr.op == BinaryOp.GE:
             base = left[:-6]
             return f"!{base}.is_empty()"
 
         # Handle integer variable compared with .len() - cast to usize
         # Example: i < values.len() where i is i64 -> (i as usize) < values.len()
-        if right.endswith('.len()') and isinstance(expr.left, IRName):
-            if expr.op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE, BinaryOp.EQ, BinaryOp.NE):
+        if right.endswith(".len()") and isinstance(expr.left, IRName):
+            if expr.op in (
+                BinaryOp.LT,
+                BinaryOp.LE,
+                BinaryOp.GT,
+                BinaryOp.GE,
+                BinaryOp.EQ,
+                BinaryOp.NE,
+            ):
                 return f"({left} as usize) {BINOP_MAP.get(expr.op, '<')} {right}"
-        if left.endswith('.len()') and isinstance(expr.right, IRName):
-            if expr.op in (BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE, BinaryOp.EQ, BinaryOp.NE):
+        if left.endswith(".len()") and isinstance(expr.right, IRName):
+            if expr.op in (
+                BinaryOp.LT,
+                BinaryOp.LE,
+                BinaryOp.GT,
+                BinaryOp.GE,
+                BinaryOp.EQ,
+                BinaryOp.NE,
+            ):
                 return f"{left} {BINOP_MAP.get(expr.op, '<')} ({right} as usize)"
 
         # Special handling for floor division
@@ -1296,7 +1375,7 @@ class RustEmitter:
     def _looks_like_string(self, expr_str: str) -> bool:
         """Heuristic to detect if an expression is likely a String type."""
         # String literals end with .to_string()
-        if expr_str.endswith('.to_string()'):
+        if expr_str.endswith(".to_string()"):
             return True
         # Don't mark numbers as strings
         if expr_str.isdigit():
@@ -1374,13 +1453,17 @@ class RustEmitter:
         if func == "print":
             if args:
                 # Strip .to_string() since println! handles Display types directly
-                arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else args[0]
+                arg = (
+                    args[0].removesuffix(".to_string()")
+                    if args[0].endswith(".to_string()")
+                    else args[0]
+                )
                 # If arg is a string literal, use println!("literal") directly
                 # to avoid clippy::print_literal warning
                 if arg.startswith('"') and arg.endswith('"'):
-                    return f'println!({arg})'
+                    return f"println!({arg})"
                 return f'println!("{{}}", {arg})'
-            return 'println!()'
+            return "println!()"
 
         # Handle str()
         if func == "str":
@@ -1390,10 +1473,10 @@ class RustEmitter:
         if func == "int":
             # If the argument looks like a string, use parse()
             arg = args[0]
-            if arg.endswith('.to_string()') or arg.startswith('"'):
+            if arg.endswith(".to_string()") or arg.startswith('"'):
                 return f"{arg}.parse::<i64>().unwrap()"
             # For variables, we assume they might be strings if they're not numeric literals
-            if not arg.lstrip('-').isdigit():
+            if not arg.lstrip("-").isdigit():
                 return f"{arg}.parse::<i64>().unwrap()"
             return f"{arg} as i64"
 
@@ -1410,7 +1493,7 @@ class RustEmitter:
 
         return call_expr
 
-    def _infer_stub_type(self, expr: "IRExpression") -> str | None:
+    def _infer_stub_type(self, expr: IRExpression) -> str | None:
         """Infer the stub type of an expression for method chaining.
 
         For expressions like Arg.new(...).short(...), we need to know that
@@ -1495,7 +1578,7 @@ class RustEmitter:
         if rust_type == "char" or "char>" in rust_type or "<char" in rust_type:
             # Extract the character from "x".to_string()
             # Pattern: "x".to_string() -> suffix is ".to_string() (13 chars)
-            if arg.startswith('"') and arg.endswith('.to_string()'):
+            if arg.startswith('"') and arg.endswith(".to_string()"):
                 char_val = arg[1:-13]  # Remove " prefix and ".to_string() suffix
                 if len(char_val) == 1:
                     return f"'{char_val}'"
@@ -1506,37 +1589,37 @@ class RustEmitter:
         # Handle &str type: "x".to_string() -> "x"
         # Also handles wrapped types containing &str
         if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type:
-            if arg.endswith('.to_string()'):
+            if arg.endswith(".to_string()"):
                 return arg[:-12]  # Remove .to_string()
 
         # Handle impl Into<Str> which accepts &str but NOT String
         # clap's Str type only implements From<&str>, not From<String>
         if "Str>" in rust_type or rust_type.endswith("Str"):
-            if arg.endswith('.to_string()'):
+            if arg.endswith(".to_string()"):
                 return arg[:-12]  # Remove .to_string()
 
         # Handle impl Into<Id> which accepts &str but NOT String
         # clap's Id type only implements From<&str>, not From<String>
         if "Id>" in rust_type or rust_type.endswith("Id"):
-            if arg.endswith('.to_string()'):
+            if arg.endswith(".to_string()"):
                 return arg[:-12]  # Remove .to_string()
             # Handle vec of strings for args([...]) pattern
             if arg.startswith("vec!["):
                 # Strip .to_string() from each element in the vec
                 import re
+
                 return re.sub(r'"([^"]*)"\.to_string\(\)', r'"\1"', arg)
 
         return arg
 
-    def _apply_stdlib_mapping(self, mapping: "StdlibMapping", args: list[str]) -> str:
+    def _apply_stdlib_mapping(self, mapping: StdlibMapping, args: list[str]) -> str:
         """Apply a stdlib mapping to generate Rust code."""
-        from spicycrab.codegen.stdlib import StdlibMapping
 
         rust_code = mapping.rust_code
 
         # Transform args based on param_types if available
         # Use getattr since not all mapping types have param_types
-        param_types = getattr(mapping, 'param_types', None)
+        param_types = getattr(mapping, "param_types", None)
         if param_types:
             transformed_args = []
             for i, arg in enumerate(args):
@@ -1561,16 +1644,15 @@ class RustEmitter:
         return rust_code
 
     def _apply_datetime_constructor(
-        self, mapping: "StdlibMapping", args: list[str], expr: "IRMethodCall"
+        self, mapping: StdlibMapping, args: list[str], expr: IRMethodCall
     ) -> str:
         """Apply a datetime constructor mapping, handling keyword arguments."""
-        from spicycrab.codegen.stdlib import StdlibMapping
 
         rust_code = mapping.rust_code
 
         # Build keyword args dict from the expression
         kwargs: dict[str, str] = {}
-        if hasattr(expr, 'kwargs') and expr.kwargs:
+        if hasattr(expr, "kwargs") and expr.kwargs:
             for key, val_expr in expr.kwargs.items():
                 kwargs[key] = self.emit_expression(val_expr)
 
@@ -1594,8 +1676,15 @@ class RustEmitter:
 
         # Handle datetime.datetime(year, month, day, hour=0, minute=0, second=0, microsecond=0)
         if mapping.python_func == "datetime" and "{year}" in rust_code:
-            defaults = {"year": "0", "month": "1", "day": "1",
-                       "hour": "0", "minute": "0", "second": "0", "microsecond": "0"}
+            defaults = {
+                "year": "0",
+                "month": "1",
+                "day": "1",
+                "hour": "0",
+                "minute": "0",
+                "second": "0",
+                "microsecond": "0",
+            }
             # Fill from positional args in order
             arg_names = ["year", "month", "day", "hour", "minute", "second", "microsecond"]
             for i, arg in enumerate(args):
@@ -1611,11 +1700,25 @@ class RustEmitter:
 
         # Handle datetime.timedelta(days=0, seconds=0, microseconds=0, ...)
         if mapping.python_func == "timedelta":
-            defaults = {"days": "0", "seconds": "0", "microseconds": "0",
-                       "milliseconds": "0", "minutes": "0", "hours": "0", "weeks": "0"}
+            defaults = {
+                "days": "0",
+                "seconds": "0",
+                "microseconds": "0",
+                "milliseconds": "0",
+                "minutes": "0",
+                "hours": "0",
+                "weeks": "0",
+            }
             # Fill from positional args in order
-            arg_names = ["days", "seconds", "microseconds", "milliseconds",
-                        "minutes", "hours", "weeks"]
+            arg_names = [
+                "days",
+                "seconds",
+                "microseconds",
+                "milliseconds",
+                "minutes",
+                "hours",
+                "weeks",
+            ]
             for i, arg in enumerate(args):
                 if i < len(arg_names):
                     defaults[arg_names[i]] = arg
@@ -1817,7 +1920,11 @@ class RustEmitter:
                 if method in ("expect", "expect_err"):
                     if len(args) >= 2:
                         # Strip .to_string() since expect takes &str
-                        msg = args[1].removesuffix('.to_string()') if args[1].endswith('.to_string()') else f"&{args[1]}"
+                        msg = (
+                            args[1].removesuffix(".to_string()")
+                            if args[1].endswith(".to_string()")
+                            else f"&{args[1]}"
+                        )
                         return f"{args[0]}.{method}({msg})"
                 # Methods that take (self, closure)
                 if method in ("unwrap_or_else", "map", "map_err", "and_then", "or_else"):
@@ -1853,8 +1960,8 @@ class RustEmitter:
             return f"{obj}.trim().to_string()"
         if method == "split":
             if args:
-                return f'{obj}.split({args[0]}).collect::<Vec<_>>()'
-            return f'{obj}.split_whitespace().collect::<Vec<_>>()'
+                return f"{obj}.split({args[0]}).collect::<Vec<_>>()"
+            return f"{obj}.split_whitespace().collect::<Vec<_>>()"
         if method == "join":
             return f"{args[0]}.join(&{obj})"
         if method == "upper":
@@ -1863,14 +1970,30 @@ class RustEmitter:
             return f"{obj}.to_lowercase()"
         if method == "replace":
             # replace takes &str, not String, so strip .to_string() if present
-            arg0 = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
-            arg1 = args[1].removesuffix('.to_string()') if args[1].endswith('.to_string()') else f"&{args[1]}"
+            arg0 = (
+                args[0].removesuffix(".to_string()")
+                if args[0].endswith(".to_string()")
+                else f"&{args[0]}"
+            )
+            arg1 = (
+                args[1].removesuffix(".to_string()")
+                if args[1].endswith(".to_string()")
+                else f"&{args[1]}"
+            )
             return f"{obj}.replace({arg0}, {arg1})"
         if method == "startswith":
-            arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
+            arg = (
+                args[0].removesuffix(".to_string()")
+                if args[0].endswith(".to_string()")
+                else f"&{args[0]}"
+            )
             return f"{obj}.starts_with({arg})"
         if method == "endswith":
-            arg = args[0].removesuffix('.to_string()') if args[0].endswith('.to_string()') else f"&{args[0]}"
+            arg = (
+                args[0].removesuffix(".to_string()")
+                if args[0].endswith(".to_string()")
+                else f"&{args[0]}"
+            )
             return f"{obj}.ends_with({arg})"
         if method == "isdigit":
             return f"{obj}.chars().all(|c| c.is_ascii_digit())"
@@ -1894,7 +2017,44 @@ class RustEmitter:
             return f"{obj}.iter()"
 
         # Escape Rust keywords used as method names
-        rust_keywords = {"use", "type", "impl", "trait", "mod", "pub", "fn", "let", "mut", "ref", "move", "self", "super", "crate", "as", "break", "continue", "else", "for", "if", "in", "loop", "match", "return", "while", "async", "await", "dyn", "struct", "enum", "union", "const", "static", "extern", "unsafe", "where"}
+        rust_keywords = {
+            "use",
+            "type",
+            "impl",
+            "trait",
+            "mod",
+            "pub",
+            "fn",
+            "let",
+            "mut",
+            "ref",
+            "move",
+            "self",
+            "super",
+            "crate",
+            "as",
+            "break",
+            "continue",
+            "else",
+            "for",
+            "if",
+            "in",
+            "loop",
+            "match",
+            "return",
+            "while",
+            "async",
+            "await",
+            "dyn",
+            "struct",
+            "enum",
+            "union",
+            "const",
+            "static",
+            "extern",
+            "unsafe",
+            "where",
+        }
         method_name = f"r#{method}" if method in rust_keywords else method
 
         call_expr = f"{obj}.{method_name}({', '.join(args)})"

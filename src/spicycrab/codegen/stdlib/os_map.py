@@ -2,24 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
-
-
-@dataclass
-class StdlibMapping:
-    """A mapping from Python stdlib to Rust."""
-
-    python_module: str
-    python_func: str
-    rust_code: str  # Template with {args} placeholder
-    rust_imports: list[str]
-    needs_result: bool = False  # Whether it returns Result
-    param_types: list[str] | None = None  # Rust types for params (for char/&str handling)
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # os module mappings
 OS_MAPPINGS: dict[str, StdlibMapping] = {
@@ -40,7 +23,10 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
     "os.listdir": StdlibMapping(
         python_module="os",
         python_func="listdir",
-        rust_code="std::fs::read_dir({args}).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>()",
+        rust_code=(
+            "std::fs::read_dir({args}).unwrap()"
+            ".map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect::<Vec<_>>()"
+        ),
         rust_imports=["std::fs"],
         needs_result=True,
     ),
@@ -106,13 +92,19 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
     "os.path.basename": StdlibMapping(
         python_module="os.path",
         python_func="basename",
-        rust_code="std::path::Path::new(&{args}).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()",
+        rust_code=(
+            "std::path::Path::new(&{args}).file_name()"
+            ".map(|s| s.to_string_lossy().to_string()).unwrap_or_default()"
+        ),
         rust_imports=[],  # Using full path, no import needed
     ),
     "os.path.dirname": StdlibMapping(
         python_module="os.path",
         python_func="dirname",
-        rust_code="std::path::Path::new(&{args}).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()",
+        rust_code=(
+            "std::path::Path::new(&{args}).parent()"
+            ".map(|p| p.to_string_lossy().to_string()).unwrap_or_default()"
+        ),
         rust_imports=[],  # Using full path, no import needed
     ),
     "os.getenv": StdlibMapping(
@@ -212,7 +204,7 @@ PATHLIB_MAPPINGS: dict[str, StdlibMapping] = {
     "Path.suffix": StdlibMapping(
         python_module="pathlib",
         python_func="suffix",
-        rust_code="{self}.extension().map(|s| format!(\".\", s.to_string_lossy())).unwrap_or_default()",
+        rust_code='{self}.extension().map(|s| format!(".", s.to_string_lossy())).unwrap_or_default()',
         rust_imports=[],
     ),
     "Path.joinpath": StdlibMapping(
@@ -259,7 +251,7 @@ SYS_MAPPINGS: dict[str, StdlibMapping] = {
     "sys.version": StdlibMapping(
         python_module="sys",
         python_func="version",
-        rust_code="\"Rust\"",  # No direct equivalent
+        rust_code='"Rust"',  # No direct equivalent
         rust_imports=[],
     ),
     "sys.path": StdlibMapping(

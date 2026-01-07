@@ -137,6 +137,7 @@ class TypeResolver:
         if name in self.stub_imports:
             # Import here to avoid circular import
             from spicycrab.codegen.stub_discovery import get_stub_type_mapping
+
             stub_rust_type = get_stub_type_mapping(name)
             if stub_rust_type:
                 # For anyhow::Result, only use the first type arg (T), not the error type
@@ -165,14 +166,16 @@ class TypeResolver:
         """
         # Check if this is Option (Union with None)
         none_count = sum(
-            1 for v in ir_type.variants
+            1
+            for v in ir_type.variants
             if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE
         )
 
         if none_count == 1 and len(ir_type.variants) == 2:
             # This is Optional[T]
             other = next(
-                v for v in ir_type.variants
+                v
+                for v in ir_type.variants
                 if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)
             )
             inner = self.resolve(other)
@@ -223,6 +226,7 @@ class TypeResolver:
         if name in self.stub_imports:
             # Import here to avoid circular import
             from spicycrab.codegen.stub_discovery import get_stub_type_mapping
+
             stub_rust_type = get_stub_type_mapping(name)
             if stub_rust_type:
                 return RustType(name=stub_rust_type)

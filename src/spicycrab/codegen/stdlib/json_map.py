@@ -2,20 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass
-class StdlibMapping:
-    """A mapping from Python stdlib to Rust."""
-
-    python_module: str
-    python_func: str
-    rust_code: str
-    rust_imports: list[str]
-    cargo_deps: list[str] | None = None
-    needs_result: bool = False
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # json module mappings
 JSON_MAPPINGS: dict[str, StdlibMapping] = {
@@ -24,7 +11,7 @@ JSON_MAPPINGS: dict[str, StdlibMapping] = {
         python_func="loads",
         rust_code="serde_json::from_str({args}).unwrap()",
         rust_imports=["serde_json"],
-        cargo_deps=["serde_json = \"1.0\""],
+        cargo_deps=['serde_json = "1.0"'],
         needs_result=True,
     ),
     "json.dumps": StdlibMapping(
@@ -32,7 +19,7 @@ JSON_MAPPINGS: dict[str, StdlibMapping] = {
         python_func="dumps",
         rust_code="serde_json::to_string({args}).unwrap()",
         rust_imports=["serde_json"],
-        cargo_deps=["serde_json = \"1.0\""],
+        cargo_deps=['serde_json = "1.0"'],
         needs_result=True,
     ),
     "json.load": StdlibMapping(
@@ -40,7 +27,7 @@ JSON_MAPPINGS: dict[str, StdlibMapping] = {
         python_func="load",
         rust_code="serde_json::from_reader({args}).unwrap()",
         rust_imports=["serde_json"],
-        cargo_deps=["serde_json = \"1.0\""],
+        cargo_deps=['serde_json = "1.0"'],
         needs_result=True,
     ),
     "json.dump": StdlibMapping(
@@ -48,7 +35,7 @@ JSON_MAPPINGS: dict[str, StdlibMapping] = {
         python_func="dump",
         rust_code="serde_json::to_writer({arg1}, {arg0}).unwrap()",
         rust_imports=["serde_json"],
-        cargo_deps=["serde_json = \"1.0\""],
+        cargo_deps=['serde_json = "1.0"'],
         needs_result=True,
     ),
 }
@@ -59,7 +46,7 @@ JSON_MAPPINGS["json.dumps_indent"] = StdlibMapping(
     python_func="dumps",
     rust_code="serde_json::to_string_pretty({args}).unwrap()",
     rust_imports=["serde_json"],
-    cargo_deps=["serde_json = \"1.0\""],
+    cargo_deps=['serde_json = "1.0"'],
     needs_result=True,
 )
 

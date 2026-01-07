@@ -6,7 +6,7 @@ Generates a Cargo.toml file for the transpiled Rust project.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from spicycrab.codegen.stub_discovery import get_stub_cargo_deps
 

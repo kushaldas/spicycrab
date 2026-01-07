@@ -10,10 +10,10 @@ from pathlib import Path
 import click
 
 from spicycrab import __version__
-from spicycrab.analyzer.type_resolver import TypeResolver, resolve_types
+from spicycrab.analyzer.type_resolver import resolve_types
 from spicycrab.codegen.cargo import generate_cargo_toml, generate_main_rs
-from spicycrab.codegen.emitter import RustEmitter, emit_module
-from spicycrab.parser import parse_file, parse_source
+from spicycrab.codegen.emitter import RustEmitter
+from spicycrab.parser import parse_file
 from spicycrab.utils.errors import CrabpyError
 
 
@@ -33,18 +33,21 @@ def main(ctx: click.Context, version: bool) -> None:
 @main.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.option(
-    "--output", "-o",
+    "--output",
+    "-o",
     type=click.Path(),
     default="./rusty",
     help="Output directory for the Rust project (default: ./rusty).",
 )
 @click.option(
-    "--check", "-c",
+    "--check",
+    "-c",
     is_flag=True,
     help="Only check if the input can be parsed, don't generate output.",
 )
 @click.option(
-    "--verbose", "-v",
+    "--verbose",
+    "-v",
     is_flag=True,
     help="Enable verbose output.",
 )
@@ -54,7 +57,8 @@ def main(ctx: click.Context, version: bool) -> None:
     help="Run rustfmt on generated code (default: enabled).",
 )
 @click.option(
-    "--name", "-n",
+    "--name",
+    "-n",
     type=str,
     default=None,
     help="Project name (default: derived from input file/directory name).",
@@ -165,10 +169,12 @@ def _transpile_file(
     if format_code:
         _run_rustfmt(output_dir, verbose)
 
-    click.echo(click.style(
-        f"✓ Transpiled {input_path} to {output_dir}",
-        fg="green",
-    ))
+    click.echo(
+        click.style(
+            f"✓ Transpiled {input_path} to {output_dir}",
+            fg="green",
+        )
+    )
 
 
 def _transpile_directory(
@@ -184,10 +190,9 @@ def _transpile_directory(
 
     # Filter out __pycache__ and hidden directories
     py_files = [
-        f for f in py_files
-        if "__pycache__" not in str(f) and not any(
-            part.startswith(".") for part in f.parts
-        )
+        f
+        for f in py_files
+        if "__pycache__" not in str(f) and not any(part.startswith(".") for part in f.parts)
     ]
 
     if not py_files:
@@ -229,7 +234,6 @@ def _transpile_directory(
     # Parse all modules and collect IR
     modules = []
     module_names = []
-    has_main = False
 
     for py_file in py_files:
         try:
@@ -242,10 +246,6 @@ def _transpile_directory(
             module_name = py_file.stem.replace("-", "_")
             if module_name != "__init__":
                 module_names.append(module_name)
-
-            # Check if any module has main
-            if any(f.name == "main" for f in ir_module.functions):
-                has_main = True
 
         except CrabpyError as e:
             click.echo(click.style(f"Error in {py_file}: {e}", fg="red"), err=True)
@@ -310,10 +310,12 @@ def _transpile_directory(
     if format_code:
         _run_rustfmt(output_dir, verbose)
 
-    click.echo(click.style(
-        f"✓ Transpiled {len(modules)} file(s) to {output_dir}",
-        fg="green",
-    ))
+    click.echo(
+        click.style(
+            f"✓ Transpiled {len(modules)} file(s) to {output_dir}",
+            fg="green",
+        )
+    )
 
 
 def _run_rustfmt(output_dir: Path, verbose: bool) -> None:
@@ -338,16 +340,19 @@ def _run_rustfmt(output_dir: Path, verbose: bool) -> None:
                 click.echo(f"  Formatted {rs_file}")
         except subprocess.CalledProcessError as e:
             if verbose:
-                click.echo(click.style(
-                    f"  Warning: rustfmt failed on {rs_file}: {e.stderr.decode()}",
-                    fg="yellow",
-                ))
+                click.echo(
+                    click.style(
+                        f"  Warning: rustfmt failed on {rs_file}: {e.stderr.decode()}",
+                        fg="yellow",
+                    )
+                )
 
 
 @main.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.option(
-    "--verbose", "-v",
+    "--verbose",
+    "-v",
     is_flag=True,
     help="Show detailed AST information.",
 )
@@ -394,7 +399,7 @@ def parse(input_path: str, verbose: bool) -> None:
             click.echo(f"      Fields: {len(cls.fields)}")
             click.echo(f"      Methods: {len(cls.methods)}")
             if cls.has_enter and cls.has_exit:
-                click.echo(f"      Context manager: yes")
+                click.echo("      Context manager: yes")
 
 
 def _format_type(ir_type: object) -> str:

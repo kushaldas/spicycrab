@@ -125,9 +125,7 @@ class TypeParser:
             line=line,
         )
 
-    def _parse_name(
-        self, type_name: str, name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_name(self, type_name: str, name: str | None, line: int | None) -> IRType:
         """Parse a simple type name."""
         # Check if it's a primitive
         if type_name in PRIMITIVE_TYPE_MAP:
@@ -145,9 +143,7 @@ class TypeParser:
         # Assume it's a class type
         return IRClassType(name=type_name)
 
-    def _parse_subscript(
-        self, node: ast.Subscript, name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_subscript(self, node: ast.Subscript, name: str | None, line: int | None) -> IRType:
         """Parse a subscripted type like List[int] or Dict[str, int]."""
         # Get the base type name
         if isinstance(node.value, ast.Name):
@@ -199,9 +195,7 @@ class TypeParser:
         else:
             return [self.parse(slice_node, name)]
 
-    def _parse_attribute(
-        self, node: ast.Attribute, name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_attribute(self, node: ast.Attribute, name: str | None, line: int | None) -> IRType:
         """Parse a dotted type name like typing.List."""
         # Get the full dotted name
         parts = []
@@ -218,12 +212,9 @@ class TypeParser:
             return self._parse_name(parts[1], name, line)
 
         # Otherwise treat as class from module
-        full_name = ".".join(parts)
         return IRClassType(name=parts[-1], module=".".join(parts[:-1]))
 
-    def _parse_union(
-        self, elements: list[ast.expr], name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_union(self, elements: list[ast.expr], name: str | None, line: int | None) -> IRType:
         """Parse a union type (X | Y syntax or Union[X, Y])."""
         variants: list[IRType] = []
 
@@ -239,8 +230,14 @@ class TypeParser:
                 variants.append(self.parse(elt, name))
 
         # Check if this is actually Optional (Union with None)
-        none_types = [v for v in variants if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE]
-        other_types = [v for v in variants if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)]
+        none_types = [
+            v for v in variants if isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE
+        ]
+        other_types = [
+            v
+            for v in variants
+            if not (isinstance(v, IRPrimitiveType) and v.kind == PrimitiveType.NONE)
+        ]
 
         if len(none_types) == 1 and len(other_types) == 1:
             # This is Optional[X]

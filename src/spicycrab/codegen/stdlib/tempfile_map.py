@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from spicycrab.codegen.stdlib.os_map import StdlibMapping
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # tempfile module mappings
 TEMPFILE_MAPPINGS: dict[str, StdlibMapping] = {
@@ -20,7 +19,10 @@ TEMPFILE_MAPPINGS: dict[str, StdlibMapping] = {
     "tempfile.mkdtemp": StdlibMapping(
         python_module="tempfile",
         python_func="mkdtemp",
-        rust_code="{ let d = tempfile::tempdir().unwrap(); let p = d.path().to_string_lossy().to_string(); let _ = d.keep(); p }",
+        rust_code=(
+            "{ let d = tempfile::tempdir().unwrap(); "
+            "let p = d.path().to_string_lossy().to_string(); let _ = d.keep(); p }"
+        ),
         rust_imports=[],
         needs_result=False,
     ),
@@ -29,7 +31,10 @@ TEMPFILE_MAPPINGS: dict[str, StdlibMapping] = {
     "tempfile.mkstemp": StdlibMapping(
         python_module="tempfile",
         python_func="mkstemp",
-        rust_code="{ let f = tempfile::NamedTempFile::new().unwrap(); let p = f.path().to_string_lossy().to_string(); std::mem::forget(f); p }",
+        rust_code=(
+            "{ let f = tempfile::NamedTempFile::new().unwrap(); "
+            "let p = f.path().to_string_lossy().to_string(); std::mem::forget(f); p }"
+        ),
         rust_imports=[],
         needs_result=False,
     ),

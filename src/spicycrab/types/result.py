@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
     from spicycrab.types.option import Option, Some
 
 from spicycrab.types.error import Error
@@ -150,6 +151,7 @@ class Result(Generic[T, E]):
     def ok(res: Result[T, E] | Ok[T] | Err[E]) -> Option[T] | Some[T] | None:
         """Convert to Option, discarding error."""
         from spicycrab.types.option import Some
+
         if isinstance(res, Ok):
             return Some(res.value)
         return None
@@ -158,6 +160,7 @@ class Result(Generic[T, E]):
     def err(res: Result[T, E] | Ok[T] | Err[E]) -> Option[E] | Some[E] | None:
         """Convert to Option of error, discarding success."""
         from spicycrab.types.option import Some
+
         if isinstance(res, Err):
             return Some(res.error)
         return None
@@ -222,7 +225,9 @@ class Result(Generic[T, E]):
     # =========================================================================
 
     @staticmethod
-    def map(res: Result[T, E] | Ok[T] | Err[E], f: Callable[[T], U]) -> Result[U, E] | Ok[U] | Err[E]:
+    def map(
+        res: Result[T, E] | Ok[T] | Err[E], f: Callable[[T], U]
+    ) -> Result[U, E] | Ok[U] | Err[E]:
         """Map Result<T, E> to Result<U, E> by applying f to Ok value."""
         if isinstance(res, Ok):
             return Ok(f(res.value))
@@ -249,21 +254,27 @@ class Result(Generic[T, E]):
         raise RuntimeError("invalid Result state")
 
     @staticmethod
-    def map_err(res: Result[T, E] | Ok[T] | Err[E], f: Callable[[E], F]) -> Result[T, F] | Ok[T] | Err[F]:
+    def map_err(
+        res: Result[T, E] | Ok[T] | Err[E], f: Callable[[E], F]
+    ) -> Result[T, F] | Ok[T] | Err[F]:
         """Map Result<T, E> to Result<T, F> by applying f to Err value."""
         if isinstance(res, Err):
             return Err(f(res.error))
         return res  # type: ignore
 
     @staticmethod
-    def inspect(res: Result[T, E] | Ok[T] | Err[E], f: Callable[[T], None]) -> Result[T, E] | Ok[T] | Err[E]:
+    def inspect(
+        res: Result[T, E] | Ok[T] | Err[E], f: Callable[[T], None]
+    ) -> Result[T, E] | Ok[T] | Err[E]:
         """Call f on Ok value (if Ok), return original Result."""
         if isinstance(res, Ok):
             f(res.value)
         return res
 
     @staticmethod
-    def inspect_err(res: Result[T, E] | Ok[T] | Err[E], f: Callable[[E], None]) -> Result[T, E] | Ok[T] | Err[E]:
+    def inspect_err(
+        res: Result[T, E] | Ok[T] | Err[E], f: Callable[[E], None]
+    ) -> Result[T, E] | Ok[T] | Err[E]:
         """Call f on Err value (if Err), return original Result."""
         if isinstance(res, Err):
             f(res.error)
@@ -274,7 +285,9 @@ class Result(Generic[T, E]):
     # =========================================================================
 
     @staticmethod
-    def and_(res: Result[T, E] | Ok[T] | Err[E], resb: Result[U, E] | Ok[U] | Err[E]) -> Result[U, E] | Ok[U] | Err[E]:
+    def and_(
+        res: Result[T, E] | Ok[T] | Err[E], resb: Result[U, E] | Ok[U] | Err[E]
+    ) -> Result[U, E] | Ok[U] | Err[E]:
         """Return resb if res is Ok, otherwise return the Err of res."""
         if isinstance(res, Ok):
             return resb
@@ -291,7 +304,9 @@ class Result(Generic[T, E]):
         return res  # type: ignore
 
     @staticmethod
-    def or_(res: Result[T, E] | Ok[T] | Err[E], resb: Result[T, F] | Ok[T] | Err[F]) -> Result[T, F] | Ok[T] | Err[F]:
+    def or_(
+        res: Result[T, E] | Ok[T] | Err[E], resb: Result[T, F] | Ok[T] | Err[F]
+    ) -> Result[T, F] | Ok[T] | Err[F]:
         """Return res if Ok, otherwise return resb."""
         if isinstance(res, Ok):
             return res  # type: ignore
@@ -319,6 +334,7 @@ class Result(Generic[T, E]):
     ) -> Option[Result[T, E]] | Some[Result[T, E]] | None:
         """Transpose Result of Option to Option of Result."""
         from spicycrab.types.option import Some
+
         if isinstance(res, Ok):
             inner = res.value
             if inner is None:

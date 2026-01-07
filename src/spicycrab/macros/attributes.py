@@ -23,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # =============================================================================
 # Base Attribute Classes
 # =============================================================================
@@ -45,15 +44,16 @@ class RustAttribute:
             return f"#[{self.name}]"
 
         if isinstance(self.args, str):
-            return f'#[{self.name}({self.args})]'
+            return f"#[{self.name}({self.args})]"
 
         if isinstance(self.args, list):
             args_str = ", ".join(str(a) for a in self.args)
             return f"#[{self.name}({args_str})]"
 
         if isinstance(self.args, dict):
-            args_str = ", ".join(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}"
-                                  for k, v in self.args.items())
+            args_str = ", ".join(
+                f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}" for k, v in self.args.items()
+            )
             return f"#[{self.name}({args_str})]"
 
         return f"#[{self.name}]"
@@ -187,7 +187,7 @@ class CfgAttr(RustAttribute):
     attributes: str = ""
 
     def __post_init__(self) -> None:
-        self.args = f'{self.condition}, {self.attributes}'
+        self.args = f"{self.condition}, {self.attributes}"
 
 
 # =============================================================================

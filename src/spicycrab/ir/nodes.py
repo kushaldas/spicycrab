@@ -35,12 +35,12 @@ class IRVisitor(ABC):
 class PrimitiveType(Enum):
     """Primitive types that map directly to Rust."""
 
-    INT = auto()       # i64
-    FLOAT = auto()     # f64
-    BOOL = auto()      # bool
-    STR = auto()       # String
-    BYTES = auto()     # Vec<u8>
-    NONE = auto()      # ()
+    INT = auto()  # i64
+    FLOAT = auto()  # f64
+    BOOL = auto()  # bool
+    STR = auto()  # String
+    BYTES = auto()  # Vec<u8>
+    NONE = auto()  # ()
 
 
 @dataclass
@@ -416,7 +416,7 @@ class IRParameter:
     name: str
     type: IRType
     default: IRExpression | None = None
-    is_args: bool = False   # *args
+    is_args: bool = False  # *args
     is_kwargs: bool = False  # **kwargs
 
 

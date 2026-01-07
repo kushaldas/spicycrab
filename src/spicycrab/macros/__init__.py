@@ -21,37 +21,37 @@ Usage:
         return x * 2
 """
 
-from spicycrab.macros.decorator import rust, derive
-from spicycrab.macros.traits import (
-    # Standard derive traits
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    # Serde derives
-    Serialize,
-    Deserialize,
-)
 from spicycrab.macros.attributes import (
-    # Representation
-    Repr,
     # Common attributes
     Allow,
-    Deny,
-    Warn,
     Cfg,
     CfgAttr,
+    Cold,
+    Deny,
     # Function attributes
     Inline,
-    Cold,
     MustUse,
+    # Representation
+    Repr,
+    Warn,
     # Custom attribute builder
     attr,
+)
+from spicycrab.macros.decorator import derive, rust
+from spicycrab.macros.traits import (
+    Clone,
+    Copy,
+    # Standard derive traits
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    # Serde derives
+    Serialize,
 )
 
 __all__ = [
