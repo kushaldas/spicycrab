@@ -1105,6 +1105,157 @@ seeded. The transpiler emits a comment noting this limitation:
 For reproducible random sequences in Rust, you would need to use ``StdRng`` instead
 of ``thread_rng()``, which requires manual code modification after transpilation.
 
+logging
+-------
+
+The ``logging`` module is mapped to Rust's `log <https://docs.rs/log>`_ crate
+with `env_logger <https://docs.rs/env_logger>`_ for initialization.
+
+.. note::
+
+   In Rust, logging levels are controlled via the ``RUST_LOG`` environment variable.
+   For example, ``RUST_LOG=debug ./my_program`` enables debug logging.
+
+Basic Logging
+^^^^^^^^^^^^^
+
+The logging functions map directly to Rust's ``log`` macros:
+
+.. code-block:: python
+
+   import logging
+
+   def example() -> None:
+       logging.debug("Debug message")
+       logging.info("Info message")
+       logging.warning("Warning message")
+       logging.error("Error message")
+       logging.critical("Critical message")
+
+.. code-block:: rust
+
+   pub fn example() {
+       log::debug!("{}", "Debug message");
+       log::info!("{}", "Info message");
+       log::warn!("{}", "Warning message");
+       log::error!("{}", "Error message");
+       log::error!("{}", "Critical message");  // No critical level in Rust
+   }
+
+Logger Initialization
+^^^^^^^^^^^^^^^^^^^^^
+
+Use ``logging.basicConfig()`` to initialize the logger:
+
+.. code-block:: python
+
+   import logging
+
+   def main() -> None:
+       logging.basicConfig()
+       logging.info("Application started")
+
+.. code-block:: rust
+
+   pub fn main() {
+       env_logger::init();
+       log::info!("{}", "Application started");
+   }
+
+.. warning::
+
+   Unlike Python's ``basicConfig()``, Rust's ``env_logger::init()`` can only be
+   called once. Multiple calls will panic. Ensure initialization happens at program
+   start, typically in ``main()``.
+
+Format String Logging
+^^^^^^^^^^^^^^^^^^^^^
+
+Python format strings are converted to Rust format strings:
+
+.. code-block:: python
+
+   import logging
+
+   def log_user(name: str, age: int) -> None:
+       logging.info(f"User {name} is {age} years old")
+
+.. code-block:: rust
+
+   pub fn log_user(name: String, age: i64) {
+       log::info!("{}", format!("User {} is {} years old", name, age));
+   }
+
+Logging Levels
+^^^^^^^^^^^^^^
+
+Python logging levels map to Rust's ``log::LevelFilter``:
+
++------------------------+-----------------------------+
+| Python                 | Rust                        |
++========================+=============================+
+| ``logging.DEBUG``      | ``log::LevelFilter::Debug`` |
++------------------------+-----------------------------+
+| ``logging.INFO``       | ``log::LevelFilter::Info``  |
++------------------------+-----------------------------+
+| ``logging.WARNING``    | ``log::LevelFilter::Warn``  |
++------------------------+-----------------------------+
+| ``logging.ERROR``      | ``log::LevelFilter::Error`` |
++------------------------+-----------------------------+
+| ``logging.CRITICAL``   | ``log::LevelFilter::Error`` |
++------------------------+-----------------------------+
+
+.. note::
+
+   Rust's ``log`` crate does not have a ``CRITICAL`` level. Both ``logging.critical()``
+   and ``logging.CRITICAL`` map to ``log::error!`` / ``log::LevelFilter::Error``.
+
+Supported logging functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++----------------------------+-------------------------------+
+| Python                     | Rust                          |
++============================+===============================+
+| ``logging.debug(msg)``     | ``log::debug!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.info(msg)``      | ``log::info!("{}", msg)``     |
++----------------------------+-------------------------------+
+| ``logging.warning(msg)``   | ``log::warn!("{}", msg)``     |
++----------------------------+-------------------------------+
+| ``logging.warn(msg)``      | ``log::warn!("{}", msg)``     |
++----------------------------+-------------------------------+
+| ``logging.error(msg)``     | ``log::error!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.critical(msg)``  | ``log::error!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.exception(msg)`` | ``log::error!("{}", msg)``    |
++----------------------------+-------------------------------+
+| ``logging.basicConfig()``  | ``env_logger::init()``        |
++----------------------------+-------------------------------+
+
+Known Limitations
+^^^^^^^^^^^^^^^^^
+
+**Logger Configuration**
+
+Python's ``logging`` module provides extensive configuration options through
+``basicConfig()`` (format, level, handlers, etc.). In Rust, ``env_logger``
+configuration is done via environment variables or builder pattern. The transpiler
+uses simple ``env_logger::init()`` which respects the ``RUST_LOG`` environment
+variable.
+
+**Named Loggers**
+
+Python supports named loggers with ``logging.getLogger("name")``. Rust's ``log``
+crate uses module paths as logger names automatically. Named logger creation is
+not currently transpiled.
+
+**Custom Handlers**
+
+Python's ``logging.FileHandler``, ``StreamHandler``, etc. are not supported.
+In Rust, these would require using ``env_logger``'s builder pattern or other
+logging backends like ``fern`` or ``tracing``.
+
 Generated Dependencies
 ----------------------
 
@@ -1115,8 +1266,10 @@ When using stdlib features, spicycrab adds appropriate dependencies to Cargo.tom
    [dependencies]
    serde = { version = "1.0", features = ["derive"] }
    serde_json = "1.0"
-   chrono = "0.4"  # Added when using datetime module
-   rand = "0.8"    # Added when using random module
+   chrono = "0.4"      # Added when using datetime module
+   rand = "0.8"        # Added when using random module
+   log = "0.4"         # Added when using logging module
+   env_logger = "0.11" # Added when using logging module
 
 Standard imports are also added:
 

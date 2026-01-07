@@ -321,8 +321,10 @@ class RustEmitter:
         # Get unique crate names from stub_imports
         stub_crates = set(self.ctx.stub_imports.values())
         for crate_name in stub_crates:
-            # For anyhow, we need anyhow::anyhow! macro, so just use the crate
-            imports.add(f"use {crate_name};")
+            # Only add bare crate import for anyhow (needed for anyhow! macro)
+            # Other crates use fully qualified paths so bare import is redundant
+            if crate_name == "anyhow":
+                imports.add(f"use {crate_name};")
 
         # Filter out redundant imports for stub crates
         # If we have "use clap;", we don't need "use clap::Arg;" since we use full paths
