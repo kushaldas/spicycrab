@@ -1,16 +1,16 @@
 """Integration tests that compile and run generated Rust code."""
 
+import shutil
 import subprocess
 import tempfile
-import shutil
 from pathlib import Path
 
 import pytest
 
-from spicycrab.parser import parse_file
 from spicycrab.analyzer.type_resolver import resolve_types
-from spicycrab.codegen.emitter import RustEmitter
 from spicycrab.codegen.cargo import generate_cargo_toml
+from spicycrab.codegen.emitter import RustEmitter
+from spicycrab.parser import parse_file
 
 
 def transpile_and_run(python_code: str, expected_output: str | list[str]) -> None:
