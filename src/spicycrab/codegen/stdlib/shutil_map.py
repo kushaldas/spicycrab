@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from spicycrab.codegen.stdlib.os_map import StdlibMapping
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # shutil module mappings
 SHUTIL_MAPPINGS: dict[str, StdlibMapping] = {
@@ -60,7 +59,7 @@ SHUTIL_MAPPINGS: dict[str, StdlibMapping] = {
     "shutil.disk_usage": StdlibMapping(
         python_module="shutil",
         python_func="disk_usage",
-        rust_code='{{ let m = std::fs::metadata(&{args}).unwrap(); (m.len(), 0u64, 0u64) }}',
+        rust_code="{{ let m = std::fs::metadata(&{args}).unwrap(); (m.len(), 0u64, 0u64) }}",
         rust_imports=[],
         needs_result=False,
     ),

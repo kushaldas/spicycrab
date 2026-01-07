@@ -125,9 +125,7 @@ class TypeParser:
             line=line,
         )
 
-    def _parse_name(
-        self, type_name: str, name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_name(self, type_name: str, name: str | None, line: int | None) -> IRType:
         """Parse a simple type name."""
         # Check if it's a primitive
         if type_name in PRIMITIVE_TYPE_MAP:
@@ -145,9 +143,7 @@ class TypeParser:
         # Assume it's a class type
         return IRClassType(name=type_name)
 
-    def _parse_subscript(
-        self, node: ast.Subscript, name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_subscript(self, node: ast.Subscript, name: str | None, line: int | None) -> IRType:
         """Parse a subscripted type like List[int] or Dict[str, int]."""
         # Get the base type name
         if isinstance(node.value, ast.Name):
@@ -190,18 +186,14 @@ class TypeParser:
         # User-defined generic class
         return IRClassType(name=base_name)
 
-    def _parse_type_args(
-        self, slice_node: ast.expr, name: str | None, line: int | None
-    ) -> list[IRType]:
+    def _parse_type_args(self, slice_node: ast.expr, name: str | None, line: int | None) -> list[IRType]:
         """Parse type arguments from a subscript slice."""
         if isinstance(slice_node, ast.Tuple):
             return [self.parse(elt, name) for elt in slice_node.elts]
         else:
             return [self.parse(slice_node, name)]
 
-    def _parse_attribute(
-        self, node: ast.Attribute, name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_attribute(self, node: ast.Attribute, name: str | None, line: int | None) -> IRType:
         """Parse a dotted type name like typing.List."""
         # Get the full dotted name
         parts = []
@@ -218,12 +210,9 @@ class TypeParser:
             return self._parse_name(parts[1], name, line)
 
         # Otherwise treat as class from module
-        full_name = ".".join(parts)
         return IRClassType(name=parts[-1], module=".".join(parts[:-1]))
 
-    def _parse_union(
-        self, elements: list[ast.expr], name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_union(self, elements: list[ast.expr], name: str | None, line: int | None) -> IRType:
         """Parse a union type (X | Y syntax or Union[X, Y])."""
         variants: list[IRType] = []
 
@@ -248,16 +237,12 @@ class TypeParser:
 
         return IRUnionType(variants=variants)
 
-    def _parse_tuple_type(
-        self, elements: list[ast.expr], name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_tuple_type(self, elements: list[ast.expr], name: str | None, line: int | None) -> IRType:
         """Parse a tuple of types (used in Union, Tuple, etc.)."""
         type_args = [self.parse(elt, name) for elt in elements]
         return IRGenericType(name="Tuple", type_args=type_args)
 
-    def _parse_callable(
-        self, type_args: list[IRType], name: str | None, line: int | None
-    ) -> IRType:
+    def _parse_callable(self, type_args: list[IRType], name: str | None, line: int | None) -> IRType:
         """Parse a Callable type annotation."""
         if len(type_args) < 2:
             raise TypeAnnotationError(

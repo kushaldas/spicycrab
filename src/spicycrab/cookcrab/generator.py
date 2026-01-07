@@ -12,19 +12,51 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from jinja2 import Environment, BaseLoader
-
 if TYPE_CHECKING:
-    from spicycrab.cookcrab._parser import RustCrate, RustStruct, RustEnum, RustImpl, RustMethod, RustTypeAlias
+    from spicycrab.cookcrab._parser import (
+        RustCrate,
+        RustMethod,
+        RustTypeAlias,
+    )
 
 
 # Python reserved keywords - methods with these names must be skipped
 PYTHON_RESERVED_KEYWORDS: set[str] = {
-    "False", "None", "True", "and", "as", "assert", "async", "await",
-    "break", "class", "continue", "def", "del", "elif", "else", "except",
-    "finally", "for", "from", "global", "if", "import", "in", "is",
-    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
-    "while", "with", "yield",
+    "False",
+    "None",
+    "True",
+    "and",
+    "as",
+    "assert",
+    "async",
+    "await",
+    "break",
+    "class",
+    "continue",
+    "def",
+    "del",
+    "elif",
+    "else",
+    "except",
+    "finally",
+    "for",
+    "from",
+    "global",
+    "if",
+    "import",
+    "in",
+    "is",
+    "lambda",
+    "nonlocal",
+    "not",
+    "or",
+    "pass",
+    "raise",
+    "return",
+    "try",
+    "while",
+    "with",
+    "yield",
 }
 
 
@@ -162,8 +194,15 @@ def sanitize_rust_type(rust_type: str) -> str:
 
     # Handle Rust-specific std::ops types and other Rust-only types
     rust_only_types = [
-        "Bound<", "RangeFull", "Range<", "RangeInclusive<", "RangeTo<",
-        "RangeFrom<", "RangeToInclusive<", "Formatter<", "Arguments<",
+        "Bound<",
+        "RangeFull",
+        "Range<",
+        "RangeInclusive<",
+        "RangeTo<",
+        "RangeFrom<",
+        "RangeToInclusive<",
+        "Formatter<",
+        "Arguments<",
         "PhantomData<",
     ]
     for rust_only in rust_only_types:
@@ -296,11 +335,11 @@ def rust_type_to_python(rust_type: str) -> str:
                 depth += 1
             elif c == ">":
                 depth -= 1
-            elif rust_type[i:i+2] == "::" and depth == 0:
+            elif rust_type[i : i + 2] == "::" and depth == 0:
                 # Found :: outside brackets, safe to split
                 outside_brackets = True
                 break
-            elif rust_type[i:i+2] == "::" and depth > 0:
+            elif rust_type[i : i + 2] == "::" and depth > 0:
                 # Found :: inside brackets, not safe to split
                 outside_brackets = False
                 break
@@ -314,10 +353,10 @@ def rust_type_to_python(rust_type: str) -> str:
                     depth += 1
                 elif c == ">":
                     depth -= 1
-                elif rust_type[i:i+2] == "::" and depth == 0:
+                elif rust_type[i : i + 2] == "::" and depth == 0:
                     last_sep = i
             if last_sep >= 0:
-                return rust_type[last_sep+2:]
+                return rust_type[last_sep + 2 :]
         else:
             # :: is inside angle brackets (associated type like U::Target)
             # This is too complex to represent in Python, use object
@@ -351,7 +390,7 @@ def rust_type_to_python(rust_type: str) -> str:
     return rust_type
 
 
-def generate_method_signature(method: "RustMethod", type_name: str) -> str:
+def generate_method_signature(method: RustMethod, type_name: str) -> str:
     """Generate Python method signature from Rust method."""
     params = []
 
@@ -380,7 +419,7 @@ def generate_method_signature(method: "RustMethod", type_name: str) -> str:
     return f"def {safe_method_name}({params_str}) -> {ret_type}: ..."
 
 
-def generate_static_method_signature(method: "RustMethod", type_name: str) -> str:
+def generate_static_method_signature(method: RustMethod, type_name: str) -> str:
     """Generate Python static method signature from Rust static method."""
     params = []
 
@@ -405,13 +444,13 @@ def generate_static_method_signature(method: "RustMethod", type_name: str) -> st
     return f"def {safe_method_name}({params_str}) -> {ret_type}: ..."
 
 
-def is_result_type_alias(alias: "RustTypeAlias") -> bool:
+def is_result_type_alias(alias: RustTypeAlias) -> bool:
     """Check if this type alias is a Result type (wraps core::result::Result)."""
     target = alias.target_type.lower()
     return "result" in target and ("core::result" in target or "std::result" in target)
 
 
-def generate_result_class(alias: "RustTypeAlias", crate_name: str) -> list[str]:
+def generate_result_class(alias: RustTypeAlias, crate_name: str) -> list[str]:
     """Generate a Result class for a Result type alias."""
     lines = [
         "",
@@ -419,7 +458,7 @@ def generate_result_class(alias: "RustTypeAlias", crate_name: str) -> list[str]:
         "E = TypeVar('E')",
         "",
         "",
-        f'class {alias.name}(Generic[T, E]):',
+        f"class {alias.name}(Generic[T, E]):",
         f'    """A Result type alias for {crate_name}.',
         "",
         f"    Maps to {crate_name}::{alias.name} which is an alias for {alias.target_type}.",
@@ -438,7 +477,7 @@ def generate_result_class(alias: "RustTypeAlias", crate_name: str) -> list[str]:
     return lines
 
 
-def generate_init_py(crate: "RustCrate", crate_name: str) -> str:
+def generate_init_py(crate: RustCrate, crate_name: str) -> str:
     """Generate __init__.py content for the stub package."""
     # Check if we need Generic/TypeVar for Result type aliases
     has_result_alias = any(is_result_type_alias(a) for a in crate.type_aliases)
@@ -464,7 +503,7 @@ def generate_init_py(crate: "RustCrate", crate_name: str) -> str:
             lines.extend(generate_result_class(alias, crate_name))
 
     # Collect all types and their methods
-    type_methods: dict[str, list["RustMethod"]] = {}
+    type_methods: dict[str, list[RustMethod]] = {}
     for impl in crate.impls:
         if impl.type_name not in type_methods:
             type_methods[impl.type_name] = []
@@ -476,7 +515,7 @@ def generate_init_py(crate: "RustCrate", crate_name: str) -> str:
         all_types.append(struct.name)
         lines.append("")
         if struct.doc:
-            lines.append(f'class {struct.name}:')
+            lines.append(f"class {struct.name}:")
             lines.append(f'    """{struct.doc}"""')
         else:
             lines.append(f"class {struct.name}:")
@@ -499,7 +538,7 @@ def generate_init_py(crate: "RustCrate", crate_name: str) -> str:
         all_types.append(enum.name)
         lines.append("")
         if enum.doc:
-            lines.append(f'class {enum.name}:')
+            lines.append(f"class {enum.name}:")
             lines.append(f'    """{enum.doc}"""')
         else:
             lines.append(f"class {enum.name}:")
@@ -534,9 +573,7 @@ def generate_init_py(crate: "RustCrate", crate_name: str) -> str:
     return "\n".join(lines)
 
 
-def generate_spicycrab_toml(
-    crate: "RustCrate", crate_name: str, version: str, python_module: str
-) -> str:
+def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, python_module: str) -> str:
     """Generate _spicycrab.toml content."""
     lines = [
         "[package]",
@@ -571,7 +608,7 @@ def generate_spicycrab_toml(
             lines.append("")
 
     # Collect all types and their methods
-    type_methods: dict[str, list["RustMethod"]] = {}
+    type_methods: dict[str, list[RustMethod]] = {}
     for impl in crate.impls:
         if impl.type_name not in type_methods:
             type_methods[impl.type_name] = []
@@ -604,9 +641,7 @@ def generate_spicycrab_toml(
                 else:
                     lines.append("[[mappings.functions]]")
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
-                    lines.append(
-                        f'rust_code = "{crate_name}::{struct.name}::{method.name}({args})"'
-                    )
+                    lines.append(f'rust_code = "{crate_name}::{struct.name}::{method.name}({args})"')
                     lines.append(f'rust_imports = ["{crate_name}::{struct.name}"]')
                     lines.append("needs_result = false")
                     if param_types:
@@ -625,9 +660,8 @@ def generate_spicycrab_toml(
                 # Collect param types for type-aware argument transformation
                 param_types = [p.rust_type for p in method.params]
                 param_types_str = ", ".join(f'"{t}"' for t in param_types)
-                returns_self = (
-                    method.return_type
-                    and ("Self" in method.return_type or struct.name in method.return_type)
+                returns_self = method.return_type and (
+                    "Self" in method.return_type or struct.name in method.return_type
                 )
                 lines.append("[[mappings.methods]]")
                 lines.append(f'python = "{struct.name}.{py_method_name}"')
@@ -711,7 +745,10 @@ def generate_reexport_init_py(crate_name: str, source_crates: list[str]) -> str:
 
 
 def generate_reexport_toml(
-    crate_name: str, source_crates: list[str], version: str, python_module: str,
+    crate_name: str,
+    source_crates: list[str],
+    version: str,
+    python_module: str,
     output_dir: Path,
 ) -> str:
     """Generate _spicycrab.toml that copies and rewrites mappings from source crate stubs.
@@ -751,8 +788,8 @@ def generate_reexport_toml(
         in_mapping_block = False
         current_block: list[str] = []
 
-        for line in source_content.split('\n'):
-            if line.startswith('[[mappings.'):
+        for line in source_content.split("\n"):
+            if line.startswith("[[mappings."):
                 if current_block and in_mapping_block:
                     # Process and add the previous block
                     rewritten_block = _rewrite_mapping_block(current_block, source_crate, crate_name)
@@ -761,7 +798,7 @@ def generate_reexport_toml(
                 current_block = [line]
                 in_mapping_block = True
             elif in_mapping_block:
-                if line.startswith('[') and not line.startswith('[['):
+                if line.startswith("[") and not line.startswith("[["):
                     # End of mappings section
                     if current_block:
                         rewritten_block = _rewrite_mapping_block(current_block, source_crate, crate_name)
@@ -786,21 +823,19 @@ def _rewrite_mapping_block(block: list[str], source_crate: str, target_crate: st
     result = []
     for line in block:
         # Rewrite python paths: clap_builder.X -> clap.X
-        if line.startswith('python = '):
+        if line.startswith("python = "):
             line = line.replace(f'"{source_crate}.', f'"{target_crate}.')
         # Rewrite rust_code: clap_builder:: -> clap::
-        elif line.startswith('rust_code = '):
-            line = line.replace(f'{source_crate}::', f'{target_crate}::')
+        elif line.startswith("rust_code = "):
+            line = line.replace(f"{source_crate}::", f"{target_crate}::")
         # Rewrite rust_imports: ["clap_builder::X"] -> ["clap::X"]
-        elif line.startswith('rust_imports = '):
+        elif line.startswith("rust_imports = "):
             line = line.replace(f'"{source_crate}::', f'"{target_crate}::')
         result.append(line)
     return result
 
 
-def generate_reexport_pyproject(
-    crate_name: str, source_crates: list[str], version: str, python_module: str
-) -> str:
+def generate_reexport_pyproject(crate_name: str, source_crates: list[str], version: str, python_module: str) -> str:
     """Generate pyproject.toml with dependencies on source crate stubs."""
     deps = ", ".join(f'"spicycrab-{s}"' for s in source_crates)
     return f'''[build-system]
@@ -810,7 +845,7 @@ build-backend = "hatchling.build"
 [project]
 name = "spicycrab-{crate_name}"
 version = "{version}"
-description = "spicycrab type stubs for the {crate_name} Rust crate (re-exports from {', '.join(source_crates)})"
+description = "spicycrab type stubs for the {crate_name} Rust crate (re-exports from {", ".join(source_crates)})"
 requires-python = ">=3.11"
 dependencies = [{deps}]
 
@@ -857,7 +892,7 @@ def generate_reexport_stub_package(
 
 Python type stubs for the [{crate_name}](https://crates.io/crates/{crate_name}) Rust crate.
 
-This crate re-exports from: {', '.join(source_crates)}
+This crate re-exports from: {", ".join(source_crates)}
 
 **Install with cookcrab, NOT pip:**
 
@@ -874,13 +909,13 @@ from {python_module} import Command, Arg, ...
 ## Dependencies
 
 This package depends on:
-{chr(10).join(f'- spicycrab-{s}' for s in source_crates)}
+{chr(10).join(f"- spicycrab-{s}" for s in source_crates)}
 """
     (output_dir / crate_name / "README.md").write_text(readme)
 
 
 def generate_stub_package(
-    crate: "RustCrate",
+    crate: RustCrate,
     crate_name: str,
     version: str,
     output_dir: Path,

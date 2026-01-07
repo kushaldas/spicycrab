@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from spicycrab.codegen.stdlib.os_map import StdlibMapping
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # subprocess module mappings
 SUBPROCESS_MAPPINGS: dict[str, StdlibMapping] = {
@@ -28,7 +27,10 @@ SUBPROCESS_MAPPINGS: dict[str, StdlibMapping] = {
     "subprocess.check_call": StdlibMapping(
         python_module="subprocess",
         python_func="check_call",
-        rust_code="{{ let s = std::process::Command::new({arg0}).args(&{arg1}).status().unwrap(); if !s.success() {{ panic!(\"Command failed\"); }} s.code().unwrap_or(0) as i64 }}",
+        rust_code=(
+            "{{ let s = std::process::Command::new({arg0}).args(&{arg1}).status().unwrap(); "
+            'if !s.success() {{ panic!("Command failed"); }} s.code().unwrap_or(0) as i64 }}'
+        ),
         rust_imports=[],
         needs_result=False,
     ),
@@ -44,7 +46,7 @@ SUBPROCESS_MAPPINGS: dict[str, StdlibMapping] = {
     "subprocess.getoutput": StdlibMapping(
         python_module="subprocess",
         python_func="getoutput",
-        rust_code="String::from_utf8_lossy(&std::process::Command::new(\"sh\").arg(\"-c\").arg({args}).output().unwrap().stdout).to_string()",
+        rust_code='String::from_utf8_lossy(&std::process::Command::new("sh").arg("-c").arg({args}).output().unwrap().stdout).to_string()',
         rust_imports=[],
         needs_result=False,
     ),
@@ -52,7 +54,10 @@ SUBPROCESS_MAPPINGS: dict[str, StdlibMapping] = {
     "subprocess.getstatusoutput": StdlibMapping(
         python_module="subprocess",
         python_func="getstatusoutput",
-        rust_code="{{ let o = std::process::Command::new(\"sh\").arg(\"-c\").arg({args}).output().unwrap(); (o.status.code().unwrap_or(-1) as i64, String::from_utf8_lossy(&o.stdout).to_string()) }}",
+        rust_code=(
+            '{{ let o = std::process::Command::new("sh").arg("-c").arg({args}).output().unwrap(); '
+            "(o.status.code().unwrap_or(-1) as i64, String::from_utf8_lossy(&o.stdout).to_string()) }}"
+        ),
         rust_imports=[],
         needs_result=False,
     ),

@@ -6,21 +6,23 @@ Result[T, E] can be Ok(value) or Err(error).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
     from spicycrab.types.option import Option, Some
 
 from spicycrab.types.error import Error
 
+# TypeVars for static method signatures (class params only work for instance methods)
 T = TypeVar("T")
 U = TypeVar("U")
 E = TypeVar("E", bound=Error)
 F = TypeVar("F", bound=Error)
 
 
-class Ok(Generic[T]):
+class Ok[T]:
     """Wrapper for the Ok variant of Result.
 
     Used for pattern matching:
@@ -53,7 +55,7 @@ class Ok(Generic[T]):
         return hash(("Ok", self._value))
 
 
-class Err(Generic[E]):
+class Err[E: Error]:
     """Wrapper for the Err variant of Result.
 
     Used for pattern matching:
@@ -86,7 +88,7 @@ class Err(Generic[E]):
         return hash(("Err", self._error))
 
 
-class Result(Generic[T, E]):
+class Result[T, E: Error]:
     """Rust-like Result type for error handling.
 
     Result[T, E] can be:
@@ -150,6 +152,7 @@ class Result(Generic[T, E]):
     def ok(res: Result[T, E] | Ok[T] | Err[E]) -> Option[T] | Some[T] | None:
         """Convert to Option, discarding error."""
         from spicycrab.types.option import Some
+
         if isinstance(res, Ok):
             return Some(res.value)
         return None
@@ -158,6 +161,7 @@ class Result(Generic[T, E]):
     def err(res: Result[T, E] | Ok[T] | Err[E]) -> Option[E] | Some[E] | None:
         """Convert to Option of error, discarding success."""
         from spicycrab.types.option import Some
+
         if isinstance(res, Err):
             return Some(res.error)
         return None
@@ -319,6 +323,7 @@ class Result(Generic[T, E]):
     ) -> Option[Result[T, E]] | Some[Result[T, E]] | None:
         """Transpose Result of Option to Option of Result."""
         from spicycrab.types.option import Some
+
         if isinstance(res, Ok):
             inner = res.value
             if inner is None:

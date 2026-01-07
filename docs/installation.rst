@@ -4,7 +4,7 @@ Installation
 Requirements
 ------------
 
-- Python 3.10 or higher
+- Python 3.14 or higher
 - Rust toolchain (for compiling generated code)
 
 Install from PyPI

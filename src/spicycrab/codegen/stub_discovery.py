@@ -13,7 +13,7 @@ from importlib.metadata import distributions, entry_points
 from importlib.resources import files
 from typing import Any
 
-from spicycrab.codegen.stdlib.os_map import StdlibMapping
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 
 @dataclass

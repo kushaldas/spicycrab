@@ -9,19 +9,20 @@ for pattern matching support.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from spicycrab.types.result import Result
-    from spicycrab.types.error import Error
 
+    from spicycrab.types.result import Result
+
+# TypeVars for static method signatures (class params only work for instance methods)
 T = TypeVar("T")
 U = TypeVar("U")
 E = TypeVar("E")
 
 
-class Some(Generic[T]):
+class Some[T]:
     """Wrapper for the Some variant of Option.
 
     Used for pattern matching:
@@ -54,7 +55,7 @@ class Some(Generic[T]):
         return hash(("Some", self._value))
 
 
-class Option(Generic[T]):
+class Option[T]:
     """Rust-like Option type representing an optional value.
 
     Option[T] can be:
@@ -88,7 +89,7 @@ class Option(Generic[T]):
     @staticmethod
     def is_some(opt: Option[T] | Some[T] | None) -> bool:
         """Return True if the option is Some."""
-        return opt is not None and not (opt is None)
+        return opt is not None and opt is not None
 
     @staticmethod
     def is_some_and(opt: Option[T] | Some[T] | None, f: Callable[[T], bool]) -> bool:
@@ -344,7 +345,8 @@ class Option(Generic[T]):
     @staticmethod
     def ok_or(opt: Option[T] | Some[T] | None, err: E) -> Result[T, E]:
         """Transform Option to Result, mapping Some(v) to Ok(v) and None to Err(err)."""
-        from spicycrab.types.result import Ok, Err
+        from spicycrab.types.result import Err, Ok
+
         if isinstance(opt, Some):
             return Ok(opt.value)
         return Err(err)
@@ -352,7 +354,8 @@ class Option(Generic[T]):
     @staticmethod
     def ok_or_else(opt: Option[T] | Some[T] | None, err: Callable[[], E]) -> Result[T, E]:
         """Transform Option to Result, computing error lazily."""
-        from spicycrab.types.result import Ok, Err
+        from spicycrab.types.result import Err, Ok
+
         if isinstance(opt, Some):
             return Ok(opt.value)
         return Err(err())
@@ -362,7 +365,8 @@ class Option(Generic[T]):
         opt: Option[Result[T, E]] | Some[Result[T, E]] | None,
     ) -> Result[Option[T] | Some[T] | None, E]:
         """Transpose Option of Result to Result of Option."""
-        from spicycrab.types.result import Ok, Err, Result
+        from spicycrab.types.result import Err, Ok
+
         if opt is None:
             return Ok(None)
         if isinstance(opt, Some):
@@ -385,7 +389,9 @@ class Option(Generic[T]):
         return []
 
     @staticmethod
-    def flatten(opt: Option[Option[T]] | Some[Option[T] | Some[T] | None] | None) -> Option[T] | Some[T] | None:
+    def flatten(
+        opt: Option[Option[T]] | Some[Option[T] | Some[T] | None] | None,
+    ) -> Option[T] | Some[T] | None:
         """Flatten nested Option."""
         if isinstance(opt, Some):
             return opt.value

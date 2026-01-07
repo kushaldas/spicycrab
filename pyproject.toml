@@ -7,7 +7,7 @@ name = "spicycrab"
 version = "0.0.1"
 description = "A Python to Rust transpiler for type-annotated Python code"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 license = {text = "MIT"}
 authors = [
     {name = "spicycrab contributors"}
@@ -18,9 +18,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Compilers",
 ]
 dependencies = [
@@ -56,8 +54,8 @@ python-source = "src"
 module-name = "spicycrab.cookcrab._parser"
 
 [tool.ruff]
-line-length = 100
-target-version = "py310"
+line-length = 120
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]

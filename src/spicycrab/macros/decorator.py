@@ -26,12 +26,13 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar, Callable, overload
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from spicycrab.macros.traits import DeriveTrait
     from spicycrab.macros.attributes import RustAttribute
+    from spicycrab.macros.traits import DeriveTrait
 
 T = TypeVar("T", bound=type | Callable[..., Any])
 

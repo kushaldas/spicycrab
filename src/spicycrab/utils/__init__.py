@@ -1,11 +1,11 @@
 """Utility modules for spicycrab."""
 
 from spicycrab.utils.errors import (
+    CodegenError,
     CrabpyError,
     ParseError,
     TypeAnnotationError,
     UnsupportedFeatureError,
-    CodegenError,
 )
 
 __all__ = [

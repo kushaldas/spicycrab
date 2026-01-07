@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from spicycrab.codegen.stdlib.os_map import StdlibMapping
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # random module mappings
 # Note: We don't use `use rand;` because we use fully qualified paths like `rand::random()`
@@ -77,7 +76,10 @@ RANDOM_MAPPINGS: dict[str, StdlibMapping] = {
     "random.gauss": StdlibMapping(
         python_module="random",
         python_func="gauss",
-        rust_code="{{ use rand_distr::{{Distribution, Normal}}; Normal::new({arg0}, {arg1}).unwrap().sample(&mut rand::thread_rng()) }}",
+        rust_code=(
+            "{{ use rand_distr::{{Distribution, Normal}}; "
+            "Normal::new({arg0}, {arg1}).unwrap().sample(&mut rand::thread_rng()) }}"
+        ),
         rust_imports=[],  # Inline use statement in block
         needs_result=False,
     ),

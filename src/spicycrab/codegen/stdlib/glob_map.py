@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from spicycrab.codegen.stdlib.os_map import StdlibMapping
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # glob module mappings
 GLOB_MAPPINGS: dict[str, StdlibMapping] = {
@@ -13,7 +12,10 @@ GLOB_MAPPINGS: dict[str, StdlibMapping] = {
     "glob.glob": StdlibMapping(
         python_module="glob",
         python_func="glob",
-        rust_code="glob::glob(&{args}).unwrap().filter_map(|p| p.ok()).map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>()",
+        rust_code=(
+            "glob::glob(&{args}).unwrap().filter_map(|p| p.ok())"
+            ".map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>()"
+        ),
         rust_imports=[],
         needs_result=False,
     ),
@@ -22,7 +24,10 @@ GLOB_MAPPINGS: dict[str, StdlibMapping] = {
     "glob.iglob": StdlibMapping(
         python_module="glob",
         python_func="iglob",
-        rust_code="glob::glob(&{args}).unwrap().filter_map(|p| p.ok()).map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>()",
+        rust_code=(
+            "glob::glob(&{args}).unwrap().filter_map(|p| p.ok())"
+            ".map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>()"
+        ),
         rust_imports=[],
         needs_result=False,
     ),

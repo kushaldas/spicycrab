@@ -6,7 +6,7 @@ Generates a Cargo.toml file for the transpiled Rust project.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from spicycrab.codegen.stub_discovery import get_stub_cargo_deps
 
@@ -147,9 +147,7 @@ def generate_cargo_toml(
                 version = dep_spec.get("version", "")
                 features = dep_spec.get("features", [])
                 optional = dep_spec.get("optional", False)
-                deps[dep_name] = CargoDependency(
-                    dep_name, version, features=features, optional=optional
-                )
+                deps[dep_name] = CargoDependency(dep_name, version, features=features, optional=optional)
 
     # Dependencies section
     if deps:

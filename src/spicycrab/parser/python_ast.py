@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from spicycrab.ir.nodes import (
     BinaryOp,
@@ -54,9 +53,8 @@ from spicycrab.ir.nodes import (
     PrimitiveType,
     UnaryOp,
 )
-from spicycrab.parser.type_parser import TypeParser, parse_type_annotation
+from spicycrab.parser.type_parser import TypeParser
 from spicycrab.utils.errors import ParseError, TypeAnnotationError, UnsupportedFeatureError
-
 
 # Mapping from Python AST binary operators to IR operators
 BINOP_MAP: dict[type, BinaryOp] = {
@@ -154,9 +152,7 @@ class PythonASTVisitor(ast.NodeVisitor):
         if self.scope_stack:
             self.current_scope = self.scope_stack.pop()
 
-    def _error(
-        self, message: str, node: ast.AST | None = None
-    ) -> ParseError:
+    def _error(self, message: str, node: ast.AST | None = None) -> ParseError:
         """Create a parse error with location info."""
         line = getattr(node, "lineno", None) if node else None
         return ParseError(message, filename=self.filename, line=line)
@@ -166,9 +162,7 @@ class PythonASTVisitor(ast.NodeVisitor):
     ) -> UnsupportedFeatureError:
         """Create an unsupported feature error."""
         line = getattr(node, "lineno", None) if node else None
-        return UnsupportedFeatureError(
-            feature, filename=self.filename, line=line, suggestion=suggestion
-        )
+        return UnsupportedFeatureError(feature, filename=self.filename, line=line, suggestion=suggestion)
 
     def visit_Module(self, node: ast.Module) -> IRModule:
         """Visit a module (top-level file)."""
@@ -273,7 +267,22 @@ class PythonASTVisitor(ast.NodeVisitor):
         reassigned: set[str] = set()  # names that are reassigned or mutated
 
         # Methods that mutate their receiver
-        mutating_methods = {"append", "push", "extend", "insert", "pop", "remove", "clear", "sort", "reverse", "increment", "decrement", "update", "add", "discard"}
+        mutating_methods = {
+            "append",
+            "push",
+            "extend",
+            "insert",
+            "pop",
+            "remove",
+            "clear",
+            "sort",
+            "reverse",
+            "increment",
+            "decrement",
+            "update",
+            "add",
+            "discard",
+        }
 
         def scan_statements(stmts: list[IRStatement]) -> None:
             for stmt in stmts:
@@ -323,9 +332,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             for arg in expr.args:
                 self._check_mutating_call(arg, reassigned, mutating_methods)
 
-    def _parse_parameters(
-        self, args: ast.arguments, func_node: ast.FunctionDef
-    ) -> list[IRParameter]:
+    def _parse_parameters(self, args: ast.arguments, func_node: ast.FunctionDef) -> list[IRParameter]:
         """Parse function parameters with their type annotations."""
         params: list[IRParameter] = []
 
@@ -341,7 +348,7 @@ class PythonASTVisitor(ast.NodeVisitor):
 
             if arg.annotation is None:
                 raise TypeAnnotationError(
-                    f"Missing type annotation for parameter",
+                    "Missing type annotation for parameter",
                     name=arg.arg,
                     filename=self.filename,
                     line=arg.lineno,
@@ -355,19 +362,23 @@ class PythonASTVisitor(ast.NodeVisitor):
             if default_idx >= 0 and default_idx < num_defaults:
                 default = self._visit_expression(args.defaults[default_idx])
 
-            params.append(IRParameter(
-                name=arg.arg,
-                type=param_type,
-                default=default,
-            ))
+            params.append(
+                IRParameter(
+                    name=arg.arg,
+                    type=param_type,
+                    default=default,
+                )
+            )
 
             # Add to scope
-            self.current_scope.define(SymbolInfo(
-                name=arg.arg,
-                type=param_type,
-                is_parameter=True,
-                line=arg.lineno,
-            ))
+            self.current_scope.define(
+                SymbolInfo(
+                    name=arg.arg,
+                    type=param_type,
+                    is_parameter=True,
+                    line=arg.lineno,
+                )
+            )
 
         # *args
         if args.vararg:
@@ -378,11 +389,13 @@ class PythonASTVisitor(ast.NodeVisitor):
                     filename=self.filename,
                     line=args.vararg.lineno,
                 )
-            params.append(IRParameter(
-                name=args.vararg.arg,
-                type=self.type_parser.parse(args.vararg.annotation, args.vararg.arg),
-                is_args=True,
-            ))
+            params.append(
+                IRParameter(
+                    name=args.vararg.arg,
+                    type=self.type_parser.parse(args.vararg.annotation, args.vararg.arg),
+                    is_args=True,
+                )
+            )
 
         # **kwargs
         if args.kwarg:
@@ -393,11 +406,13 @@ class PythonASTVisitor(ast.NodeVisitor):
                     filename=self.filename,
                     line=args.kwarg.lineno,
                 )
-            params.append(IRParameter(
-                name=args.kwarg.arg,
-                type=self.type_parser.parse(args.kwarg.annotation, args.kwarg.arg),
-                is_kwargs=True,
-            ))
+            params.append(
+                IRParameter(
+                    name=args.kwarg.arg,
+                    type=self.type_parser.parse(args.kwarg.annotation, args.kwarg.arg),
+                    is_kwargs=True,
+                )
+            )
 
         return params
 
@@ -501,9 +516,11 @@ class PythonASTVisitor(ast.NodeVisitor):
         for stmt in init_method.body:
             if isinstance(stmt, ast.Assign):
                 for target in stmt.targets:
-                    if (isinstance(target, ast.Attribute) and
-                        isinstance(target.value, ast.Name) and
-                        target.value.id == "self"):
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                    ):
                         field_name = target.attr
                         # Try to get type from corresponding parameter
                         if isinstance(stmt.value, ast.Name) and stmt.value.id in param_types:
@@ -517,9 +534,11 @@ class PythonASTVisitor(ast.NodeVisitor):
 
             # Handle annotated assignment: self.x: Type = value
             elif isinstance(stmt, ast.AnnAssign):
-                if (isinstance(stmt.target, ast.Attribute) and
-                    isinstance(stmt.target.value, ast.Name) and
-                    stmt.target.value.id == "self"):
+                if (
+                    isinstance(stmt.target, ast.Attribute)
+                    and isinstance(stmt.target.value, ast.Name)
+                    and stmt.target.value.id == "self"
+                ):
                     field_name = stmt.target.attr
                     # Use the explicit type annotation
                     field_type = self.type_parser.parse(stmt.annotation, field_name)
@@ -553,15 +572,19 @@ class PythonASTVisitor(ast.NodeVisitor):
             # Check for self.x = ... assignments
             if isinstance(stmt, ast.Assign):
                 for target in stmt.targets:
-                    if (isinstance(target, ast.Attribute) and
-                        isinstance(target.value, ast.Name) and
-                        target.value.id == "self"):
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                    ):
                         return True
             # Check for augmented assignments like self.x += 1
             if isinstance(stmt, ast.AugAssign):
-                if (isinstance(stmt.target, ast.Attribute) and
-                    isinstance(stmt.target.value, ast.Name) and
-                    stmt.target.value.id == "self"):
+                if (
+                    isinstance(stmt.target, ast.Attribute)
+                    and isinstance(stmt.target.value, ast.Name)
+                    and stmt.target.value.id == "self"
+                ):
                     return True
         return False
 
@@ -638,11 +661,13 @@ class PythonASTVisitor(ast.NodeVisitor):
 
         if is_declaration:
             # For untyped assignments, we'll need type inference later
-            self.current_scope.define(SymbolInfo(
-                name=target.id,
-                is_mutable=False,  # Default to immutable, will be fixed by mutability analysis
-                line=node.lineno,
-            ))
+            self.current_scope.define(
+                SymbolInfo(
+                    name=target.id,
+                    is_mutable=False,  # Default to immutable, will be fixed by mutability analysis
+                    line=node.lineno,
+                )
+            )
 
         return IRAssign(
             target=target.id,
@@ -683,12 +708,14 @@ class PythonASTVisitor(ast.NodeVisitor):
             value = self._visit_expression(node.value)
 
         # Define in scope
-        self.current_scope.define(SymbolInfo(
-            name=target_name,
-            type=type_annotation,
-            is_mutable=False,  # Default to immutable
-            line=node.lineno,
-        ))
+        self.current_scope.define(
+            SymbolInfo(
+                name=target_name,
+                type=type_annotation,
+                is_mutable=False,  # Default to immutable
+                line=node.lineno,
+            )
+        )
 
         return IRAssign(
             target=target_name,
@@ -831,11 +858,13 @@ class PythonASTVisitor(ast.NodeVisitor):
                     exc_type = handler.type.attr
 
             handler_body = [self._visit_statement(s) for s in handler.body if self._visit_statement(s)]
-            handlers.append(IRExceptHandler(
-                exc_type=exc_type,
-                name=handler.name,
-                body=[s for s in handler_body if s],
-            ))
+            handlers.append(
+                IRExceptHandler(
+                    exc_type=exc_type,
+                    name=handler.name,
+                    body=[s for s in handler_body if s],
+                )
+            )
 
         finally_body = [self._visit_statement(s) for s in node.finalbody if self._visit_statement(s)]
 
@@ -994,12 +1023,14 @@ class PythonASTVisitor(ast.NodeVisitor):
             if op_type not in CMPOP_MAP:
                 raise self._unsupported(f"comparison operator {op_type.__name__}", node)
             right = self._visit_expression(comparator)
-            comparisons.append(IRBinaryOp(
-                op=CMPOP_MAP[op_type],
-                left=current_left,
-                right=right,
-                line=node.lineno,
-            ))
+            comparisons.append(
+                IRBinaryOp(
+                    op=CMPOP_MAP[op_type],
+                    left=current_left,
+                    right=right,
+                    line=node.lineno,
+                )
+            )
             current_left = right
 
         # Combine with AND

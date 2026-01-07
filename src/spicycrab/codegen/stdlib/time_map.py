@@ -2,23 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
-
-
-@dataclass
-class StdlibMapping:
-    """A mapping from Python stdlib to Rust."""
-
-    python_module: str
-    python_func: str
-    rust_code: str  # Template with {args} placeholder
-    rust_imports: list[str]
-    needs_result: bool = False  # Whether it returns Result
-
+from spicycrab.codegen.stdlib.types import StdlibMapping
 
 # time module mappings (Python's time module -> std::time)
 TIME_MAPPINGS: dict[str, StdlibMapping] = {
@@ -52,7 +36,10 @@ TIMEDELTA_MAPPINGS: dict[str, StdlibMapping] = {
     "datetime.timedelta": StdlibMapping(
         python_module="datetime",
         python_func="timedelta",
-        rust_code="chrono::Duration::days({days}) + chrono::Duration::seconds({seconds}) + chrono::Duration::microseconds({microseconds})",
+        rust_code=(
+            "chrono::Duration::days({days}) + chrono::Duration::seconds({seconds}) "
+            "+ chrono::Duration::microseconds({microseconds})"
+        ),
         rust_imports=[],
     ),
 }
@@ -117,7 +104,7 @@ DATE_MAPPINGS: dict[str, StdlibMapping] = {
     "datetime.date.fromisoformat": StdlibMapping(
         python_module="datetime",
         python_func="fromisoformat",
-        rust_code="chrono::NaiveDate::parse_from_str(&{args}, \"%Y-%m-%d\").unwrap()",
+        rust_code='chrono::NaiveDate::parse_from_str(&{args}, "%Y-%m-%d").unwrap()',
         rust_imports=["chrono::Datelike"],
     ),
     "datetime.date.fromisocalendar": StdlibMapping(
@@ -168,13 +155,13 @@ DATE_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
     "date.isoformat": StdlibMapping(
         python_module="datetime",
         python_func="isoformat",
-        rust_code="{self}.format(\"%Y-%m-%d\").to_string()",
+        rust_code='{self}.format("%Y-%m-%d").to_string()',
         rust_imports=[],
     ),
     "date.ctime": StdlibMapping(
         python_module="datetime",
         python_func="ctime",
-        rust_code="{self}.format(\"%a %b %e 00:00:00 %Y\").to_string()",
+        rust_code='{self}.format("%a %b %e 00:00:00 %Y").to_string()',
         rust_imports=[],
     ),
     "date.strftime": StdlibMapping(
@@ -213,7 +200,7 @@ TIME_CLASS_MAPPINGS: dict[str, StdlibMapping] = {
     "datetime.time.fromisoformat": StdlibMapping(
         python_module="datetime",
         python_func="fromisoformat",
-        rust_code="chrono::NaiveTime::parse_from_str({args}, \"%H:%M:%S\").unwrap()",
+        rust_code='chrono::NaiveTime::parse_from_str({args}, "%H:%M:%S").unwrap()',
         rust_imports=[],
     ),
 }
@@ -246,7 +233,7 @@ TIME_CLASS_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
     "time.isoformat": StdlibMapping(
         python_module="datetime",
         python_func="isoformat",
-        rust_code="{self}.format(\"%H:%M:%S\").to_string()",
+        rust_code='{self}.format("%H:%M:%S").to_string()',
         rust_imports=[],
     ),
     "time.strftime": StdlibMapping(
@@ -272,7 +259,10 @@ DATETIME_MAPPINGS: dict[str, StdlibMapping] = {
     "datetime.datetime": StdlibMapping(
         python_module="datetime",
         python_func="datetime",
-        rust_code="chrono::NaiveDate::from_ymd_opt({year}, {month}, {day}).unwrap().and_hms_micro_opt({hour}, {minute}, {second}, {microsecond}).unwrap()",
+        rust_code=(
+            "chrono::NaiveDate::from_ymd_opt({year}, {month}, {day}).unwrap()"
+            ".and_hms_micro_opt({hour}, {minute}, {second}, {microsecond}).unwrap()"
+        ),
         rust_imports=["chrono::Datelike", "chrono::Timelike"],
     ),
     "datetime.datetime.now": StdlibMapping(
@@ -314,7 +304,12 @@ DATETIME_MAPPINGS: dict[str, StdlibMapping] = {
     "datetime.datetime.fromisoformat": StdlibMapping(
         python_module="datetime",
         python_func="fromisoformat",
-        rust_code="chrono::NaiveDateTime::parse_from_str(&{args}, \"%Y-%m-%dT%H:%M:%S\").or_else(|_| chrono::NaiveDateTime::parse_from_str(&{args}, \"%Y-%m-%d %H:%M:%S\")).or_else(|_| chrono::NaiveDateTime::parse_from_str(&format!(\"{{}}T00:00:00\", {args}), \"%Y-%m-%dT%H:%M:%S\")).unwrap()",
+        rust_code=(
+            'chrono::NaiveDateTime::parse_from_str(&{args}, "%Y-%m-%dT%H:%M:%S")'
+            '.or_else(|_| chrono::NaiveDateTime::parse_from_str(&{args}, "%Y-%m-%d %H:%M:%S"))'
+            ".or_else(|_| chrono::NaiveDateTime::parse_from_str("
+            '&format!("{{}}T00:00:00", {args}), "%Y-%m-%dT%H:%M:%S")).unwrap()'
+        ),
         rust_imports=["chrono::Datelike", "chrono::Timelike"],
     ),
     "datetime.datetime.combine": StdlibMapping(
@@ -414,13 +409,13 @@ DATETIME_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
     "datetime.isoformat": StdlibMapping(
         python_module="datetime",
         python_func="isoformat",
-        rust_code="{self}.format(\"%Y-%m-%dT%H:%M:%S\").to_string()",
+        rust_code='{self}.format("%Y-%m-%dT%H:%M:%S").to_string()',
         rust_imports=[],
     ),
     "datetime.ctime": StdlibMapping(
         python_module="datetime",
         python_func="ctime",
-        rust_code="{self}.format(\"%a %b %e %H:%M:%S %Y\").to_string()",
+        rust_code='{self}.format("%a %b %e %H:%M:%S %Y").to_string()',
         rust_imports=[],
     ),
     "datetime.strftime": StdlibMapping(
@@ -439,7 +434,10 @@ DATETIME_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
         python_module="datetime",
         python_func="replace",
         # Needs special handling for keyword args
-        rust_code="chrono::NaiveDate::from_ymd_opt({year}, {month}, {day}).unwrap().and_hms_micro_opt({hour}, {minute}, {second}, {microsecond}).unwrap()",
+        rust_code=(
+            "chrono::NaiveDate::from_ymd_opt({year}, {month}, {day}).unwrap()"
+            ".and_hms_micro_opt({hour}, {minute}, {second}, {microsecond}).unwrap()"
+        ),
         rust_imports=[],
     ),
 }
@@ -467,6 +465,7 @@ TIMEZONE_MAPPINGS: dict[str, StdlibMapping] = {
 # =============================================================================
 # Lookup functions
 # =============================================================================
+
 
 def get_time_mapping(func_name: str) -> StdlibMapping | None:
     """Get mapping for a time module function."""
