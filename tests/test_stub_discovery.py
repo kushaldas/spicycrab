@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -144,11 +146,10 @@ class TestGeneratedClapStubPackage:
         try:
             # Import cookcrab components
             from spicycrab.cookcrab._parser import parse_crate
-
             from spicycrab.cookcrab.cli import download_crate, fetch_crate_info
             from spicycrab.cookcrab.generator import (
-                generate_reexport_stub_package,
                 generate_stub_package,
+                generate_reexport_stub_package,
             )
 
             # Fetch clap crate info

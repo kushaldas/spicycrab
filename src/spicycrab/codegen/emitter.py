@@ -122,6 +122,8 @@ class EmitterContext:
     stub_imports: dict[str, str] = field(default_factory=dict)
     # Assignment target type for turbofish inference (e.g., "String" for get_one::<String>)
     assignment_target_type: str | None = None
+    # Variables that have been unwrapped via "if let Some(x) = x" pattern
+    unwrapped_options: set[str] = field(default_factory=set)
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -178,7 +180,10 @@ class RustEmitter:
                 return f"{ir_type.module}.{ir_type.name}"
             return ir_type.name
         if isinstance(ir_type, IRGenericType):
-            # For generics, return just the outer type name
+            # For Optional types, extract the inner type
+            if ir_type.name == "Optional" and ir_type.type_args:
+                return self._extract_type_string(ir_type.type_args[0])
+            # For other generics, return just the outer type name
             return ir_type.name
         return None
 
@@ -328,8 +333,14 @@ class RustEmitter:
 
         # Filter out redundant imports for stub crates
         # If we have "use clap;", we don't need "use clap::Arg;" since we use full paths
+        # But keep trait imports (like chrono::Datelike, chrono::Timelike) as they're needed
+        known_traits = {"Datelike", "Timelike", "SubsecRound", "DurationRound"}
         for crate_name in stub_crates:
-            imports = {imp for imp in imports if not imp.startswith(f"use {crate_name}::")}
+            imports = {
+                imp for imp in imports
+                if not imp.startswith(f"use {crate_name}::")
+                or any(imp.endswith(f"::{trait};") for trait in known_traits)
+            }
 
         # Add local module imports
         # Use crate_name for main.rs (binary imports from library), "crate" for lib code
@@ -804,8 +815,9 @@ class RustEmitter:
                 if type_str:
                     self.ctx.type_env[stmt.target] = type_str
                 # Wrap non-None values in Some() for Option types
-                # But don't wrap function calls - the function handles wrapping
-                if rust_type.name == "Option" and value != "None" and not isinstance(stmt.value, IRCall):
+                # But don't wrap function/method calls that already return Option types
+                is_call = isinstance(stmt.value, (IRCall, IRMethodCall))
+                if rust_type.name == "Option" and value != "None" and not is_call:
                     value = f"Some({value})"
                 return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
             return f"{indent}let {mut}{stmt.target} = {value};"
@@ -838,12 +850,30 @@ class RustEmitter:
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        cond = self.emit_expression(stmt.condition)
-        lines.append(f"{indent}if {cond} {{")
+        # Check for "x is not None" pattern -> use "if let Some(x) = x"
+        unwrapped_var: str | None = None
+        if (
+            isinstance(stmt.condition, IRBinaryOp)
+            and stmt.condition.op == BinaryOp.IS_NOT
+            and isinstance(stmt.condition.left, IRName)
+            and isinstance(stmt.condition.right, IRLiteral)
+            and stmt.condition.right.value is None
+        ):
+            var_name = stmt.condition.left.name
+            unwrapped_var = var_name
+            lines.append(f"{indent}if let Some({var_name}) = {var_name} {{")
+        else:
+            cond = self.emit_expression(stmt.condition)
+            lines.append(f"{indent}if {cond} {{")
 
         self.ctx.indent += 1
+        # If we unwrapped a variable, track it so method calls don't use Option
+        if unwrapped_var:
+            self.ctx.unwrapped_options.add(unwrapped_var)
         for s in stmt.then_body:
             lines.append(self.emit_statement(s))
+        if unwrapped_var:
+            self.ctx.unwrapped_options.discard(unwrapped_var)
         self.ctx.indent -= 1
 
         for elif_cond, elif_body in stmt.elif_clauses:

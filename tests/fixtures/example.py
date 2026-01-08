@@ -1,5 +1,6 @@
 """Example Python file for testing crabpy."""
 
+from typing import List, Optional, Dict
 
 
 def add(a: int, b: int) -> int:
@@ -15,7 +16,7 @@ def greet(name: str, times: int = 1) -> str:
     return result
 
 
-def find_max(numbers: list[int]) -> int | None:
+def find_max(numbers: List[int]) -> Optional[int]:
     """Find the maximum number in a list."""
     if not numbers:
         return None
@@ -44,9 +45,9 @@ class Counter:
         return self.count
 
 
-def process_data(data: dict[str, int]) -> list[str]:
+def process_data(data: Dict[str, int]) -> List[str]:
     """Process a dictionary and return keys with positive values."""
-    result: list[str] = []
+    result: List[str] = []
     for key in data:
         if data[key] > 0:
             result.append(key)

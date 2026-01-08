@@ -100,6 +100,40 @@ RUST_TO_PYTHON_TYPES: dict[str, str] = {
     "()": "None",
 }
 
+# Mapping of methods that require trait imports
+# Format: crate_name -> {method_name -> trait_import}
+TRAIT_METHOD_IMPORTS: dict[str, dict[str, str]] = {
+    "chrono": {
+        # Datelike trait methods
+        "year": "chrono::Datelike",
+        "month": "chrono::Datelike",
+        "month0": "chrono::Datelike",
+        "day": "chrono::Datelike",
+        "day0": "chrono::Datelike",
+        "ordinal": "chrono::Datelike",
+        "ordinal0": "chrono::Datelike",
+        "weekday": "chrono::Datelike",
+        "iso_week": "chrono::Datelike",
+        "with_year": "chrono::Datelike",
+        "with_month": "chrono::Datelike",
+        "with_month0": "chrono::Datelike",
+        "with_day": "chrono::Datelike",
+        "with_day0": "chrono::Datelike",
+        "with_ordinal": "chrono::Datelike",
+        "with_ordinal0": "chrono::Datelike",
+        # Timelike trait methods
+        "hour": "chrono::Timelike",
+        "minute": "chrono::Timelike",
+        "second": "chrono::Timelike",
+        "nanosecond": "chrono::Timelike",
+        "with_hour": "chrono::Timelike",
+        "with_minute": "chrono::Timelike",
+        "with_second": "chrono::Timelike",
+        "with_nanosecond": "chrono::Timelike",
+        "num_seconds_from_midnight": "chrono::Timelike",
+    },
+}
+
 
 @dataclass
 class FunctionMapping:
@@ -222,6 +256,11 @@ def sanitize_rust_type(rust_type: str) -> str:
     # Remove mut keyword (handle both "mut " and "mut" prefix)
     rust_type = re.sub(r"\bmut\s+", "", rust_type)
     rust_type = re.sub(r"\bmut([A-Z])", r"\1", rust_type)  # mutE -> E
+    rust_type = re.sub(r"\bmut\(", "(", rust_type)  # mut(...) -> (...)
+
+    # Handle impl Trait types (can't be expressed in Python)
+    if "impl" in rust_type.lower():
+        return "object"
 
     # Remove * const and * mut (raw pointers) -> object
     if rust_type.startswith("*"):
@@ -356,7 +395,8 @@ def rust_type_to_python(rust_type: str) -> str:
                 elif rust_type[i : i + 2] == "::" and depth == 0:
                     last_sep = i
             if last_sep >= 0:
-                return rust_type[last_sep + 2 :]
+                # Recursively process the remaining type after stripping namespace
+                return rust_type_to_python(rust_type[last_sep + 2 :])
         else:
             # :: is inside angle brackets (associated type like U::Target)
             # This is too complex to represent in Python, use object
@@ -649,6 +689,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append("")
 
     # Generate method mappings (instance methods)
+    # Get trait method imports for this crate
+    crate_trait_methods = TRAIT_METHOD_IMPORTS.get(crate_name, {})
+
     for struct in crate.structs:
         methods = type_methods.get(struct.name, [])
         for method in methods:
@@ -663,13 +706,28 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 returns_self = method.return_type and (
                     "Self" in method.return_type or struct.name in method.return_type
                 )
+
+                # Check if this method requires a trait import
+                trait_import = crate_trait_methods.get(method.name, "")
+                rust_imports = [trait_import] if trait_import else []
+
+                # Check if return type needs conversion to i64 (Python int)
+                # Small integer types (i32, u32, i16, u16, etc.) need explicit cast
+                # Use "as i64" instead of ".into()" to avoid ambiguity in format contexts
+                needs_cast = method.return_type in {"i8", "i16", "i32", "u8", "u16", "u32"}
+                into_suffix = " as i64" if needs_cast else ""
+
                 lines.append("[[mappings.methods]]")
                 lines.append(f'python = "{struct.name}.{py_method_name}"')
                 if args:
-                    lines.append(f'rust_code = "{{self}}.{method.name}({args})"')
+                    lines.append(f'rust_code = "{{self}}.{method.name}({args}){into_suffix}"')
                 else:
-                    lines.append(f'rust_code = "{{self}}.{method.name}()"')
-                lines.append("rust_imports = []")
+                    lines.append(f'rust_code = "{{self}}.{method.name}(){into_suffix}"')
+                if rust_imports:
+                    imports_str = ", ".join(f'"{i}"' for i in rust_imports)
+                    lines.append(f"rust_imports = [{imports_str}]")
+                else:
+                    lines.append("rust_imports = []")
                 lines.append("needs_result = false")
                 if returns_self:
                     lines.append("returns_self = true")

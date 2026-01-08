@@ -767,7 +767,12 @@ class PythonASTVisitor(ast.NodeVisitor):
     def _visit_if(self, node: ast.If) -> IRIf:
         """Visit an if statement."""
         condition = self._visit_expression(node.test)
-        then_body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        then_body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                then_body.append(ir_stmt)
 
         elif_clauses: list[tuple[IRExpression, list[IRStatement]]] = []
         else_body: list[IRStatement] = []
@@ -779,29 +784,42 @@ class PythonASTVisitor(ast.NodeVisitor):
                 # This is an elif
                 elif_node = current_else[0]
                 elif_cond = self._visit_expression(elif_node.test)
-                elif_body = [self._visit_statement(s) for s in elif_node.body if self._visit_statement(s)]
-                elif_clauses.append((elif_cond, [s for s in elif_body if s]))
+                # Visit each statement only once
+                elif_body = []
+                for s in elif_node.body:
+                    ir_stmt = self._visit_statement(s)
+                    if ir_stmt:
+                        elif_body.append(ir_stmt)
+                elif_clauses.append((elif_cond, elif_body))
                 current_else = elif_node.orelse
             else:
-                # This is the final else
-                else_body = [self._visit_statement(s) for s in current_else if self._visit_statement(s)]
+                # This is the final else - visit each statement only once
+                for s in current_else:
+                    ir_stmt = self._visit_statement(s)
+                    if ir_stmt:
+                        else_body.append(ir_stmt)
                 break
 
         return IRIf(
             condition=condition,
-            then_body=[s for s in then_body if s],
+            then_body=then_body,
             elif_clauses=elif_clauses,
-            else_body=[s for s in else_body if s],
+            else_body=else_body,
             line=node.lineno,
         )
 
     def _visit_while(self, node: ast.While) -> IRWhile:
         """Visit a while loop."""
         condition = self._visit_expression(node.test)
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
         return IRWhile(
             condition=condition,
-            body=[s for s in body if s],
+            body=body,
             line=node.lineno,
         )
 
@@ -812,12 +830,17 @@ class PythonASTVisitor(ast.NodeVisitor):
 
         target = node.target.id
         iter_expr = self._visit_expression(node.iter)
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
 
         return IRFor(
             target=target,
             iter=iter_expr,
-            body=[s for s in body if s],
+            body=body,
             line=node.lineno,
         )
 
@@ -835,18 +858,28 @@ class PythonASTVisitor(ast.NodeVisitor):
                 raise self._unsupported("complex with target", node)
             target = item.optional_vars.id
 
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
 
         return IRWith(
             context=context,
             target=target,
-            body=[s for s in body if s],
+            body=body,
             line=node.lineno,
         )
 
     def _visit_try(self, node: ast.Try) -> IRTry:
         """Visit a try statement."""
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
 
         handlers: list[IRExceptHandler] = []
         for handler in node.handlers:
@@ -857,21 +890,31 @@ class PythonASTVisitor(ast.NodeVisitor):
                 elif isinstance(handler.type, ast.Attribute):
                     exc_type = handler.type.attr
 
-            handler_body = [self._visit_statement(s) for s in handler.body if self._visit_statement(s)]
+            # Visit each statement only once
+            handler_body = []
+            for s in handler.body:
+                ir_stmt = self._visit_statement(s)
+                if ir_stmt:
+                    handler_body.append(ir_stmt)
             handlers.append(
                 IRExceptHandler(
                     exc_type=exc_type,
                     name=handler.name,
-                    body=[s for s in handler_body if s],
+                    body=handler_body,
                 )
             )
 
-        finally_body = [self._visit_statement(s) for s in node.finalbody if self._visit_statement(s)]
+        # Visit each statement only once
+        finally_body = []
+        for s in node.finalbody:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                finally_body.append(ir_stmt)
 
         return IRTry(
-            body=[s for s in body if s],
+            body=body,
             handlers=handlers,
-            finally_body=[s for s in finally_body if s],
+            finally_body=finally_body,
             line=node.lineno,
         )
 
