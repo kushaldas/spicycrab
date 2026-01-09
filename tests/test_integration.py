@@ -1333,3 +1333,117 @@ async def main() -> None:
     print(f"{r1},{r2},{r3}")
 '''
         transpile_and_run(code, "negative,zero,positive")
+
+
+class TestRustNativeTypes:
+    """Integration tests for Rust native types from spicycrab.types."""
+
+    def test_u8_arithmetic(self, check_cargo):
+        """Test u8 type arithmetic."""
+        code = '''
+from spicycrab.types import u8
+
+def add(a: u8, b: u8) -> u8:
+    return a + b
+
+def main() -> None:
+    result: u8 = add(100, 55)
+    print(result)
+'''
+        transpile_and_run(code, "155")
+
+    def test_u32_arithmetic(self, check_cargo):
+        """Test u32 type arithmetic."""
+        code = '''
+from spicycrab.types import u32
+
+def multiply(a: u32, b: u32) -> u32:
+    return a * b
+
+def main() -> None:
+    result: u32 = multiply(1000, 2000)
+    print(result)
+'''
+        transpile_and_run(code, "2000000")
+
+    def test_i32_negative(self, check_cargo):
+        """Test i32 type with negative numbers."""
+        code = '''
+from spicycrab.types import i32
+
+def subtract(a: i32, b: i32) -> i32:
+    return a - b
+
+def main() -> None:
+    result: i32 = subtract(10, 25)
+    print(result)
+'''
+        transpile_and_run(code, "-15")
+
+    def test_f32_division(self, check_cargo):
+        """Test f32 type division."""
+        code = '''
+from spicycrab.types import f32
+
+def divide(a: f32, b: f32) -> f32:
+    return a / b
+
+def main() -> None:
+    result: f32 = divide(10.0, 4.0)
+    print(result)
+'''
+        transpile_and_run(code, "2.5")
+
+    def test_mixed_rust_types(self, check_cargo):
+        """Test mixing different Rust native types."""
+        code = '''
+from spicycrab.types import u8, u32, i64
+
+def process(small: u8, medium: u32, large: i64) -> i64:
+    return large
+
+def main() -> None:
+    result: i64 = process(255, 1000000, 9223372036854775807)
+    print(result)
+'''
+        transpile_and_run(code, "9223372036854775807")
+
+    def test_usize_with_len(self, check_cargo):
+        """Test usize type with collection length."""
+        code = '''
+from spicycrab.types import usize
+
+def get_length(items: list[str]) -> usize:
+    return len(items)
+
+def main() -> None:
+    items: list[str] = ["a", "b", "c", "d", "e"]
+    length: usize = get_length(items)
+    print(length)
+'''
+        transpile_and_run(code, "5")
+
+    def test_rust_types_in_struct(self, check_cargo):
+        """Test Rust native types in a class/struct."""
+        code = '''
+from spicycrab.types import u32, f64
+
+class Point:
+    x: f64
+    y: f64
+    id: u32
+
+    def __init__(self, x: f64, y: f64, id: u32) -> None:
+        self.x = x
+        self.y = y
+        self.id = id
+
+    def distance_from_origin(self) -> f64:
+        return (self.x * self.x + self.y * self.y)
+
+def main() -> None:
+    p: Point = Point(3.0, 4.0, 1)
+    dist: f64 = p.distance_from_origin()
+    print(dist)
+'''
+        transpile_and_run(code, "25")

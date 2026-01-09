@@ -259,3 +259,93 @@ def outer() -> int:
 """
         with pytest.raises(UnsupportedFeatureError):
             parse_source(source)
+
+
+class TestRustNativeTypes:
+    """Test parsing of Rust native types from spicycrab.types."""
+
+    def test_parse_unsigned_integers(self) -> None:
+        """Test parsing unsigned integer types (u8, u16, u32, u64)."""
+        source = """
+from spicycrab.types import u8, u16, u32, u64
+
+def add_bytes(a: u8, b: u8) -> u8:
+    return a + b
+
+def add_shorts(a: u16, b: u16) -> u16:
+    return a + b
+
+def add_ints(a: u32, b: u32) -> u32:
+    return a + b
+
+def add_longs(a: u64, b: u64) -> u64:
+    return a + b
+"""
+        module = parse_source(source)
+        assert len(module.functions) == 4
+
+        # Check u8 function
+        func = module.functions[0]
+        assert func.name == "add_bytes"
+        assert func.params[0].type.name == "u8"
+        assert func.return_type.name == "u8"
+
+    def test_parse_signed_integers(self) -> None:
+        """Test parsing signed integer types (i8, i16, i32, i64)."""
+        source = """
+from spicycrab.types import i8, i16, i32, i64
+
+def process(a: i32, b: i64) -> i32:
+    return a
+"""
+        module = parse_source(source)
+        func = module.functions[0]
+        assert func.params[0].type.name == "i32"
+        assert func.params[1].type.name == "i64"
+        assert func.return_type.name == "i32"
+
+    def test_parse_size_types(self) -> None:
+        """Test parsing usize and isize types."""
+        source = """
+from spicycrab.types import usize, isize
+
+def get_len(items: list[str]) -> usize:
+    return len(items)
+
+def get_offset(base: isize, delta: isize) -> isize:
+    return base + delta
+"""
+        module = parse_source(source)
+        assert module.functions[0].return_type.name == "usize"
+        assert module.functions[1].return_type.name == "isize"
+
+    def test_parse_float_types(self) -> None:
+        """Test parsing f32 and f64 types."""
+        source = """
+from spicycrab.types import f32, f64
+
+def compute_single(x: f32, y: f32) -> f32:
+    return x * y
+
+def compute_double(x: f64, y: f64) -> f64:
+    return x * y
+"""
+        module = parse_source(source)
+        assert module.functions[0].return_type.name == "f32"
+        assert module.functions[1].return_type.name == "f64"
+
+    def test_parse_mixed_types(self) -> None:
+        """Test parsing mixed Rust native and Python types."""
+        source = """
+from spicycrab.types import u32, f64
+
+def process(count: u32, values: list[f64]) -> int:
+    return 0
+"""
+        module = parse_source(source)
+        func = module.functions[0]
+        assert func.params[0].type.name == "u32"
+        # list[f64] should be a generic type
+        assert func.params[1].type.name == "list"
+        # return type is Python int -> will resolve to i64
+        assert func.return_type.kind == PrimitiveType.INT
