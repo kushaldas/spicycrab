@@ -1282,6 +1282,14 @@ class RustEmitter:
         if isinstance(expr, IRAwait):
             # Emit await expression: value.await
             inner = self.emit_expression(expr.value)
+            # For async functions that return Result, .unwrap() or ? should come after .await
+            # e.g., reqwest::get(url).await.unwrap() not reqwest::get(url).unwrap().await
+            if inner.endswith(".unwrap()"):
+                # Move .unwrap() after .await
+                return f"{inner[:-9]}.await.unwrap()"
+            elif inner.endswith("?"):
+                # Move ? after .await
+                return f"{inner[:-1]}.await?"
             return f"{inner}.await"
 
         return f"/* unsupported: {type(expr).__name__} */"
@@ -1468,9 +1476,15 @@ class RustEmitter:
                 mapping = get_stub_mapping(full_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
-                    if mapping.needs_result and self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                    if mapping.needs_result:
+                        if self.ctx.in_result_context:
+                            # Use ? operator for error propagation
+                            if result.endswith(".unwrap()"):
+                                result = result[:-9] + "?"
+                        else:
+                            # Use .unwrap() when not in Result context
+                            if not self._result_already_handled(result):
+                                result = f"{result}.unwrap()"
                     return result
 
         # Check for stub package Type.method calls (e.g., Result.Ok(), Error.msg())
@@ -1486,21 +1500,32 @@ class RustEmitter:
                 mapping = get_stub_mapping(full_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
-                    # Add ? for Result-returning stub calls in Result context
-                    if mapping.needs_result and self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                    # Handle Result-returning stub calls
+                    if mapping.needs_result:
+                        if self.ctx.in_result_context:
+                            # Use ? operator for error propagation
+                            if result.endswith(".unwrap()"):
+                                result = result[:-9] + "?"
+                        else:
+                            # Use .unwrap() when not in Result context
+                            if not self._result_already_handled(result):
+                                result = f"{result}.unwrap()"
                     return result
 
             # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
             mapping = get_stdlib_mapping(type_name, func_name)
             if mapping:
                 result = self._apply_stdlib_mapping(mapping, args)
-                # Add ? for Result-returning stdlib calls in Result context
-                if mapping.needs_result and self.ctx.in_result_context:
-                    # Remove .unwrap() and add ? instead
-                    if result.endswith(".unwrap()"):
-                        result = result[:-9] + "?"
+                # Handle Result-returning stdlib calls
+                if mapping.needs_result:
+                    if self.ctx.in_result_context:
+                        # Use ? operator for error propagation
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    else:
+                        # Use .unwrap() when not in Result context
+                        if not self._result_already_handled(result):
+                            result = f"{result}.unwrap()"
                 return result
 
         func = self.emit_expression(expr.func)
@@ -1605,11 +1630,12 @@ class RustEmitter:
             # Otherwise, try to infer the type of the receiver for chained calls
             receiver_type = self._infer_stub_type(expr.obj)
             if receiver_type:
-                # Check if this method returns_self (builder pattern)
+                # Check the method mapping for return type info
                 stub_mapping = get_stub_method_mapping(receiver_type, expr.method)
                 if stub_mapping:
-                    # For now, assume builder methods return self
-                    # The mapping has returns_self but we're not using it yet
+                    # Use the returns field if available, otherwise assume self type
+                    if stub_mapping.returns:
+                        return stub_mapping.returns
                     return receiver_type
             return None
 
@@ -1694,6 +1720,22 @@ class RustEmitter:
                 return re.sub(r'"([^"]*)"\.to_string\(\)', r'"\1"', arg)
 
         return arg
+
+    def _result_already_handled(self, result: str) -> bool:
+        """Check if a Result is already handled in the expression.
+
+        Returns True if the expression contains .unwrap() or ? operator,
+        indicating the Result has already been unwrapped somewhere in the chain.
+        This prevents adding duplicate .unwrap() calls.
+        """
+        # Check for .unwrap() anywhere in the expression (not just at the end)
+        if ".unwrap()" in result:
+            return True
+        # Check for ? operator (but not inside strings)
+        # Simple heuristic: ? followed by end, semicolon, or method call
+        if "?" in result:
+            return True
+        return False
 
     def _apply_stdlib_mapping(self, mapping: StdlibMapping, args: list[str]) -> str:
         """Apply a stdlib mapping to generate Rust code."""
@@ -1858,10 +1900,14 @@ class RustEmitter:
                 mapping = get_stub_mapping(full_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
-                    # Add ? for Result-returning stub calls in Result context
-                    if mapping.needs_result and self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                    # Handle Result-returning stub calls
+                    if mapping.needs_result:
+                        if self.ctx.in_result_context:
+                            if result.endswith(".unwrap()"):
+                                result = result[:-9] + "?"
+                        else:
+                            if not self._result_already_handled(result):
+                                result = f"{result}.unwrap()"
                     return result
 
         # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
@@ -1870,10 +1916,14 @@ class RustEmitter:
             mapping = get_stdlib_mapping(module, method)
             if mapping:
                 result = self._apply_stdlib_mapping(mapping, args)
-                # Add ? for Result-returning stdlib calls in Result context
-                if mapping.needs_result and self.ctx.in_result_context:
-                    if result.endswith(".unwrap()"):
-                        result = result[:-9] + "?"
+                # Handle Result-returning stdlib calls
+                if mapping.needs_result:
+                    if self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    else:
+                        if not self._result_already_handled(result):
+                            result = f"{result}.unwrap()"
                 return result
 
             # Check for datetime module constructor/class method calls
@@ -1882,9 +1932,13 @@ class RustEmitter:
             dt_mapping = get_datetime_mapping(full_key)
             if dt_mapping:
                 result = self._apply_datetime_constructor(dt_mapping, args, expr)
-                if dt_mapping.needs_result and self.ctx.in_result_context:
-                    if result.endswith(".unwrap()"):
-                        result = result[:-9] + "?"
+                if dt_mapping.needs_result:
+                    if self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    else:
+                        if not self._result_already_handled(result):
+                            result = f"{result}.unwrap()"
                 return result
 
             # Check for typed variable method calls (e.g., dt.isoformat() for datetime)
@@ -1933,6 +1987,14 @@ class RustEmitter:
                             rust_code = rust_code.replace(f"{{arg{i}}}", arg)
                     for imp in stub_mapping.rust_imports:
                         self.ctx.stdlib_imports.add(imp)
+                    # Handle Result-returning stub method calls
+                    if stub_mapping.needs_result:
+                        if self.ctx.in_result_context:
+                            if rust_code.endswith(".unwrap()"):
+                                rust_code = rust_code[:-9] + "?"
+                        else:
+                            if not self._result_already_handled(rust_code):
+                                rust_code = f"{rust_code}.unwrap()"
                     return rust_code
 
         # Check for chained stub method calls (e.g., Arg.new(...).short(...))
@@ -1962,6 +2024,14 @@ class RustEmitter:
                         rust_code = rust_code.replace(f"{{arg{i}}}", arg)
                 for imp in stub_mapping.rust_imports:
                     self.ctx.stdlib_imports.add(imp)
+                # Handle Result-returning stub method calls
+                if stub_mapping.needs_result:
+                    if self.ctx.in_result_context:
+                        if rust_code.endswith(".unwrap()"):
+                            rust_code = rust_code[:-9] + "?"
+                    else:
+                        if not self._result_already_handled(rust_code):
+                            rust_code = f"{rust_code}.unwrap()"
                 return rust_code
 
         # Check for nested stdlib calls (e.g., os.path.exists())
@@ -1970,9 +2040,13 @@ class RustEmitter:
             mapping = get_stdlib_mapping(module, method)
             if mapping:
                 result = self._apply_stdlib_mapping(mapping, args)
-                if mapping.needs_result and self.ctx.in_result_context:
-                    if result.endswith(".unwrap()"):
-                        result = result[:-9] + "?"
+                if mapping.needs_result:
+                    if self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    else:
+                        if not self._result_already_handled(result):
+                            result = f"{result}.unwrap()"
                 return result
 
             # Check for datetime module nested calls (e.g., datetime.datetime.now())
@@ -1980,9 +2054,13 @@ class RustEmitter:
             dt_mapping = get_datetime_mapping(full_key)
             if dt_mapping:
                 result = self._apply_stdlib_mapping(dt_mapping, args)
-                if dt_mapping.needs_result and self.ctx.in_result_context:
-                    if result.endswith(".unwrap()"):
-                        result = result[:-9] + "?"
+                if dt_mapping.needs_result:
+                    if self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    else:
+                        if not self._result_already_handled(result):
+                            result = f"{result}.unwrap()"
                 return result
 
         # Handle Result/Option static method calls
