@@ -356,13 +356,15 @@ class RustEmitter:
         # Filter out redundant imports for stub crates
         # If we have "use clap;", we don't need "use clap::Arg;" since we use full paths
         # But keep trait imports (like chrono::Datelike, chrono::Timelike) as they're needed
-        known_traits = {"Datelike", "Timelike", "SubsecRound", "DurationRound"}
+        # Also keep prelude/glob imports (e.g., use base64::prelude::*;) as they bring traits into scope
+        known_traits = {"Datelike", "Timelike", "SubsecRound", "DurationRound", "Digest"}
         for crate_name in stub_crates:
             imports = {
                 imp
                 for imp in imports
                 if not imp.startswith(f"use {crate_name}::")
                 or any(imp.endswith(f"::{trait};") for trait in known_traits)
+                or imp.endswith("::*;")  # Keep glob imports for preludes
             }
 
         # Add local module imports
@@ -677,9 +679,14 @@ class RustEmitter:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
 
-        # Add #[tokio::main] for async main function
+        # Add async runtime attribute for async main function
+        # Use #[actix_web::main] if actix-web is imported, otherwise #[tokio::main]
         if func.is_async and func.name == "main":
-            lines.append(f"{indent}#[tokio::main]")
+            stub_crates = set(self.ctx.stub_imports.values())
+            if "actix-web" in stub_crates:
+                lines.append(f"{indent}#[actix_web::main]")
+            else:
+                lines.append(f"{indent}#[tokio::main]")
 
         # Docstring
         if func.docstring:
@@ -1310,6 +1317,17 @@ class RustEmitter:
             if "." not in s and "e" not in s.lower():
                 s += ".0"
             return s
+        if isinstance(expr.value, bytes):
+            # Convert bytes to Rust byte string literal
+            # Python b'hello' -> Rust b"hello"
+            try:
+                decoded = expr.value.decode("ascii")
+                escaped = decoded.replace("\\", "\\\\").replace('"', '\\"')
+                return f'b"{escaped}"'
+            except UnicodeDecodeError:
+                # For non-ASCII bytes, use byte array
+                byte_list = ", ".join(f"0x{b:02x}" for b in expr.value)
+                return f"[{byte_list}]"
         return repr(expr.value)
 
     def _emit_binop(self, expr: IRBinaryOp) -> str:
@@ -1700,6 +1718,10 @@ class RustEmitter:
         if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type:
             if arg.endswith(".to_string()"):
                 return arg[:-12]  # Remove .to_string()
+            # If arg is a simple identifier (variable), borrow it
+            # This handles cases like encode(original) -> encode(&original)
+            if arg.isidentifier() and not arg.startswith("&"):
+                return f"&{arg}"
 
         # Handle impl Into<Str> which accepts &str but NOT String
         # clap's Str type only implements From<&str>, not From<String>
@@ -1718,6 +1740,11 @@ class RustEmitter:
                 import re
 
                 return re.sub(r'"([^"]*)"\.to_string\(\)', r'"\1"', arg)
+
+        # Handle generic reference types like &T, &Value, etc.
+        # If the param_type starts with & and arg is an identifier, borrow it
+        if rust_type.startswith("&") and arg.isidentifier() and not arg.startswith("&"):
+            return f"&{arg}"
 
         return arg
 

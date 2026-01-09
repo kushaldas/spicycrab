@@ -333,6 +333,8 @@ class PythonASTVisitor(ast.NodeVisitor):
             "recv_many",
             "try_recv",
         }
+        # Methods starting with these prefixes are also considered mutating
+        mutating_prefixes = ("set_", "remove_", "add_")
 
         def scan_statements(stmts: list[IRStatement]) -> None:
             for stmt in stmts:
@@ -344,7 +346,7 @@ class PythonASTVisitor(ast.NodeVisitor):
                         reassigned.add(stmt.target)
                     # Also check for mutating calls in the assignment value
                     if stmt.value:
-                        self._check_mutating_call(stmt.value, reassigned, mutating_methods)
+                        self._check_mutating_call(stmt.value, reassigned, mutating_methods, mutating_prefixes)
                 elif isinstance(stmt, IRTupleUnpack):
                     # Track tuple unpacking declarations
                     for i, target in enumerate(stmt.targets):
@@ -353,7 +355,7 @@ class PythonASTVisitor(ast.NodeVisitor):
 
                 # Check for method calls that mutate their receiver
                 if isinstance(stmt, IRExprStmt):
-                    self._check_mutating_call(stmt.expr, reassigned, mutating_methods)
+                    self._check_mutating_call(stmt.expr, reassigned, mutating_methods, mutating_prefixes)
 
                 # Recurse into nested blocks
                 if isinstance(stmt, IRIf):
@@ -386,21 +388,31 @@ class PythonASTVisitor(ast.NodeVisitor):
                     stmt.is_mutable.append(False)
                 stmt.is_mutable[idx] = True
 
-    def _check_mutating_call(self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]) -> None:
+    def _check_mutating_call(
+        self,
+        expr: IRExpression,
+        reassigned: set[str],
+        mutating_methods: set[str],
+        mutating_prefixes: tuple[str, ...] = ("set_", "remove_", "add_"),
+    ) -> None:
         """Check if expression contains a mutating method call and mark the target as reassigned."""
         if isinstance(expr, IRMethodCall):
-            if expr.method in mutating_methods:
+            # Check for exact method name match or prefix match
+            is_mutating = expr.method in mutating_methods or any(
+                expr.method.startswith(prefix) for prefix in mutating_prefixes
+            )
+            if is_mutating:
                 # Get the receiver name
                 if isinstance(expr.obj, IRName):
                     reassigned.add(expr.obj.name)
         elif isinstance(expr, IRCall):
             # Check args for nested method calls
             for arg in expr.args:
-                self._check_mutating_call(arg, reassigned, mutating_methods)
+                self._check_mutating_call(arg, reassigned, mutating_methods, mutating_prefixes)
         elif isinstance(expr, IRAwait):
             # Check the awaited expression (e.g., await rx.recv())
             if expr.value:
-                self._check_mutating_call(expr.value, reassigned, mutating_methods)
+                self._check_mutating_call(expr.value, reassigned, mutating_methods, mutating_prefixes)
 
     def _parse_parameters(self, args: ast.arguments, func_node: ast.FunctionDef) -> list[IRParameter]:
         """Parse function parameters with their type annotations."""

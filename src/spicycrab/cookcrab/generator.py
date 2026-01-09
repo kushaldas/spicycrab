@@ -77,6 +77,16 @@ def python_safe_name(name: str) -> str:
     return name
 
 
+def escape_docstring(doc: str) -> str:
+    """Escape a string for use in a Python docstring.
+
+    Escapes backslashes to prevent Python from interpreting them as
+    escape sequences (e.g., \\u{1f600} in Rust code examples).
+    """
+    # Escape backslashes so \u doesn't become a unicode escape
+    return doc.replace("\\", "\\\\")
+
+
 # Rust to Python type mapping
 RUST_TO_PYTHON_TYPES: dict[str, str] = {
     "i8": "int",
@@ -674,6 +684,442 @@ class RwLockWriteGuard(Generic[T]):
             ("RwLock.new", "tokio::sync::RwLock::new({arg0})"),
         ],
     ),
+    # =========================================================================
+    # actix-web types
+    # =========================================================================
+    ("actix-web", "HttpResponse"): (
+        # Class stub for HttpResponse and HttpResponseBuilder
+        '''
+class HttpResponse:
+    """HTTP response type.
+
+    Use the static methods to create responses with specific status codes,
+    then chain builder methods to set body, headers, etc.
+
+    Maps to actix_web::HttpResponse in Rust.
+
+    Example:
+        return HttpResponse.Ok().body("Hello World!")
+        return HttpResponse.Ok().json({"key": "value"})
+        return HttpResponse.NotFound().body("Not found")
+    """
+
+    @staticmethod
+    def Ok() -> "HttpResponseBuilder":
+        """Creates a 200 OK response builder."""
+        ...
+
+    @staticmethod
+    def Created() -> "HttpResponseBuilder":
+        """Creates a 201 Created response builder."""
+        ...
+
+    @staticmethod
+    def Accepted() -> "HttpResponseBuilder":
+        """Creates a 202 Accepted response builder."""
+        ...
+
+    @staticmethod
+    def NoContent() -> "HttpResponseBuilder":
+        """Creates a 204 No Content response builder."""
+        ...
+
+    @staticmethod
+    def BadRequest() -> "HttpResponseBuilder":
+        """Creates a 400 Bad Request response builder."""
+        ...
+
+    @staticmethod
+    def Unauthorized() -> "HttpResponseBuilder":
+        """Creates a 401 Unauthorized response builder."""
+        ...
+
+    @staticmethod
+    def Forbidden() -> "HttpResponseBuilder":
+        """Creates a 403 Forbidden response builder."""
+        ...
+
+    @staticmethod
+    def NotFound() -> "HttpResponseBuilder":
+        """Creates a 404 Not Found response builder."""
+        ...
+
+    @staticmethod
+    def InternalServerError() -> "HttpResponseBuilder":
+        """Creates a 500 Internal Server Error response builder."""
+        ...
+
+
+class HttpResponseBuilder:
+    """Builder for constructing HTTP responses.
+
+    Returned by HttpResponse status methods. Chain methods to configure
+    the response body, headers, and content type.
+    """
+
+    def body(self, data: str) -> "HttpResponse":
+        """Set the response body as a string."""
+        ...
+
+    def json(self, data: object) -> "HttpResponse":
+        """Set the response body as JSON."""
+        ...
+
+    def content_type(self, ct: str) -> "HttpResponseBuilder":
+        """Set the Content-Type header."""
+        ...
+
+    def insert_header(self, header: tuple[str, str]) -> "HttpResponseBuilder":
+        """Insert a custom header."""
+        ...
+
+    def finish(self) -> "HttpResponse":
+        """Finish building and return the response."""
+        ...
+''',
+        # Type mapping
+        "actix_web::HttpResponse",
+        # Function mappings for static constructors
+        [
+            ("HttpResponse.Ok", "actix_web::HttpResponse::Ok()"),
+            ("HttpResponse.Created", "actix_web::HttpResponse::Created()"),
+            ("HttpResponse.Accepted", "actix_web::HttpResponse::Accepted()"),
+            ("HttpResponse.NoContent", "actix_web::HttpResponse::NoContent()"),
+            ("HttpResponse.BadRequest", "actix_web::HttpResponse::BadRequest()"),
+            ("HttpResponse.Unauthorized", "actix_web::HttpResponse::Unauthorized()"),
+            ("HttpResponse.Forbidden", "actix_web::HttpResponse::Forbidden()"),
+            ("HttpResponse.NotFound", "actix_web::HttpResponse::NotFound()"),
+            ("HttpResponse.InternalServerError", "actix_web::HttpResponse::InternalServerError()"),
+        ],
+    ),
+    ("actix-web", "App"): (
+        # Class stub for App builder
+        '''
+class App:
+    """Application builder for configuring actix-web services.
+
+    Create with App.new(), then chain methods to add routes, middleware,
+    and application data.
+
+    Maps to actix_web::App in Rust.
+
+    Example:
+        app = App.new().app_data(Data.new(state)).service(handler)
+    """
+
+    @staticmethod
+    def new() -> "App":
+        """Create a new application builder."""
+        ...
+
+    def app_data(self, data: object) -> "App":
+        """Set application-wide shared data.
+
+        Data is wrapped in web::Data<T> and can be extracted in handlers.
+        """
+        ...
+
+    def service(self, handler: object) -> "App":
+        """Register an HTTP service (handler function)."""
+        ...
+
+    def route(self, path: str, route: object) -> "App":
+        """Configure a route for a specific path and method."""
+        ...
+
+    def wrap(self, middleware: object) -> "App":
+        """Wrap the application with middleware."""
+        ...
+
+    def configure(self, f: object) -> "App":
+        """Run external configuration as part of application building."""
+        ...
+''',
+        # Type mapping
+        "actix_web::App",
+        # Function mappings
+        [
+            ("App.new", "actix_web::App::new()"),
+        ],
+    ),
+    ("actix-web", "HttpServer"): (
+        # Class stub for HttpServer
+        '''
+class HttpServer:
+    """HTTP server that manages worker threads and connections.
+
+    Create with HttpServer.new() passing an App factory, then configure
+    bindings and run the server.
+
+    Maps to actix_web::HttpServer in Rust.
+
+    Example:
+        HttpServer.new(lambda: App.new().service(index))
+            .bind("127.0.0.1:8080")
+            .run()
+    """
+
+    @staticmethod
+    def new(factory: object) -> "HttpServer":
+        """Create a new HTTP server with an application factory.
+
+        The factory is called for each worker thread to create the App.
+        """
+        ...
+
+    def bind(self, addr: str) -> "HttpServer":
+        """Bind to a socket address (e.g., "127.0.0.1:8080")."""
+        ...
+
+    def bind_rustls(self, addr: str, config: object) -> "HttpServer":
+        """Bind with TLS using rustls."""
+        ...
+
+    def workers(self, num: int) -> "HttpServer":
+        """Set the number of worker threads (default: number of CPUs)."""
+        ...
+
+    async def run(self) -> None:
+        """Start the server and wait for it to finish."""
+        ...
+''',
+        # Type mapping
+        "actix_web::HttpServer",
+        # Function mappings (static constructors only, methods go in STD_METHOD_STUBS)
+        [
+            ("HttpServer.new", "actix_web::HttpServer::new(move || {arg0})"),
+        ],
+    ),
+    ("actix-web", "Data"): (
+        # Class stub for web::Data (shared application state)
+        '''
+class Data(Generic[T]):
+    """Shared application state extractor.
+
+    Wraps data in Arc for thread-safe sharing between handlers.
+    Register with App.app_data() and extract in handler parameters.
+
+    Maps to actix_web::web::Data<T> in Rust.
+
+    Example:
+        # In main:
+        state = Data.new(AppState())
+        app = App.new().app_data(state)
+
+        # In handler:
+        async def index(data: Data[AppState]) -> HttpResponse:
+            return HttpResponse.Ok().body(data.app_name)
+    """
+
+    @staticmethod
+    def new(value: T) -> "Data[T]":
+        """Create new shared application data."""
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Data",
+        # Function mappings
+        [
+            ("Data.new", "actix_web::web::Data::new({arg0})"),
+        ],
+    ),
+    ("actix-web", "Query"): (
+        # Class stub for web::Query (query string extractor)
+        '''
+class Query(Generic[T]):
+    """Query string parameter extractor.
+
+    Extracts typed data from the URL query string.
+    The type T must implement serde::Deserialize.
+
+    Maps to actix_web::web::Query<T> in Rust.
+
+    Example:
+        @dataclass
+        class Params:
+            name: str
+            page: int
+
+        async def search(params: Query[Params]) -> HttpResponse:
+            return HttpResponse.Ok().body(f"Searching for {params.name}")
+    """
+    pass
+''',
+        # Type mapping
+        "actix_web::web::Query",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Json"): (
+        # Class stub for web::Json (JSON extractor/responder)
+        '''
+class Json(Generic[T]):
+    """JSON extractor and responder.
+
+    As extractor: Deserializes JSON request body into type T.
+    As responder: Serializes type T to JSON response.
+
+    Maps to actix_web::web::Json<T> in Rust.
+
+    Example:
+        @dataclass
+        class User:
+            name: str
+            email: str
+
+        async def create_user(user: Json[User]) -> Json[User]:
+            # user.name, user.email are accessible
+            return Json(user)
+    """
+
+    def __init__(self, value: T) -> None:
+        """Create a JSON response from a value."""
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Json",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Form"): (
+        # Class stub for web::Form (form data extractor)
+        '''
+class Form(Generic[T]):
+    """URL-encoded form data extractor.
+
+    Extracts typed data from application/x-www-form-urlencoded request body.
+    The type T must implement serde::Deserialize.
+
+    Maps to actix_web::web::Form<T> in Rust.
+
+    Example:
+        @dataclass
+        class LoginForm:
+            username: str
+            password: str
+
+        async def login(form: Form[LoginForm]) -> HttpResponse:
+            # form.username, form.password are accessible
+            return HttpResponse.Ok().body("Logged in")
+    """
+    pass
+''',
+        # Type mapping
+        "actix_web::web::Form",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Path"): (
+        # Class stub for web::Path (path parameter extractor)
+        '''
+class Path(Generic[T]):
+    """Path parameter extractor.
+
+    Extracts typed data from URL path segments.
+    The type T must implement serde::Deserialize.
+
+    Maps to actix_web::web::Path<T> in Rust.
+
+    Example:
+        # Route: /users/{user_id}
+        async def get_user(path: Path[int]) -> HttpResponse:
+            user_id = path.into_inner()
+            return HttpResponse.Ok().body(f"User {user_id}")
+
+        # Multiple params: /users/{user_id}/posts/{post_id}
+        @dataclass
+        class PathParams:
+            user_id: int
+            post_id: int
+
+        async def get_post(path: Path[PathParams]) -> HttpResponse:
+            return HttpResponse.Ok().body(f"Post {path.post_id}")
+    """
+
+    def into_inner(self) -> T:
+        """Extract the inner value."""
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Path",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "HttpRequest"): (
+        # Class stub for HttpRequest
+        '''
+class HttpRequest:
+    """HTTP request type.
+
+    Contains request metadata like method, URI, headers, etc.
+    Can be extracted in handlers when you need low-level access.
+
+    Maps to actix_web::HttpRequest in Rust.
+
+    Example:
+        async def handler(req: HttpRequest) -> HttpResponse:
+            method = req.method()
+            path = req.path()
+            return HttpResponse.Ok().body(f"{method} {path}")
+    """
+
+    def method(self) -> str:
+        """Get the HTTP method."""
+        ...
+
+    def uri(self) -> str:
+        """Get the request URI."""
+        ...
+
+    def path(self) -> str:
+        """Get the URL path."""
+        ...
+
+    def query_string(self) -> str:
+        """Get the raw query string."""
+        ...
+
+    def headers(self) -> object:
+        """Get request headers."""
+        ...
+''',
+        # Type mapping
+        "actix_web::HttpRequest",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Route"): (
+        # Class stub for web::Route (route configuration)
+        '''
+class Route:
+    """Route configuration for HTTP method handlers.
+
+    Created by web::get(), web::post(), etc. functions.
+    Use .to() to attach a handler function.
+
+    Maps to actix_web::web::Route in Rust.
+
+    Example:
+        # Register a GET route
+        app = App.new().route("/", get().to(index))
+
+        # Register a POST route
+        app = App.new().route("/submit", post().to(submit_handler))
+    """
+
+    def to(self, handler: object) -> "Route":
+        """Attach a handler function to this route.
+
+        The handler must be an async function that returns an HttpResponse
+        or impl Responder.
+        """
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Route",
+        # No static constructors (instance method to() is in STD_METHOD_STUBS)
+        [],
+    ),
 }
 
 
@@ -735,6 +1181,161 @@ def mpsc_unbounded_channel() -> tuple:
         "tokio::sync::mpsc::unbounded_channel()",
         ["tokio::sync::mpsc"],
         False,
+    ),
+    # =========================================================================
+    # actix-web error functions
+    # =========================================================================
+    ("actix-web", "ErrorBadRequest"): (
+        '''
+def ErrorBadRequest(msg: str) -> object:
+    """Create a 400 Bad Request error.
+
+    Use in handlers to return an error response.
+
+    Example:
+        if not valid:
+            return Err(ErrorBadRequest("Invalid input"))
+    """
+    ...
+''',
+        "actix_web::error::ErrorBadRequest({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorUnauthorized"): (
+        '''
+def ErrorUnauthorized(msg: str) -> object:
+    """Create a 401 Unauthorized error."""
+    ...
+''',
+        "actix_web::error::ErrorUnauthorized({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorForbidden"): (
+        '''
+def ErrorForbidden(msg: str) -> object:
+    """Create a 403 Forbidden error."""
+    ...
+''',
+        "actix_web::error::ErrorForbidden({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorNotFound"): (
+        '''
+def ErrorNotFound(msg: str) -> object:
+    """Create a 404 Not Found error."""
+    ...
+''',
+        "actix_web::error::ErrorNotFound({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorInternalServerError"): (
+        '''
+def ErrorInternalServerError(msg: str) -> object:
+    """Create a 500 Internal Server Error."""
+    ...
+''',
+        "actix_web::error::ErrorInternalServerError({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "get"): (
+        '''
+def get() -> object:
+    """Create a GET route configuration.
+
+    Use with App.route() to configure a GET endpoint.
+
+    Example:
+        App.new().route("/", get().to(handler))
+    """
+    ...
+''',
+        "actix_web::web::get()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "post"): (
+        '''
+def post() -> object:
+    """Create a POST route configuration."""
+    ...
+''',
+        "actix_web::web::post()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "put"): (
+        '''
+def put() -> object:
+    """Create a PUT route configuration."""
+    ...
+''',
+        "actix_web::web::put()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "delete"): (
+        '''
+def delete() -> object:
+    """Create a DELETE route configuration."""
+    ...
+''',
+        "actix_web::web::delete()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "patch"): (
+        '''
+def patch() -> object:
+    """Create a PATCH route configuration."""
+    ...
+''',
+        "actix_web::web::patch()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+}
+
+
+# Hardcoded method stubs for specific method behaviors not captured by parser
+# Format: (crate_name, type_name, method_name) -> (rust_code, returns_self, needs_result, returns_type, param_types)
+# rust_code uses {self} for receiver and {arg0}, {arg1} etc for arguments
+# param_types: list of Rust type strings for each parameter (used to transform args, e.g., &str prevents .to_string())
+STD_METHOD_STUBS: dict[tuple[str, str, str], tuple[str, bool, bool, str | None, list[str] | None]] = {
+    # actix-web HttpServer methods
+    ("actix-web", "HttpServer", "bind"): (
+        "{self}.bind({arg0}).unwrap()",  # bind returns Result, unwrap it
+        True,  # returns_self
+        False,  # needs_result (we already unwrap)
+        None,  # returns_type
+        ["&str"],  # param_types: bind takes &str address
+    ),
+    ("actix-web", "HttpServer", "run"): (
+        "{self}.run().await",  # run() returns Server, need .await
+        False,  # returns_self
+        False,  # needs_result
+        None,  # returns_type
+        None,  # param_types
+    ),
+    # actix-web App methods
+    ("actix-web", "App", "route"): (
+        "{self}.route({arg0}, {arg1})",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        ["&str"],  # param_types: route takes &str path, then Route
+    ),
+    # actix-web Route methods
+    ("actix-web", "Route", "to"): (
+        "{self}.to({arg0})",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        None,  # param_types
     ),
 }
 
@@ -1243,7 +1844,7 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
         lines.append("")
         if struct.doc:
             lines.append(f"class {struct.name}:")
-            lines.append(f'    """{struct.doc}"""')
+            lines.append(f'    """{escape_docstring(struct.doc)}"""')
         else:
             lines.append(f"class {struct.name}:")
 
@@ -1266,7 +1867,7 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
         lines.append("")
         if enum.doc:
             lines.append(f"class {enum.name}:")
-            lines.append(f'    """{enum.doc}"""')
+            lines.append(f'    """{escape_docstring(enum.doc)}"""')
         else:
             lines.append(f"class {enum.name}:")
 
@@ -1294,7 +1895,7 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
             all_functions.append(safe_name)
             lines.append("")
             if func.doc:
-                lines.append(f'"""{func.doc}"""')
+                lines.append(f'"""{escape_docstring(func.doc)}"""')
             sig = generate_function_signature(func)
             lines.append(sig)
 
@@ -1515,6 +2116,24 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 if param_types:
                     lines.append(f"param_types = [{param_types_str}]")
                 lines.append("")
+
+    # Generate mappings for hardcoded method stubs
+    for (stub_crate, type_name, method_name), (rust_code, returns_self, needs_result, returns_type, param_types) in STD_METHOD_STUBS.items():
+        if stub_crate == crate_name:
+            lines.append(f"# {type_name}.{method_name} hardcoded method")
+            lines.append("[[mappings.methods]]")
+            lines.append(f'python = "{type_name}.{method_name}"')
+            lines.append(f'rust_code = "{rust_code}"')
+            lines.append("rust_imports = []")
+            lines.append(f"needs_result = {'true' if needs_result else 'false'}")
+            if returns_self:
+                lines.append("returns_self = true")
+            if returns_type:
+                lines.append(f'returns = "{returns_type}"')
+            if param_types:
+                param_types_str = ", ".join(f'"{t}"' for t in param_types)
+                lines.append(f"param_types = [{param_types_str}]")
+            lines.append("")
 
     # Generate type mappings for Result type aliases
     for alias in crate.type_aliases:
