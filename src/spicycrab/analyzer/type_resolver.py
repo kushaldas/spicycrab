@@ -58,6 +58,28 @@ PRIMITIVE_MAP: dict[PrimitiveType, str] = {
     PrimitiveType.NONE: "()",
 }
 
+# Rust native types that map directly (from spicycrab.types)
+# These are used when users import specific Rust types for precise control
+RUST_NATIVE_TYPES: dict[str, str] = {
+    # Unsigned integers
+    "u8": "u8",
+    "u16": "u16",
+    "u32": "u32",
+    "u64": "u64",
+    "u128": "u128",
+    "usize": "usize",
+    # Signed integers
+    "i8": "i8",
+    "i16": "i16",
+    "i32": "i32",
+    "i64": "i64",
+    "i128": "i128",
+    "isize": "isize",
+    # Floats
+    "f32": "f32",
+    "f64": "f64",
+}
+
 # Mapping from Python generic types to Rust types
 GENERIC_MAP: dict[str, str] = {
     "List": "Vec",
@@ -76,6 +98,10 @@ GENERIC_MAP: dict[str, str] = {
     "frozenset": "HashSet",
     "Iterable": "Vec",  # Simplified
     "Iterator": "Vec",  # Simplified
+    # Smart pointers from spicycrab.types
+    "Box": "Box",  # Box[T] -> Box<T>
+    "Arc": "std::sync::Arc",  # Arc[T] -> Arc<T>
+    "Rc": "std::rc::Rc",  # Rc[T] -> Rc<T>
 }
 
 
@@ -193,6 +219,10 @@ class TypeResolver:
         # Check for known types
         name = ir_type.name
         module = ir_type.module
+
+        # Check for Rust native types (u8, i32, f64, etc.)
+        if name in RUST_NATIVE_TYPES:
+            return RustType(name=RUST_NATIVE_TYPES[name])
 
         # Python's 'object' type - use () in Rust
         if name == "object":

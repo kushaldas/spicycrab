@@ -507,8 +507,8 @@ class Arc(Generic[T]):
         [
             ("Arc.new", "std::sync::Arc::new({arg0})"),
             ("Arc.clone", "std::sync::Arc::clone(&{arg0})"),
-            ("Arc.strong_count", "std::sync::Arc::strong_count(&{arg0}) as i64"),
-            ("Arc.weak_count", "std::sync::Arc::weak_count(&{arg0}) as i64"),
+            ("Arc.strong_count", "std::sync::Arc::strong_count(&{arg0})"),
+            ("Arc.weak_count", "std::sync::Arc::weak_count(&{arg0})"),
             ("Arc.try_unwrap", "std::sync::Arc::try_unwrap({arg0}).ok()"),
             ("Arc.into_inner", "std::sync::Arc::into_inner({arg0})"),
         ],
@@ -1490,12 +1490,6 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 trait_import = crate_trait_methods.get(method.name, "")
                 rust_imports = [trait_import] if trait_import else []
 
-                # Check if return type needs conversion to i64 (Python int)
-                # Small integer types (i32, u32, i16, u16, etc.) need explicit cast
-                # Use "as i64" instead of ".into()" to avoid ambiguity in format contexts
-                needs_cast = method.return_type in {"i8", "i16", "i32", "u8", "u16", "u32"}
-                into_suffix = " as i64" if needs_cast else ""
-
                 # Check if method returns a Result type
                 needs_result_val = "true" if returns_result(method.return_type) else "false"
 
@@ -1505,9 +1499,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 lines.append("[[mappings.methods]]")
                 lines.append(f'python = "{struct.name}.{py_method_name}"')
                 if args:
-                    lines.append(f'rust_code = "{{self}}.{method.name}({args}){into_suffix}"')
+                    lines.append(f'rust_code = "{{self}}.{method.name}({args})"')
                 else:
-                    lines.append(f'rust_code = "{{self}}.{method.name}(){into_suffix}"')
+                    lines.append(f'rust_code = "{{self}}.{method.name}()"')
                 if rust_imports:
                     imports_str = ", ".join(f'"{i}"' for i in rust_imports)
                     lines.append(f"rust_imports = [{imports_str}]")

@@ -71,6 +71,103 @@ None
    pub fn do_nothing() {
    }
 
+Rust Native Types
+-----------------
+
+For precise control over integer and float sizes, import Rust native types
+from ``spicycrab.types``. These map directly to their Rust equivalents.
+
+Integer Types
+^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from spicycrab.types import u8, u16, u32, u64, i8, i16, i32, i64, usize, isize
+
+   def add_bytes(a: u8, b: u8) -> u8:
+       return a + b
+
+   def index_size(arr: list[str]) -> usize:
+       return len(arr)
+
+   counter: i32 = 0
+
+.. code-block:: rust
+
+   pub fn add_bytes(a: u8, b: u8) -> u8 {
+       a + b
+   }
+
+   pub fn index_size(arr: Vec<String>) -> usize {
+       arr.len()
+   }
+
+   let counter: i32 = 0;
+
+Available integer types:
+
++-------------------+---------------------+----------------------------------+
+| Python            | Rust                | Range                            |
++===================+=====================+==================================+
+| ``u8``            | ``u8``              | 0 to 255                         |
++-------------------+---------------------+----------------------------------+
+| ``u16``           | ``u16``             | 0 to 65,535                      |
++-------------------+---------------------+----------------------------------+
+| ``u32``           | ``u32``             | 0 to 4,294,967,295               |
++-------------------+---------------------+----------------------------------+
+| ``u64``           | ``u64``             | 0 to 18,446,744,073,709,551,615  |
++-------------------+---------------------+----------------------------------+
+| ``u128``          | ``u128``            | 0 to 2^128-1                     |
++-------------------+---------------------+----------------------------------+
+| ``usize``         | ``usize``           | Platform-dependent (pointer size)|
++-------------------+---------------------+----------------------------------+
+| ``i8``            | ``i8``              | -128 to 127                      |
++-------------------+---------------------+----------------------------------+
+| ``i16``           | ``i16``             | -32,768 to 32,767                |
++-------------------+---------------------+----------------------------------+
+| ``i32``           | ``i32``             | -2,147,483,648 to 2,147,483,647  |
++-------------------+---------------------+----------------------------------+
+| ``i64``           | ``i64``             | -2^63 to 2^63-1                  |
++-------------------+---------------------+----------------------------------+
+| ``i128``          | ``i128``            | -2^127 to 2^127-1                |
++-------------------+---------------------+----------------------------------+
+| ``isize``         | ``isize``           | Platform-dependent (pointer size)|
++-------------------+---------------------+----------------------------------+
+
+Float Types
+^^^^^^^^^^^
+
+.. code-block:: python
+
+   from spicycrab.types import f32, f64
+
+   def compute_single(x: f32, y: f32) -> f32:
+       return x * y
+
+   precise: f64 = 3.141592653589793
+
+.. code-block:: rust
+
+   pub fn compute_single(x: f32, y: f32) -> f32 {
+       x * y
+   }
+
+   let precise: f64 = 3.141592653589793;
+
++-------------------+---------------------+----------------------------------+
+| Python            | Rust                | Precision                        |
++===================+=====================+==================================+
+| ``f32``           | ``f32``             | 32-bit IEEE 754                  |
++-------------------+---------------------+----------------------------------+
+| ``f64``           | ``f64``             | 64-bit IEEE 754 (Python default) |
++-------------------+---------------------+----------------------------------+
+
+.. note::
+
+   Python's ``int`` maps to ``i64`` and ``float`` maps to ``f64`` by default.
+   Use explicit Rust types when you need specific sizes for performance,
+   memory constraints, or FFI compatibility.
+
 Collection Types
 ----------------
 
@@ -229,6 +326,87 @@ For error handling, use ``Result[T, E]``:
 
 See :doc:`error_handling` for more details.
 
+Smart Pointers
+--------------
+
+Box (Heap Allocation)
+^^^^^^^^^^^^^^^^^^^^^
+
+``Box<T>`` is Rust's smart pointer for heap allocation. Use it for:
+
+- Recursive data structures (linked lists, trees)
+- Large data that shouldn't be on the stack
+- Transferring ownership of data
+
+.. code-block:: python
+
+   from spicycrab.types import Box
+
+   def create_boxed(value: int) -> Box[int]:
+       return Box.new(value)
+
+   def extract_value(boxed: Box[int]) -> int:
+       return Box.into_inner(boxed)
+
+   def main() -> None:
+       boxed: Box[int] = create_boxed(42)
+       value: int = extract_value(boxed)
+       print(value)
+
+.. code-block:: rust
+
+   pub fn create_boxed(value: i64) -> Box<i64> {
+       Box::new(value)
+   }
+
+   pub fn extract_value(boxed: Box<i64>) -> i64 {
+       *boxed
+   }
+
+   pub fn main() {
+       let boxed: Box<i64> = create_boxed(42);
+       let value: i64 = extract_value(boxed);
+       println!("{}", value);
+   }
+
+Box with complex types
+""""""""""""""""""""""
+
+.. code-block:: python
+
+   from spicycrab.types import Box
+
+   class Node:
+       value: int
+       next: Box[Node] | None
+
+       def __init__(self, value: int) -> None:
+           self.value = value
+           self.next = None
+
+.. code-block:: rust
+
+   pub struct Node {
+       pub value: i64,
+       pub next: Option<Box<Node>>,
+   }
+
+   impl Node {
+       pub fn new(value: i64) -> Self {
+           Self { value, next: None }
+       }
+   }
+
++-------------------+---------------------+
+| Python            | Rust                |
++===================+=====================+
+| ``Box[T]``        | ``Box<T>``          |
++-------------------+---------------------+
+| ``Box.new(x)``    | ``Box::new(x)``     |
++-------------------+---------------------+
+| ``Box.into_inner``| ``*boxed``          |
++-------------------+---------------------+
+
 Path Types
 ----------
 
@@ -296,6 +474,8 @@ Dictionary with Any values
 Type Mapping Reference
 ----------------------
 
+**Python Built-in Types:**
+
 +-------------------+---------------------+
 | Python            | Rust                |
 +===================+=====================+
@@ -324,4 +504,50 @@ Type Mapping Reference
 | ``Path``          | ``PathBuf``         |
 +-------------------+---------------------+
 | ``Any``           | ``Value``           |
++-------------------+---------------------+
+
+**Rust Native Types (from spicycrab.types):**
+
++-------------------+---------------------+
+| Python            | Rust                |
++===================+=====================+
+| ``u8``            | ``u8``              |
++-------------------+---------------------+
+| ``u16``           | ``u16``             |
++-------------------+---------------------+
+| ``u32``           | ``u32``             |
++-------------------+---------------------+
+| ``u64``           | ``u64``             |
++-------------------+---------------------+
+| ``u128``          | ``u128``            |
++-------------------+---------------------+
+| ``usize``         | ``usize``           |
++-------------------+---------------------+
+| ``i8``            | ``i8``              |
++-------------------+---------------------+
+| ``i16``           | ``i16``             |
++-------------------+---------------------+
+| ``i32``           | ``i32``             |
++-------------------+---------------------+
+| ``i64``           | ``i64``             |
++-------------------+---------------------+
+| ``i128``          | ``i128``            |
++-------------------+---------------------+
+| ``isize``         | ``isize``           |
++-------------------+---------------------+
+| ``f32``           | ``f32``             |
++-------------------+---------------------+
+| ``f64``           | ``f64``             |
++-------------------+---------------------+
+
+**Smart Pointers (from spicycrab.types):**
+
++-------------------+---------------------+
+| Python            | Rust                |
++===================+=====================+
+| ``Box[T]``        | ``Box<T>``          |
++-------------------+---------------------+
+| ``Arc[T]``        | ``Arc<T>``          |
++-------------------+---------------------+
+| ``Rc[T]``         | ``Rc<T>``           |
 +-------------------+---------------------+
