@@ -8,10 +8,52 @@ use pyo3::prelude::*;
 use std::fs;
 use std::path::Path;
 use syn::{
-    visit::Visit, FnArg, ImplItem, ItemConst, ItemEnum, ItemFn, ItemImpl, ItemStatic, ItemStruct,
-    ItemType, ItemUse, Pat, ReturnType, Type, UseTree, Visibility,
+    visit::Visit, FnArg, ImplItem, ItemConst, ItemEnum, ItemFn, ItemImpl, ItemMacro, ItemStatic,
+    ItemStruct, ItemType, ItemUse, Pat, ReturnType, Type, UseTree, Visibility,
 };
 use walkdir::WalkDir;
+
+/// Structured type information extracted from Rust types
+/// This preserves semantic information that would be lost by simple stringification
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct RustTypeInfo {
+    /// The full stringified type (for backwards compatibility)
+    #[pyo3(get)]
+    pub full_type: String,
+    /// Whether this is a reference type (&T or &mut T)
+    #[pyo3(get)]
+    pub is_reference: bool,
+    /// Whether this is a mutable reference (&mut T)
+    #[pyo3(get)]
+    pub is_mutable_ref: bool,
+    /// Whether this is an impl Trait type
+    #[pyo3(get)]
+    pub is_impl_trait: bool,
+    /// The trait bound if is_impl_trait (e.g., "AsRef<[u8]>", "Into<String>")
+    #[pyo3(get)]
+    pub trait_bound: Option<String>,
+    /// The core type name without references/lifetimes
+    #[pyo3(get)]
+    pub core_type: String,
+    /// Whether this type typically borrows input (based on AsRef, Borrow, etc.)
+    #[pyo3(get)]
+    pub expects_borrow: bool,
+    /// Whether this type typically takes ownership (based on Into, T without bounds)
+    #[pyo3(get)]
+    pub expects_owned: bool,
+}
+
+#[pymethods]
+impl RustTypeInfo {
+    fn __repr__(&self) -> String {
+        format!(
+            "RustTypeInfo(full='{}', ref={}, impl_trait={}, borrow={}, owned={})",
+            self.full_type, self.is_reference, self.is_impl_trait,
+            self.expects_borrow, self.expects_owned
+        )
+    }
+}
 
 /// A parsed Rust function parameter
 #[pyclass]
@@ -25,6 +67,9 @@ pub struct RustParam {
     pub is_self: bool,
     #[pyo3(get)]
     pub is_mut: bool,
+    /// Structured type information for smarter code generation
+    #[pyo3(get)]
+    pub type_info: Option<RustTypeInfo>,
 }
 
 #[pymethods]
@@ -360,6 +405,32 @@ impl RustEnumVariantAlias {
     }
 }
 
+/// A parsed Rust macro (macro_rules! or #[macro_export])
+/// Macros can't be fully auto-detected by syn, but we can find exported ones
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct RustMacro {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub doc: Option<String>,
+    #[pyo3(get)]
+    pub module_path: String,
+    /// Whether this macro is exported (#[macro_export])
+    #[pyo3(get)]
+    pub is_exported: bool,
+}
+
+#[pymethods]
+impl RustMacro {
+    fn __repr__(&self) -> String {
+        format!(
+            "RustMacro(name='{}', module='{}', exported={})",
+            self.name, self.module_path, self.is_exported
+        )
+    }
+}
+
 /// A parsed Rust crate
 #[pyclass]
 #[derive(Clone, Debug)]
@@ -384,6 +455,9 @@ pub struct RustCrate {
     pub statics: Vec<RustStatic>,
     #[pyo3(get)]
     pub enum_variant_aliases: Vec<RustEnumVariantAlias>,
+    /// Detected macros (macro_rules! with #[macro_export])
+    #[pyo3(get)]
+    pub macros: Vec<RustMacro>,
     /// All available features defined in Cargo.toml [features] section
     #[pyo3(get)]
     pub available_features: Vec<String>,
@@ -396,7 +470,7 @@ pub struct RustCrate {
 impl RustCrate {
     fn __repr__(&self) -> String {
         format!(
-            "RustCrate(name='{}', functions={}, structs={}, enums={}, impls={}, type_aliases={}, reexports={}, constants={}, statics={}, enum_variant_aliases={}, features={})",
+            "RustCrate(name='{}', functions={}, structs={}, enums={}, impls={}, type_aliases={}, reexports={}, constants={}, statics={}, enum_variant_aliases={}, macros={}, features={})",
             self.name,
             self.functions.len(),
             self.structs.len(),
@@ -407,6 +481,7 @@ impl RustCrate {
             self.constants.len(),
             self.statics.len(),
             self.enum_variant_aliases.len(),
+            self.macros.len(),
             self.available_features.len()
         )
     }
@@ -423,6 +498,7 @@ struct ItemCollector {
     constants: Vec<RustConstant>,
     statics: Vec<RustStatic>,
     enum_variant_aliases: Vec<RustEnumVariantAlias>,
+    macros: Vec<RustMacro>,
     current_module: String, // Track current module path
 }
 
@@ -438,6 +514,7 @@ impl ItemCollector {
             constants: Vec::new(),
             statics: Vec::new(),
             enum_variant_aliases: Vec::new(),
+            macros: Vec::new(),
             current_module: String::new(),
         }
     }
@@ -453,6 +530,7 @@ impl ItemCollector {
             constants: Vec::new(),
             statics: Vec::new(),
             enum_variant_aliases: Vec::new(),
+            macros: Vec::new(),
             current_module: module_path.to_string(),
         }
     }
@@ -579,6 +657,32 @@ impl<'ast> Visit<'ast> for ItemCollector {
             });
         }
         syn::visit::visit_item_static(self, node);
+    }
+
+    fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
+        // Check if this is a macro_rules! definition with #[macro_export]
+        // macro_rules! macros are identified by: mac.path being "macro_rules"
+        let is_macro_rules = node.mac.path.is_ident("macro_rules");
+
+        // Check for #[macro_export] attribute
+        let is_exported = node.attrs.iter().any(|attr| attr.path().is_ident("macro_export"));
+
+        // Only collect exported macro_rules! definitions
+        if is_macro_rules && is_exported {
+            // Get macro name from ident if present
+            if let Some(ident) = &node.ident {
+                let name = ident.to_string();
+                let doc = extract_doc_comment(&node.attrs);
+
+                self.macros.push(RustMacro {
+                    name,
+                    doc,
+                    module_path: self.current_module.clone(),
+                    is_exported: true,
+                });
+            }
+        }
+        syn::visit::visit_item_macro(self, node);
     }
 }
 
@@ -721,6 +825,81 @@ fn type_to_string(ty: &Type) -> String {
     ty.to_token_stream().to_string().replace(' ', "")
 }
 
+/// Analyze a type and extract structured information
+fn analyze_type(ty: &Type) -> RustTypeInfo {
+    use quote::ToTokens;
+
+    let full_type = ty.to_token_stream().to_string().replace(' ', "");
+    let mut is_reference = false;
+    let mut is_mutable_ref = false;
+    let mut is_impl_trait = false;
+    let mut trait_bound: Option<String> = None;
+    let mut core_type = full_type.clone();
+    let mut expects_borrow = false;
+    let mut expects_owned = false;
+
+    match ty {
+        Type::Reference(type_ref) => {
+            is_reference = true;
+            is_mutable_ref = type_ref.mutability.is_some();
+            // Extract the inner type as core_type
+            core_type = type_to_string(&type_ref.elem);
+            expects_borrow = true;
+        }
+        Type::ImplTrait(impl_trait) => {
+            is_impl_trait = true;
+            // Extract the trait bounds
+            let bounds: Vec<String> = impl_trait.bounds.iter()
+                .map(|b| b.to_token_stream().to_string().replace(' ', ""))
+                .collect();
+            let bound_str = bounds.join("+");
+            trait_bound = Some(bound_str.clone());
+
+            // Determine borrow vs ownership based on common trait patterns
+            // AsRef, Borrow, AsMut -> expects borrow (but accepts owned too)
+            // Into, TryInto -> expects ownership
+            let bound_lower = bound_str.to_lowercase();
+            if bound_lower.contains("asref") || bound_lower.contains("borrow")
+                || bound_lower.contains("asmut") {
+                expects_borrow = true;
+            }
+            if bound_lower.contains("into") || bound_lower.contains("tryinto") {
+                expects_owned = true;
+            }
+
+            // Core type is the trait bound itself for impl Trait
+            core_type = bound_str;
+        }
+        Type::Path(type_path) => {
+            // Extract the last segment as core type
+            if let Some(last_seg) = type_path.path.segments.last() {
+                core_type = last_seg.ident.to_string();
+
+                // Check for generic parameters like Option<T>, Vec<T>
+                if !last_seg.arguments.is_empty() {
+                    core_type = format!(
+                        "{}{}",
+                        last_seg.ident,
+                        last_seg.arguments.to_token_stream().to_string().replace(' ', "")
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+
+    RustTypeInfo {
+        full_type,
+        is_reference,
+        is_mutable_ref,
+        is_impl_trait,
+        trait_bound,
+        core_type,
+        expects_borrow,
+        expects_owned,
+    }
+}
+
 fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
     let docs: Vec<String> = attrs
         .iter()
@@ -796,11 +975,13 @@ fn parse_fn_params(
                     "_".to_string()
                 };
                 let rust_type = type_to_string(&pat_type.ty);
+                let type_info = Some(analyze_type(&pat_type.ty));
                 Some(RustParam {
                     name,
                     rust_type,
                     is_self: false,
                     is_mut: false,
+                    type_info,
                 })
             } else {
                 None
@@ -835,11 +1016,13 @@ fn parse_method_params(
                     "_".to_string()
                 };
                 let rust_type = type_to_string(&pat_type.ty);
+                let type_info = Some(analyze_type(&pat_type.ty));
                 Some(RustParam {
                     name,
                     rust_type,
                     is_self: false,
                     is_mut: false,
+                    type_info,
                 })
             }
         })
@@ -990,6 +1173,7 @@ fn parse_file_internal(path: &str, module_path: &str) -> PyResult<RustCrate> {
         constants: collector.constants,
         statics: collector.statics,
         enum_variant_aliases: collector.enum_variant_aliases,
+        macros: collector.macros,
         available_features: Vec::new(),  // Single file has no Cargo.toml
         default_features: Vec::new(),
     })
@@ -1084,6 +1268,7 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
     let mut all_constants = Vec::new();
     let mut all_statics = Vec::new();
     let mut all_enum_variant_aliases = Vec::new();
+    let mut all_macros = Vec::new();
 
     for entry in WalkDir::new(search_path)
         .into_iter()
@@ -1134,6 +1319,7 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
                 all_constants.extend(parsed.constants);
                 all_statics.extend(parsed.statics);
                 all_enum_variant_aliases.extend(parsed.enum_variant_aliases);
+                all_macros.extend(parsed.macros);
             }
             Err(_) => {
                 // Skip files that fail to parse
@@ -1153,6 +1339,7 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
         constants: all_constants,
         statics: all_statics,
         enum_variant_aliases: all_enum_variant_aliases,
+        macros: all_macros,
         available_features,
         default_features,
     })
@@ -1213,6 +1400,7 @@ fn _parser(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_rust_code, m)?)?;
     m.add_function(wrap_pyfunction!(format_rust_code, m)?)?;
     m.add_function(wrap_pyfunction!(validate_and_format_rust, m)?)?;
+    m.add_class::<RustTypeInfo>()?;
     m.add_class::<RustParam>()?;
     m.add_class::<RustFunction>()?;
     m.add_class::<RustField>()?;
@@ -1227,5 +1415,6 @@ fn _parser(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustConstant>()?;
     m.add_class::<RustStatic>()?;
     m.add_class::<RustEnumVariantAlias>()?;
+    m.add_class::<RustMacro>()?;
     Ok(())
 }

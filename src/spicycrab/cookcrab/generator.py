@@ -1932,6 +1932,69 @@ class GeneratedStub:
     pyproject_toml: str
 
 
+def get_smart_param_type(param: "RustParam") -> str:
+    """Get appropriate Rust param_type using structured type info.
+
+    This uses the new RustTypeInfo to make smarter decisions about borrowing:
+    - If type_info.expects_borrow is True (impl AsRef<T>), suggest &T form
+    - If type_info.is_reference is True, keep the reference
+    - Otherwise fall back to the raw rust_type
+
+    This reduces the need for hardcoded CRATE_FUNCTION_PARAM_OVERRIDES.
+    """
+    type_info = param.type_info
+    if type_info is None:
+        # No structured info available, fall back to raw type
+        return param.rust_type
+
+    # If the type is already a reference, use it as-is
+    if type_info.is_reference:
+        return param.rust_type
+
+    # If the type is impl AsRef<X>, suggest &X (borrow form)
+    if type_info.is_impl_trait and type_info.expects_borrow:
+        trait_bound = type_info.trait_bound or ""
+        # Extract inner type from AsRef<X>, Borrow<X>, etc.
+        # e.g., "AsRef<[u8]>" -> "&[u8]"
+        # e.g., "AsRef<str>" -> "&str"
+        import re
+        match = re.search(r'AsRef<([^>]+)>|Borrow<([^>]+)>', trait_bound)
+        if match:
+            inner_type = match.group(1) or match.group(2)
+            if inner_type:
+                return f"&{inner_type}"
+
+    # For Into<T> or TryInto<T>, the type takes ownership - use T or the raw type
+    if type_info.is_impl_trait and type_info.expects_owned:
+        # Don't add & for Into bounds
+        return param.rust_type
+
+    # Default: use raw rust_type
+    return param.rust_type
+
+
+def get_param_types_for_function(params: list["RustParam"], crate_name: str, func_name: str) -> list[str]:
+    """Get param_types for a function, using type_info when available.
+
+    Checks for hardcoded overrides first, then falls back to smart detection.
+    """
+    # First check for explicit overrides (for backwards compat / special cases)
+    full_func_name = f"{crate_name}.{func_name}"
+    if crate_name in CRATE_FUNCTION_PARAM_OVERRIDES:
+        override_map = CRATE_FUNCTION_PARAM_OVERRIDES[crate_name]
+        if full_func_name in override_map:
+            log_decision(
+                "param_types_override",
+                crate=crate_name,
+                function=func_name,
+                param_types=override_map[full_func_name],
+            )
+            return override_map[full_func_name]
+
+    # Use smart type detection based on type_info
+    return [get_smart_param_type(p) for p in params]
+
+
 def sanitize_rust_type(rust_type: str) -> str:
     """Sanitize Rust-specific syntax that doesn't translate to Python.
 
@@ -2549,9 +2612,17 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append("")
 
     # Generate mappings for macro stubs (e.g., log macros)
+    # Note: Macros are detected via #[macro_export], but signatures can't be auto-extracted
+    detected_macro_names = {m.name for m in crate.macros if m.is_exported}
+    hardcoded_macro_names: set[str] = set()
+
     if crate_name in CRATE_MACRO_STUBS:
-        lines.append("# Macro mappings (hardcoded - macros can't be auto-detected)")
+        lines.append("# Macro mappings (signatures from hardcoded stubs)")
         for _python_stub, toml_mapping in CRATE_MACRO_STUBS[crate_name]:
+            # Extract macro name from python path (e.g., "log.trace" -> "trace")
+            macro_name = toml_mapping["python"].split(".")[-1]
+            hardcoded_macro_names.add(macro_name)
+
             lines.append("[[mappings.functions]]")
             lines.append(f'python = "{toml_mapping["python"]}"')
             # Escape double quotes for TOML
@@ -2568,6 +2639,19 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 param_types_str = ", ".join(f'"{t}"' for t in toml_mapping["param_types"])
                 lines.append(f"param_types = [{param_types_str}]")
             lines.append("")
+
+    # Log discovered macros that don't have hardcoded stubs
+    uncovered_macros = detected_macro_names - hardcoded_macro_names
+    if uncovered_macros:
+        log_decision(
+            "uncovered_macros",
+            crate=crate_name,
+            detected=list(uncovered_macros),
+            message="These exported macros were detected but have no hardcoded stubs"
+        )
+        lines.append(f"# NOTE: Detected {len(uncovered_macros)} exported macros without stubs: {', '.join(sorted(uncovered_macros))}")
+        lines.append("# To use these macros, add signatures to CRATE_MACRO_STUBS in generator.py")
+        lines.append("")
 
     # Generate mappings for hardcoded type stubs (e.g., sha2::Sha256)
     if crate_name in CRATE_TYPE_STUBS:
@@ -2597,22 +2681,8 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             args = ", ".join(f"{{arg{i}}}" for i in range(len(func.params)))
             py_func_name = python_safe_name(func.name)
 
-            # Check for param_types overrides (e.g., base64::encode needs &[u8] not T)
-            full_func_name = f"{crate_name}.{py_func_name}"
-            if crate_name in CRATE_FUNCTION_PARAM_OVERRIDES:
-                override_map = CRATE_FUNCTION_PARAM_OVERRIDES[crate_name]
-                if full_func_name in override_map:
-                    param_types = override_map[full_func_name]
-                    log_decision(
-                        "param_types_override",
-                        crate=crate_name,
-                        function=func.name,
-                        param_types=param_types,
-                    )
-                else:
-                    param_types = [p.rust_type for p in func.params]
-            else:
-                param_types = [p.rust_type for p in func.params]
+            # Get param_types using smart detection (checks overrides + type_info)
+            param_types = get_param_types_for_function(func.params, crate_name, py_func_name)
             param_types_str = ", ".join(f'"{t}"' for t in param_types)
 
             # Check for path overrides (e.g., tokio::sleep -> tokio::time::sleep)
