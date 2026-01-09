@@ -101,6 +101,7 @@ RUST_TO_PYTHON_TYPES: dict[str, str] = {
     "()": "None",
 }
 
+
 def returns_result(return_type: str | None) -> bool:
     """Check if a return type is a Result type.
 
@@ -223,7 +224,25 @@ def extract_return_type_name(return_type: str | None, self_type: str) -> str | N
         return None
 
     # Skip primitive types - no need to track these
-    primitive_types = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "str", "String", "()", "usize", "isize"}
+    primitive_types = {
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f32",
+        "f64",
+        "bool",
+        "char",
+        "str",
+        "String",
+        "()",
+        "usize",
+        "isize",
+    }
     if rt in primitive_types:
         return None
 
