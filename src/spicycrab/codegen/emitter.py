@@ -19,6 +19,7 @@ from spicycrab.codegen.stdlib import (
     get_stub_mapping,
     get_stub_method_mapping,
 )
+from spicycrab.debug_log import increment, log_decision
 from spicycrab.ir.nodes import (
     BinaryOp,
     IRAssign,
@@ -299,6 +300,14 @@ class RustEmitter:
             if crate_name:
                 # Track which names came from which crate
                 if imp.names:
+                    imported_names = [name for name, _ in imp.names]
+                    log_decision(
+                        "stub_import_discovered",
+                        module=module_name,
+                        crate=crate_name,
+                        names=imported_names,
+                    )
+                    increment("stub_imports")
                     for name, alias in imp.names:
                         effective_name = alias if alias else name
                         self.ctx.stub_imports[effective_name] = crate_name
@@ -920,35 +929,71 @@ class RustEmitter:
         # No type annotations - let Rust infer the types
         return f"{indent}let ({targets_str}) = {value};"
 
+    def _extract_is_not_none_vars(self, condition: IRExpression) -> list[str]:
+        """Extract variable names from compound 'x is not None' conditions.
+
+        Handles both single checks and compound AND conditions:
+        - x is not None -> ["x"]
+        - x is not None and y is not None -> ["x", "y"]
+        - x is not None and y is not None and z is not None -> ["x", "y", "z"]
+
+        Returns empty list if any part of the condition is not a simple 'is not None' check.
+        """
+        vars_list: list[str] = []
+
+        def extract_from_expr(expr: IRExpression) -> bool:
+            """Returns True if expr is a valid 'is not None' or compound of them."""
+            if (
+                isinstance(expr, IRBinaryOp)
+                and expr.op == BinaryOp.IS_NOT
+                and isinstance(expr.left, IRName)
+                and isinstance(expr.right, IRLiteral)
+                and expr.right.value is None
+            ):
+                vars_list.append(expr.left.name)
+                return True
+            elif (
+                isinstance(expr, IRBinaryOp)
+                and expr.op == BinaryOp.AND
+            ):
+                # Both sides must be valid
+                return extract_from_expr(expr.left) and extract_from_expr(expr.right)
+            return False
+
+        if extract_from_expr(condition):
+            return vars_list
+        return []
+
     def _emit_if(self, stmt: IRIf) -> str:
         """Emit an if statement."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for "x is not None" pattern -> use "if let Some(x) = x"
-        unwrapped_var: str | None = None
-        if (
-            isinstance(stmt.condition, IRBinaryOp)
-            and stmt.condition.op == BinaryOp.IS_NOT
-            and isinstance(stmt.condition.left, IRName)
-            and isinstance(stmt.condition.right, IRLiteral)
-            and stmt.condition.right.value is None
-        ):
-            var_name = stmt.condition.left.name
-            unwrapped_var = var_name
+        # Check for compound "x is not None and y is not None" patterns
+        # Generate "if let (Some(x), Some(y)) = (x, y) { ... }" for idiomatic Rust
+        unwrapped_vars: list[str] = self._extract_is_not_none_vars(stmt.condition)
+
+        if len(unwrapped_vars) == 1:
+            # Single variable: if let Some(x) = x { ... }
+            var_name = unwrapped_vars[0]
             lines.append(f"{indent}if let Some({var_name}) = {var_name} {{")
+        elif len(unwrapped_vars) > 1:
+            # Multiple variables: if let (Some(x), Some(y)) = (x, y) { ... }
+            some_pattern = ", ".join(f"Some({v})" for v in unwrapped_vars)
+            var_tuple = ", ".join(unwrapped_vars)
+            lines.append(f"{indent}if let ({some_pattern}) = ({var_tuple}) {{")
         else:
             cond = self.emit_expression(stmt.condition)
             lines.append(f"{indent}if {cond} {{")
 
         self.ctx.indent += 1
-        # If we unwrapped a variable, track it so method calls don't use Option
-        if unwrapped_var:
-            self.ctx.unwrapped_options.add(unwrapped_var)
+        # If we unwrapped variables, track them so they're used without Option
+        for var in unwrapped_vars:
+            self.ctx.unwrapped_options.add(var)
         for s in stmt.then_body:
             lines.append(self.emit_statement(s))
-        if unwrapped_var:
-            self.ctx.unwrapped_options.discard(unwrapped_var)
+        for var in unwrapped_vars:
+            self.ctx.unwrapped_options.discard(var)
         self.ctx.indent -= 1
 
         for elif_cond, elif_body in stmt.elif_clauses:
@@ -1676,6 +1721,10 @@ class RustEmitter:
 
         For methods like get_one that need ::<Type>, inject based on
         the assignment target type context.
+
+        clap's get_one::<T>(&str) returns Option<&T>, so:
+        - If target type is Option<T>, use ::<T> and add .cloned() to get Option<T>
+        - If target type is T (non-Option), use ::<T> (user expects to unwrap)
         """
         # Methods that need turbofish type inference
         turbofish_methods = {"get_one", "try_get_one", "get_many", "try_get_many"}
@@ -1689,11 +1738,73 @@ class RustEmitter:
             # This is the most common case for clap argument retrieval
             target_type = "String"
 
+        # Strip Option<...> wrapper since get_one already returns Option<&T>
+        # We need the inner type T for the turbofish
+        inner_type = target_type
+        needs_cloned = False
+        if target_type.startswith("Option<") and target_type.endswith(">"):
+            inner_type = target_type[7:-1]  # Extract T from Option<T>
+            needs_cloned = True
+
         # Insert turbofish after the method name
         # Pattern: .get_one( -> .get_one::<Type>(
         old_pattern = f".{method}("
-        new_pattern = f".{method}::<{target_type}>("
-        return rust_code.replace(old_pattern, new_pattern)
+        new_pattern = f".{method}::<{inner_type}>("
+        result = rust_code.replace(old_pattern, new_pattern)
+
+        # Add .cloned() to convert Option<&T> to Option<T>
+        if needs_cloned and method in ("get_one", "try_get_one"):
+            # Find the closing paren of the method call and add .cloned()
+            # Simple case: result ends with the argument and )
+            result = result + ".cloned()"
+
+        log_decision(
+            "turbofish_injection",
+            method=method,
+            target_type=target_type,
+            inner_type=inner_type,
+            needs_cloned=needs_cloned,
+        )
+        increment("turbofish_injections")
+        return result
+
+    def _add_int_conversion(self, rust_code: str, returns_type: str | None) -> str:
+        """Add .into() for integer type conversion if needed.
+
+        When a method returns an integer type (e.g., i32, u32) and the assignment
+        target expects a different integer type (e.g., i64), we need to add .into()
+        for Rust's type conversion.
+
+        Args:
+            rust_code: The generated Rust code
+            returns_type: The return type from the stub mapping (e.g., "i32", "u32")
+
+        Returns:
+            The rust_code with .into() appended if conversion is needed
+        """
+        if not returns_type:
+            return rust_code
+
+        target_type = self.ctx.assignment_target_type
+        if not target_type:
+            return rust_code
+
+        # Integer types that need conversion
+        int_types = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize"}
+
+        # Only add .into() if both are integer types and they're different
+        if returns_type in int_types and target_type in int_types:
+            if returns_type != target_type:
+                log_decision(
+                    "int_conversion",
+                    returns_type=returns_type,
+                    target_type=target_type,
+                    added_into=True,
+                )
+                increment("int_conversions")
+                return f"{rust_code}.into()"
+
+        return rust_code
 
     def _transform_arg_for_type(self, arg: str, rust_type: str) -> str:
         """Transform an argument based on expected Rust type.
@@ -1741,10 +1852,17 @@ class RustEmitter:
 
                 return re.sub(r'"([^"]*)"\.to_string\(\)', r'"\1"', arg)
 
-        # Handle generic reference types like &T, &Value, etc.
+        # Handle explicit reference types like &T, &str, &[u8], etc.
         # If the param_type starts with & and arg is an identifier, borrow it
         if rust_type.startswith("&") and arg.isidentifier() and not arg.startswith("&"):
             return f"&{arg}"
+
+        # NOTE: We do NOT automatically add & for generic type parameters (T, U, V, etc.)
+        # because many APIs use Into<T> bounds which require ownership, not references.
+        # Examples:
+        # - reqwest::body() takes impl Into<Body> - needs ownership
+        # - tokio::spawn() takes impl Future - needs ownership
+        # If specific APIs need &, they should have explicit &T in their param_types.
 
         return arg
 
@@ -2022,6 +2140,8 @@ class RustEmitter:
                         else:
                             if not self._result_already_handled(rust_code):
                                 rust_code = f"{rust_code}.unwrap()"
+                    # Add .into() for integer type conversion if needed
+                    rust_code = self._add_int_conversion(rust_code, stub_mapping.returns)
                     return rust_code
 
         # Check for chained stub method calls (e.g., Arg.new(...).short(...))
@@ -2059,6 +2179,8 @@ class RustEmitter:
                     else:
                         if not self._result_already_handled(rust_code):
                             rust_code = f"{rust_code}.unwrap()"
+                # Add .into() for integer type conversion if needed
+                rust_code = self._add_int_conversion(rust_code, stub_mapping.returns)
                 return rust_code
 
         # Check for nested stdlib calls (e.g., os.path.exists())

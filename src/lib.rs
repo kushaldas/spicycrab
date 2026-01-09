@@ -8,8 +8,8 @@ use pyo3::prelude::*;
 use std::fs;
 use std::path::Path;
 use syn::{
-    visit::Visit, FnArg, ImplItem, ItemEnum, ItemFn, ItemImpl, ItemStruct, ItemType, ItemUse, Pat,
-    ReturnType, Type, UseTree, Visibility,
+    visit::Visit, FnArg, ImplItem, ItemConst, ItemEnum, ItemFn, ItemImpl, ItemStatic, ItemStruct,
+    ItemType, ItemUse, Pat, ReturnType, Type, UseTree, Visibility,
 };
 use walkdir::WalkDir;
 
@@ -53,6 +53,8 @@ pub struct RustFunction {
     pub is_async: bool,
     #[pyo3(get)]
     pub doc: Option<String>,
+    #[pyo3(get)]
+    pub module_path: String,
 }
 
 #[pymethods]
@@ -102,6 +104,8 @@ pub struct RustStruct {
     pub is_pub: bool,
     #[pyo3(get)]
     pub doc: Option<String>,
+    #[pyo3(get)]
+    pub module_path: String,
 }
 
 #[pymethods]
@@ -149,6 +153,8 @@ pub struct RustEnum {
     pub is_pub: bool,
     #[pyo3(get)]
     pub doc: Option<String>,
+    #[pyo3(get)]
+    pub module_path: String,
 }
 
 #[pymethods]
@@ -272,6 +278,88 @@ impl RustReexport {
     }
 }
 
+/// A parsed Rust constant (const X: Type = value;)
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct RustConstant {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub rust_type: String,
+    #[pyo3(get)]
+    pub is_pub: bool,
+    #[pyo3(get)]
+    pub doc: Option<String>,
+    #[pyo3(get)]
+    pub module_path: String, // Track which module this constant is in
+}
+
+#[pymethods]
+impl RustConstant {
+    fn __repr__(&self) -> String {
+        format!(
+            "RustConstant(name='{}', type='{}', module='{}', is_pub={})",
+            self.name, self.rust_type, self.module_path, self.is_pub
+        )
+    }
+}
+
+/// A parsed Rust static (static X: Type = value;)
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct RustStatic {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub rust_type: String,
+    #[pyo3(get)]
+    pub is_pub: bool,
+    #[pyo3(get)]
+    pub is_mut: bool,
+    #[pyo3(get)]
+    pub doc: Option<String>,
+    #[pyo3(get)]
+    pub module_path: String,
+}
+
+#[pymethods]
+impl RustStatic {
+    fn __repr__(&self) -> String {
+        format!(
+            "RustStatic(name='{}', type='{}', module='{}', is_pub={}, is_mut={})",
+            self.name, self.rust_type, self.module_path, self.is_pub, self.is_mut
+        )
+    }
+}
+
+/// A re-export of an enum variant with an alias (pub use EnumType::Variant as Alias)
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct RustEnumVariantAlias {
+    #[pyo3(get)]
+    pub alias_name: String, // The exported name (e.g., "HS256")
+    #[pyo3(get)]
+    pub enum_type: String, // The enum type (e.g., "HmacJwsAlgorithm")
+    #[pyo3(get)]
+    pub variant_name: String, // The variant (e.g., "Hs256")
+    #[pyo3(get)]
+    pub full_path: String, // Full original path (e.g., "HmacJwsAlgorithm::Hs256")
+    #[pyo3(get)]
+    pub is_pub: bool,
+    #[pyo3(get)]
+    pub module_path: String, // The module path where this re-export was made (e.g., "jws")
+}
+
+#[pymethods]
+impl RustEnumVariantAlias {
+    fn __repr__(&self) -> String {
+        format!(
+            "RustEnumVariantAlias(alias='{}', enum='{}', variant='{}', path='{}')",
+            self.alias_name, self.enum_type, self.variant_name, self.full_path
+        )
+    }
+}
+
 /// A parsed Rust crate
 #[pyclass]
 #[derive(Clone, Debug)]
@@ -290,20 +378,36 @@ pub struct RustCrate {
     pub type_aliases: Vec<RustTypeAlias>,
     #[pyo3(get)]
     pub reexports: Vec<RustReexport>,
+    #[pyo3(get)]
+    pub constants: Vec<RustConstant>,
+    #[pyo3(get)]
+    pub statics: Vec<RustStatic>,
+    #[pyo3(get)]
+    pub enum_variant_aliases: Vec<RustEnumVariantAlias>,
+    /// All available features defined in Cargo.toml [features] section
+    #[pyo3(get)]
+    pub available_features: Vec<String>,
+    /// Default features (features listed under "default" in [features])
+    #[pyo3(get)]
+    pub default_features: Vec<String>,
 }
 
 #[pymethods]
 impl RustCrate {
     fn __repr__(&self) -> String {
         format!(
-            "RustCrate(name='{}', functions={}, structs={}, enums={}, impls={}, type_aliases={}, reexports={})",
+            "RustCrate(name='{}', functions={}, structs={}, enums={}, impls={}, type_aliases={}, reexports={}, constants={}, statics={}, enum_variant_aliases={}, features={})",
             self.name,
             self.functions.len(),
             self.structs.len(),
             self.enums.len(),
             self.impls.len(),
             self.type_aliases.len(),
-            self.reexports.len()
+            self.reexports.len(),
+            self.constants.len(),
+            self.statics.len(),
+            self.enum_variant_aliases.len(),
+            self.available_features.len()
         )
     }
 }
@@ -316,6 +420,10 @@ struct ItemCollector {
     impls: Vec<RustImpl>,
     type_aliases: Vec<RustTypeAlias>,
     reexports: Vec<RustReexport>,
+    constants: Vec<RustConstant>,
+    statics: Vec<RustStatic>,
+    enum_variant_aliases: Vec<RustEnumVariantAlias>,
+    current_module: String, // Track current module path
 }
 
 impl ItemCollector {
@@ -327,6 +435,25 @@ impl ItemCollector {
             impls: Vec::new(),
             type_aliases: Vec::new(),
             reexports: Vec::new(),
+            constants: Vec::new(),
+            statics: Vec::new(),
+            enum_variant_aliases: Vec::new(),
+            current_module: String::new(),
+        }
+    }
+
+    fn with_module(module_path: &str) -> Self {
+        Self {
+            functions: Vec::new(),
+            structs: Vec::new(),
+            enums: Vec::new(),
+            impls: Vec::new(),
+            type_aliases: Vec::new(),
+            reexports: Vec::new(),
+            constants: Vec::new(),
+            statics: Vec::new(),
+            enum_variant_aliases: Vec::new(),
+            current_module: module_path.to_string(),
         }
     }
 }
@@ -334,21 +461,21 @@ impl ItemCollector {
 impl<'ast> Visit<'ast> for ItemCollector {
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         if is_pub(&node.vis) {
-            self.functions.push(parse_function(node));
+            self.functions.push(parse_function(node, &self.current_module));
         }
         syn::visit::visit_item_fn(self, node);
     }
 
     fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
         if is_pub(&node.vis) {
-            self.structs.push(parse_struct(node));
+            self.structs.push(parse_struct(node, &self.current_module));
         }
         syn::visit::visit_item_struct(self, node);
     }
 
     fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
         if is_pub(&node.vis) {
-            self.enums.push(parse_enum(node));
+            self.enums.push(parse_enum(node, &self.current_module));
         }
         syn::visit::visit_item_enum(self, node);
     }
@@ -405,13 +532,132 @@ impl<'ast> Visit<'ast> for ItemCollector {
     }
 
     fn visit_item_use(&mut self, node: &'ast ItemUse) {
-        // Only track public re-exports from external crates
+        // Only track public re-exports
         if is_pub(&node.vis) {
-            if let Some(reexport) = parse_reexport(&node.tree) {
+            // Try to parse as enum variant alias (pub use EnumType::Variant as Alias)
+            if let Some(alias) = parse_enum_variant_alias(&node.tree, &self.current_module) {
+                self.enum_variant_aliases.push(alias);
+            } else if let Some(reexport) = parse_reexport(&node.tree) {
+                // Otherwise try as external crate re-export
                 self.reexports.push(reexport);
             }
         }
         syn::visit::visit_item_use(self, node);
+    }
+
+    fn visit_item_const(&mut self, node: &'ast ItemConst) {
+        if is_pub(&node.vis) {
+            let name = node.ident.to_string();
+            let rust_type = type_to_string(&node.ty);
+            let doc = extract_doc_comment(&node.attrs);
+
+            self.constants.push(RustConstant {
+                name,
+                rust_type,
+                is_pub: true,
+                doc,
+                module_path: self.current_module.clone(),
+            });
+        }
+        syn::visit::visit_item_const(self, node);
+    }
+
+    fn visit_item_static(&mut self, node: &'ast ItemStatic) {
+        if is_pub(&node.vis) {
+            let name = node.ident.to_string();
+            let rust_type = type_to_string(&node.ty);
+            let doc = extract_doc_comment(&node.attrs);
+            let is_mut = matches!(node.mutability, syn::StaticMutability::Mut(_));
+
+            self.statics.push(RustStatic {
+                name,
+                rust_type,
+                is_pub: true,
+                is_mut,
+                doc,
+                module_path: self.current_module.clone(),
+            });
+        }
+        syn::visit::visit_item_static(self, node);
+    }
+}
+
+/// Parse a use tree to extract enum variant alias (pub use EnumType::Variant as Alias)
+fn parse_enum_variant_alias(tree: &UseTree, module_path: &str) -> Option<RustEnumVariantAlias> {
+    // We're looking for patterns like: EnumType::Variant as Alias
+    // The tree structure for "HmacJwsAlgorithm::Hs256 as HS256" is:
+    // Path { ident: "HmacJwsAlgorithm", tree: Path { ident: "Hs256", tree: Rename { .. } } }
+    // OR without alias: Path { ident: "EnumType", tree: Name { ident: "Variant" } }
+    match tree {
+        UseTree::Path(path) => {
+            let first_segment = path.ident.to_string();
+
+            // Check if this looks like a type name (starts with uppercase)
+            // This heuristic helps distinguish "EnumType::Variant" from "crate::module"
+            if !first_segment.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                return None;
+            }
+
+            match &*path.tree {
+                // EnumType::Variant as Alias
+                UseTree::Rename(rename) => {
+                    let variant_name = rename.ident.to_string();
+                    let alias_name = rename.rename.to_string();
+                    Some(RustEnumVariantAlias {
+                        alias_name,
+                        enum_type: first_segment.clone(),
+                        variant_name: variant_name.clone(),
+                        full_path: format!("{}::{}", first_segment, variant_name),
+                        is_pub: true,
+                        module_path: module_path.to_string(),
+                    })
+                }
+                // EnumType::Variant (no alias, same name)
+                UseTree::Name(name) => {
+                    let variant_name = name.ident.to_string();
+                    Some(RustEnumVariantAlias {
+                        alias_name: variant_name.clone(),
+                        enum_type: first_segment.clone(),
+                        variant_name: variant_name.clone(),
+                        full_path: format!("{}::{}", first_segment, variant_name),
+                        is_pub: true,
+                        module_path: module_path.to_string(),
+                    })
+                }
+                // Nested path like OuterType::InnerType::Variant as Alias
+                UseTree::Path(inner_path) => {
+                    let second_segment = inner_path.ident.to_string();
+                    match &*inner_path.tree {
+                        UseTree::Rename(rename) => {
+                            let variant_name = rename.ident.to_string();
+                            let alias_name = rename.rename.to_string();
+                            Some(RustEnumVariantAlias {
+                                alias_name,
+                                enum_type: format!("{}::{}", first_segment, second_segment),
+                                variant_name: variant_name.clone(),
+                                full_path: format!("{}::{}::{}", first_segment, second_segment, variant_name),
+                                is_pub: true,
+                                module_path: module_path.to_string(),
+                            })
+                        }
+                        UseTree::Name(name) => {
+                            let variant_name = name.ident.to_string();
+                            Some(RustEnumVariantAlias {
+                                alias_name: variant_name.clone(),
+                                enum_type: format!("{}::{}", first_segment, second_segment),
+                                variant_name: variant_name.clone(),
+                                full_path: format!("{}::{}::{}", first_segment, second_segment, variant_name),
+                                is_pub: true,
+                                module_path: module_path.to_string(),
+                            })
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -501,7 +747,7 @@ fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
     }
 }
 
-fn parse_function(node: &ItemFn) -> RustFunction {
+fn parse_function(node: &ItemFn, module_path: &str) -> RustFunction {
     let name = node.sig.ident.to_string();
     let params = parse_fn_params(&node.sig.inputs);
     let return_type = parse_return_type(&node.sig.output);
@@ -515,6 +761,7 @@ fn parse_function(node: &ItemFn) -> RustFunction {
         is_pub: true,
         is_async,
         doc,
+        module_path: module_path.to_string(),
     }
 }
 
@@ -608,7 +855,7 @@ fn parse_return_type(output: &ReturnType) -> Option<String> {
     }
 }
 
-fn parse_struct(node: &ItemStruct) -> RustStruct {
+fn parse_struct(node: &ItemStruct, module_path: &str) -> RustStruct {
     let name = node.ident.to_string();
     let fields = match &node.fields {
         syn::Fields::Named(named) => named
@@ -639,10 +886,11 @@ fn parse_struct(node: &ItemStruct) -> RustStruct {
         fields,
         is_pub: true,
         doc,
+        module_path: module_path.to_string(),
     }
 }
 
-fn parse_enum(node: &ItemEnum) -> RustEnum {
+fn parse_enum(node: &ItemEnum, module_path: &str) -> RustEnum {
     let name = node.ident.to_string();
     let variants = node
         .variants
@@ -683,6 +931,7 @@ fn parse_enum(node: &ItemEnum) -> RustEnum {
         variants,
         is_pub: true,
         doc,
+        module_path: module_path.to_string(),
     }
 }
 
@@ -711,9 +960,8 @@ fn parse_type_alias(node: &ItemType) -> RustTypeAlias {
     }
 }
 
-/// Parse a single Rust source file
-#[pyfunction]
-fn parse_file(path: &str) -> PyResult<RustCrate> {
+/// Parse a single Rust source file with optional module path
+fn parse_file_internal(path: &str, module_path: &str) -> PyResult<RustCrate> {
     let content = fs::read_to_string(path).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Failed to read file: {}", e))
     })?;
@@ -723,6 +971,7 @@ fn parse_file(path: &str) -> PyResult<RustCrate> {
     })?;
 
     let mut collector = ItemCollector::new();
+    collector.current_module = module_path.to_string();
     collector.visit_file(&syntax);
 
     let name = Path::new(path)
@@ -738,7 +987,52 @@ fn parse_file(path: &str) -> PyResult<RustCrate> {
         impls: collector.impls,
         type_aliases: collector.type_aliases,
         reexports: collector.reexports,
+        constants: collector.constants,
+        statics: collector.statics,
+        enum_variant_aliases: collector.enum_variant_aliases,
+        available_features: Vec::new(),  // Single file has no Cargo.toml
+        default_features: Vec::new(),
     })
+}
+
+/// Parse a single Rust source file (public API)
+#[pyfunction]
+fn parse_file(path: &str) -> PyResult<RustCrate> {
+    parse_file_internal(path, "")
+}
+
+/// Parse features from Cargo.toml content
+/// Returns (available_features, default_features)
+fn parse_cargo_features(content: &str) -> (Vec<String>, Vec<String>) {
+    let mut available_features = Vec::new();
+    let mut default_features = Vec::new();
+
+    // Parse the TOML content
+    if let Ok(parsed) = content.parse::<toml::Table>() {
+        if let Some(toml::Value::Table(features)) = parsed.get("features") {
+            for (name, value) in features {
+                // Add all feature names to available_features
+                available_features.push(name.clone());
+
+                // If this is the "default" feature, extract its dependencies as default_features
+                if name == "default" {
+                    if let toml::Value::Array(deps) = value {
+                        for dep in deps {
+                            if let toml::Value::String(dep_name) = dep {
+                                default_features.push(dep_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort for consistent output
+    available_features.sort();
+    default_features.sort();
+
+    (available_features, default_features)
 }
 
 /// Parse an entire Rust crate directory
@@ -746,22 +1040,32 @@ fn parse_file(path: &str) -> PyResult<RustCrate> {
 fn parse_crate(path: &str) -> PyResult<RustCrate> {
     let crate_path = Path::new(path);
 
-    // Try to find crate name from Cargo.toml
+    // Try to find crate name and features from Cargo.toml
     let cargo_toml = crate_path.join("Cargo.toml");
-    let crate_name = if cargo_toml.exists() {
+    let (crate_name, available_features, default_features) = if cargo_toml.exists() {
         let content = fs::read_to_string(&cargo_toml).unwrap_or_default();
-        // Simple extraction - look for name = "..."
-        content
+
+        // Extract crate name - look for name = "..."
+        let name = content
             .lines()
             .find(|l| l.trim().starts_with("name"))
             .and_then(|l| l.split('=').nth(1))
             .map(|s| s.trim().trim_matches('"').to_string())
-            .unwrap_or_else(|| "unknown".to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Extract features
+        let (avail, defaults) = parse_cargo_features(&content);
+
+        (name, avail, defaults)
     } else {
-        crate_path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string())
+        (
+            crate_path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            Vec::new(),
+            Vec::new(),
+        )
     };
 
     let src_path = crate_path.join("src");
@@ -777,6 +1081,9 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
     let mut all_impls = Vec::new();
     let mut all_type_aliases = Vec::new();
     let mut all_reexports = Vec::new();
+    let mut all_constants = Vec::new();
+    let mut all_statics = Vec::new();
+    let mut all_enum_variant_aliases = Vec::new();
 
     for entry in WalkDir::new(search_path)
         .into_iter()
@@ -784,7 +1091,39 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
         .filter(|e| e.path().extension().map(|ext| ext == "rs").unwrap_or(false))
     {
         let file_path = entry.path();
-        match parse_file(file_path.to_str().unwrap_or_default()) {
+
+        // Compute module path from file path relative to search_path
+        // e.g., src/jws/mod.rs -> "jws", src/jws/alg/hmac.rs -> "jws::alg::hmac"
+        let module_path = file_path
+            .strip_prefix(search_path)
+            .ok()
+            .and_then(|rel| {
+                let mut parts: Vec<&str> = rel
+                    .components()
+                    .filter_map(|c| c.as_os_str().to_str())
+                    .collect();
+                // Remove the file name
+                if let Some(last) = parts.last() {
+                    if last.ends_with(".rs") {
+                        parts.pop();
+                    }
+                }
+                // If the file was mod.rs or lib.rs, use the parent path
+                if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
+                    if stem != "mod" && stem != "lib" {
+                        // For regular files like alg/hmac.rs, add the stem
+                        parts.push(stem);
+                    }
+                }
+                if parts.is_empty() {
+                    Some(String::new())
+                } else {
+                    Some(parts.join("::"))
+                }
+            })
+            .unwrap_or_default();
+
+        match parse_file_internal(file_path.to_str().unwrap_or_default(), &module_path) {
             Ok(parsed) => {
                 all_functions.extend(parsed.functions);
                 all_structs.extend(parsed.structs);
@@ -792,6 +1131,9 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
                 all_impls.extend(parsed.impls);
                 all_type_aliases.extend(parsed.type_aliases);
                 all_reexports.extend(parsed.reexports);
+                all_constants.extend(parsed.constants);
+                all_statics.extend(parsed.statics);
+                all_enum_variant_aliases.extend(parsed.enum_variant_aliases);
             }
             Err(_) => {
                 // Skip files that fail to parse
@@ -808,7 +1150,58 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
         impls: all_impls,
         type_aliases: all_type_aliases,
         reexports: all_reexports,
+        constants: all_constants,
+        statics: all_statics,
+        enum_variant_aliases: all_enum_variant_aliases,
+        available_features,
+        default_features,
     })
+}
+
+// =============================================================================
+// Rust Code Validation and Formatting Functions (for transpilation)
+// =============================================================================
+
+/// Validate Rust source code syntax using syn
+///
+/// Returns True if the code is valid Rust syntax, raises SyntaxError otherwise.
+#[pyfunction]
+fn validate_rust_code(code: &str) -> PyResult<bool> {
+    match syn::parse_file(code) {
+        Ok(_) => Ok(true),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PySyntaxError, _>(format!(
+            "Invalid Rust syntax: {}",
+            e
+        ))),
+    }
+}
+
+/// Format Rust source code using prettyplease
+///
+/// Returns formatted code if valid, raises SyntaxError if code cannot be parsed.
+#[pyfunction]
+fn format_rust_code(code: &str) -> PyResult<String> {
+    let syntax_tree = syn::parse_file(code).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PySyntaxError, _>(format!(
+            "Cannot format invalid Rust: {}",
+            e
+        ))
+    })?;
+    Ok(prettyplease::unparse(&syntax_tree))
+}
+
+/// Validate and format Rust source code in one call (most efficient)
+///
+/// Returns formatted code if valid, raises SyntaxError with location info if invalid.
+#[pyfunction]
+fn validate_and_format_rust(code: &str) -> PyResult<String> {
+    let syntax_tree = syn::parse_file(code).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PySyntaxError, _>(format!(
+            "Invalid Rust syntax: {}",
+            e
+        ))
+    })?;
+    Ok(prettyplease::unparse(&syntax_tree))
 }
 
 /// cookcrab._parser Python module
@@ -816,6 +1209,10 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
 fn _parser(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_crate, m)?)?;
+    // Rust validation/formatting functions
+    m.add_function(wrap_pyfunction!(validate_rust_code, m)?)?;
+    m.add_function(wrap_pyfunction!(format_rust_code, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_and_format_rust, m)?)?;
     m.add_class::<RustParam>()?;
     m.add_class::<RustFunction>()?;
     m.add_class::<RustField>()?;
@@ -827,5 +1224,8 @@ fn _parser(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustImpl>()?;
     m.add_class::<RustCrate>()?;
     m.add_class::<RustReexport>()?;
+    m.add_class::<RustConstant>()?;
+    m.add_class::<RustStatic>()?;
+    m.add_class::<RustEnumVariantAlias>()?;
     Ok(())
 }

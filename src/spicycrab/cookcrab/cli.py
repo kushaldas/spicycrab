@@ -596,7 +596,12 @@ def search(query: str):
     default=None,
     help="Output crate name (default: same as input crate). Use for re-exports like clap_builder -> clap",
 )
-def generate(crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None):
+@click.option(
+    "--debug-log",
+    is_flag=True,
+    help="Enable debug JSON logging to .spicycrab-logs/",
+)
+def generate(crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None, debug_log: bool):
     """Generate stubs from a Rust crate.
 
     Parses a Rust crate and generates Python type stubs with
@@ -635,6 +640,12 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
         sys.exit(1)
 
     from spicycrab.cookcrab.generator import generate_stub_package
+
+    # Enable debug logging if requested
+    if debug_log:
+        from spicycrab.debug_log import enable_logging
+
+        enable_logging("stubs", crate)
 
     temp_dir = None
     crate_name = crate
@@ -781,6 +792,14 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
     # Cleanup temp directory
     if temp_dir:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Save debug log if enabled
+    if debug_log:
+        from spicycrab.debug_log import save_log
+
+        log_path = save_log(output)
+        if log_path:
+            click.echo(f"  Debug log: {log_path}")
 
     click.echo("")
     click.echo(click.style("Stub package generated successfully!", fg="green"))

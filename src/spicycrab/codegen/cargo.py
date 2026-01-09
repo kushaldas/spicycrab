@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from spicycrab.codegen.stub_discovery import get_stub_cargo_deps
+from spicycrab.codegen.stub_discovery import get_stub_cargo_deps_with_features
 
 if TYPE_CHECKING:
     from spicycrab.ir.nodes import IRModule
@@ -92,6 +92,7 @@ def generate_cargo_toml(
     is_library: bool = False,
     uses_serde_json: bool = False,
     has_async: bool | None = None,
+    project_dir: str | None = None,
 ) -> str:
     """Generate a Cargo.toml file.
 
@@ -104,6 +105,7 @@ def generate_cargo_toml(
         is_library: If True, generate a library crate
         uses_serde_json: If True, include serde_json dependency (for Any type)
         has_async: If True, include tokio dependency. If None, auto-detect from modules.
+        project_dir: Directory to search for user feature config (pyproject.toml/spicycrab.toml)
 
     Returns:
         Cargo.toml content as string
@@ -159,8 +161,8 @@ def generate_cargo_toml(
         for dep in extra_deps:
             deps[dep.name] = dep
 
-    # Add dependencies from installed stub packages
-    stub_deps = get_stub_cargo_deps()
+    # Add dependencies from installed stub packages (with user features applied)
+    stub_deps = get_stub_cargo_deps_with_features(project_dir=project_dir)
     for dep_name, dep_spec in stub_deps.items():
         if dep_name not in deps:
             # Handle both string version and table spec

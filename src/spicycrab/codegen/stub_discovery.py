@@ -14,6 +14,7 @@ from importlib.resources import files
 from typing import Any
 
 from spicycrab.codegen.stdlib.types import StdlibMapping
+from spicycrab.debug_log import increment, log_decision
 
 
 @dataclass
@@ -28,6 +29,10 @@ class StubPackage:
     function_mappings: dict[str, StdlibMapping] = field(default_factory=dict)
     method_mappings: dict[str, StdlibMapping] = field(default_factory=dict)
     type_mappings: dict[str, str] = field(default_factory=dict)
+    # Features available in this crate
+    available_features: list[str] = field(default_factory=list)
+    # Default features (enabled by default)
+    default_features: list[str] = field(default_factory=list)
 
 
 def discover_stub_packages() -> dict[str, StubPackage]:
@@ -139,15 +144,21 @@ def _parse_config(config: dict[str, Any]) -> StubPackage:
     for typ in mappings.get("types", []):
         type_mappings[typ["python"]] = typ["rust"]
 
+    # Parse feature information
+    cargo_config = config.get("cargo", {})
+    features_config = cargo_config.get("features", {})
+
     return StubPackage(
         name=pkg["name"],
         rust_crate=pkg["rust_crate"],
         rust_version=pkg["rust_version"],
         python_module=pkg["python_module"],
-        cargo_deps=config.get("cargo", {}).get("dependencies", {}),
+        cargo_deps=cargo_config.get("dependencies", {}),
         function_mappings=function_mappings,
         method_mappings=method_mappings,
         type_mappings=type_mappings,
+        available_features=features_config.get("available", []),
+        default_features=features_config.get("default", []),
     )
 
 
@@ -181,7 +192,18 @@ def get_stub_mapping(func_name: str) -> StdlibMapping | None:
     cache = _get_cache()
     for pkg in cache.values():
         if func_name in pkg.function_mappings:
-            return pkg.function_mappings[func_name]
+            mapping = pkg.function_mappings[func_name]
+            log_decision(
+                "stub_function_lookup",
+                key=func_name,
+                found=True,
+                crate=pkg.name,
+                rust_code=mapping.rust_code,
+            )
+            increment("stub_function_hits")
+            return mapping
+    log_decision("stub_function_lookup", key=func_name, found=False)
+    increment("stub_function_misses")
     return None
 
 
@@ -199,7 +221,18 @@ def get_stub_method_mapping(type_name: str, method_name: str) -> StdlibMapping |
     key = f"{type_name}.{method_name}"
     for pkg in cache.values():
         if key in pkg.method_mappings:
-            return pkg.method_mappings[key]
+            mapping = pkg.method_mappings[key]
+            log_decision(
+                "stub_method_lookup",
+                key=key,
+                found=True,
+                crate=pkg.name,
+                rust_code=mapping.rust_code,
+            )
+            increment("stub_method_hits")
+            return mapping
+    log_decision("stub_method_lookup", key=key, found=False)
+    increment("stub_method_misses")
     return None
 
 
@@ -226,13 +259,47 @@ def get_stub_type_mapping(python_type: str, crate_name: str | None = None) -> st
     if crate_name is not None:
         pkg = cache.get(crate_name)
         if pkg and python_type in pkg.type_mappings:
-            return pkg.type_mappings[python_type]
+            rust_type = pkg.type_mappings[python_type]
+            log_decision(
+                "stub_type_lookup",
+                python_type=python_type,
+                crate=crate_name,
+                found=True,
+                rust_type=rust_type,
+            )
+            increment("stub_type_hits")
+            return rust_type
+        log_decision(
+            "stub_type_lookup",
+            python_type=python_type,
+            crate=crate_name,
+            found=False,
+        )
+        increment("stub_type_misses")
         return None
 
     # Legacy behavior: search all packages (not recommended for conflicting names)
     for pkg in cache.values():
         if python_type in pkg.type_mappings:
-            return pkg.type_mappings[python_type]
+            rust_type = pkg.type_mappings[python_type]
+            log_decision(
+                "stub_type_lookup",
+                python_type=python_type,
+                crate=pkg.name,
+                found=True,
+                rust_type=rust_type,
+                legacy_search=True,
+            )
+            increment("stub_type_hits")
+            return rust_type
+    log_decision(
+        "stub_type_lookup",
+        python_type=python_type,
+        crate=None,
+        found=False,
+        legacy_search=True,
+    )
+    increment("stub_type_misses")
     return None
 
 
@@ -288,3 +355,136 @@ def get_stub_package_by_module(python_module: str) -> StubPackage | None:
         if pkg.python_module == python_module:
             return pkg
     return None
+
+
+def load_user_feature_config(project_dir: str | None = None) -> dict[str, list[str]]:
+    """Load user feature configuration from pyproject.toml or spicycrab.toml.
+
+    Searches for configuration in the following order:
+    1. pyproject.toml with [tool.spicycrab.features] section
+    2. spicycrab.toml with [features] section
+
+    Example pyproject.toml:
+        [tool.spicycrab.features]
+        reqwest = ["blocking", "json"]
+        tokio = ["full"]
+
+    Example spicycrab.toml:
+        [features]
+        reqwest = ["blocking", "json"]
+        tokio = ["full"]
+
+    Args:
+        project_dir: Directory to search for config files. Defaults to current directory.
+
+    Returns:
+        Dict mapping crate name to list of features to enable
+    """
+    from pathlib import Path
+
+    if project_dir is None:
+        project_dir = "."
+    project_path = Path(project_dir)
+
+    # Try pyproject.toml first
+    pyproject = project_path / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            content = pyproject.read_text()
+            config = tomllib.loads(content)
+            tool_config = config.get("tool", {}).get("spicycrab", {})
+            features = tool_config.get("features", {})
+            if features:
+                return features
+        except Exception:
+            pass  # Fall through to spicycrab.toml
+
+    # Try spicycrab.toml
+    spicycrab_toml = project_path / "spicycrab.toml"
+    if spicycrab_toml.exists():
+        try:
+            content = spicycrab_toml.read_text()
+            config = tomllib.loads(content)
+            return config.get("features", {})
+        except Exception:
+            pass
+
+    return {}
+
+
+def get_stub_cargo_deps_with_features(
+    project_dir: str | None = None,
+    user_features: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Get cargo dependencies with user-specified features merged in.
+
+    Args:
+        project_dir: Directory to search for user config. Defaults to current directory.
+        user_features: Optional dict of features to use instead of loading from config.
+
+    Returns:
+        Dict of dependency name to dependency spec with features applied
+    """
+    cache = _get_cache()
+
+    # Load user features from config if not provided
+    if user_features is None:
+        user_features = load_user_feature_config(project_dir)
+
+    deps: dict[str, Any] = {}
+    for pkg in cache.values():
+        crate_name = pkg.rust_crate
+        version = pkg.rust_version
+
+        # Start with default features or empty list
+        features: list[str] = []
+
+        # Check if user specified features for this crate
+        if crate_name in user_features:
+            features = user_features[crate_name]
+        elif pkg.default_features:
+            # Use default features if user didn't specify
+            features = list(pkg.default_features)
+
+        # Create dependency spec
+        if features:
+            deps[crate_name] = {
+                "version": version,
+                "features": features,
+            }
+        else:
+            deps[crate_name] = version
+
+    return deps
+
+
+def get_crate_available_features(crate_name: str) -> list[str]:
+    """Get available features for a crate.
+
+    Args:
+        crate_name: Name of the Rust crate
+
+    Returns:
+        List of available feature names, empty if crate not found
+    """
+    cache = _get_cache()
+    pkg = cache.get(crate_name)
+    if pkg:
+        return list(pkg.available_features)
+    return []
+
+
+def get_crate_default_features(crate_name: str) -> list[str]:
+    """Get default features for a crate.
+
+    Args:
+        crate_name: Name of the Rust crate
+
+    Returns:
+        List of default feature names, empty if crate not found
+    """
+    cache = _get_cache()
+    pkg = cache.get(crate_name)
+    if pkg:
+        return list(pkg.default_features)
+    return []
