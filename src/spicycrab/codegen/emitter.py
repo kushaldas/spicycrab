@@ -24,6 +24,7 @@ from spicycrab.ir.nodes import (
     IRAssign,
     IRAttrAssign,
     IRAttribute,
+    IRAwait,
     IRBinaryOp,
     IRBreak,
     IRCall,
@@ -55,6 +56,7 @@ from spicycrab.ir.nodes import (
     IRSubscript,
     IRTry,
     IRTuple,
+    IRTupleUnpack,
     IRType,
     IRUnaryOp,
     IRUnionType,
@@ -230,7 +232,11 @@ class RustEmitter:
 
         # Emit top-level statements in main() if any
         # Filter out `if __name__ == "__main__"` patterns as they don't apply in Rust
-        filtered_statements = [stmt for stmt in module.statements if not self._is_name_main_check(stmt)]
+        # Filter out `asyncio.run(main())` as #[tokio::main] handles this
+        filtered_statements = [
+            stmt for stmt in module.statements
+            if not self._is_name_main_check(stmt) and not self._is_asyncio_run(stmt)
+        ]
         if filtered_statements:
             body_lines.append("fn main() {")
             self.ctx.indent = 1
@@ -265,6 +271,23 @@ class RustEmitter:
                 if isinstance(right, IRName) and right.name == "__name__":
                     if isinstance(left, IRLiteral) and left.value == "__main__":
                         return True
+        return False
+
+    def _is_asyncio_run(self, stmt: IRStatement) -> bool:
+        """Check if statement is `asyncio.run(...)`.
+
+        When we have an async main function with #[tokio::main],
+        we don't need asyncio.run() as the runtime is handled by the attribute.
+        """
+        if isinstance(stmt, IRExprStmt):
+            expr = stmt.expr
+            if isinstance(expr, IRCall):
+                func = expr.func
+                # Check for asyncio.run() pattern
+                if isinstance(func, IRAttribute):
+                    if isinstance(func.obj, IRName) and func.obj.name == "asyncio":
+                        if func.attr == "run":
+                            return True
         return False
 
     def _process_imports(self, imports: list[IRImport]) -> None:
@@ -654,6 +677,10 @@ class RustEmitter:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
 
+        # Add #[tokio::main] for async main function
+        if func.is_async and func.name == "main":
+            lines.append(f"{indent}#[tokio::main]")
+
         # Docstring
         if func.docstring:
             lines.append(f"{indent}/// {func.docstring.split(chr(10))[0]}")
@@ -676,7 +703,9 @@ class RustEmitter:
         else:
             ret_str = ""
 
-        lines.append(f"{indent}pub fn {func.name}({params_str}){ret_str} {{")
+        # Async functions get the async keyword
+        async_kw = "async " if func.is_async else ""
+        lines.append(f"{indent}pub {async_kw}fn {func.name}({params_str}){ret_str} {{")
 
         # Track if we're in a Result-returning or Option-returning function
         prev_result_context = self.ctx.in_result_context
@@ -707,6 +736,9 @@ class RustEmitter:
 
         if isinstance(stmt, IRAssign):
             return self._emit_assign(stmt)
+
+        if isinstance(stmt, IRTupleUnpack):
+            return self._emit_tuple_unpack(stmt)
 
         if isinstance(stmt, IRAttrAssign):
             # Check for compound assignment pattern: self.attr = self.attr op y -> self.attr op= y
@@ -844,6 +876,42 @@ class RustEmitter:
                         return f"{indent}{stmt.target} {compound_ops[op]} {right};"
             value = self.emit_expression(stmt.value)
             return f"{indent}{stmt.target} = {value};"
+
+    def _emit_tuple_unpack(self, stmt: IRTupleUnpack) -> str:
+        """Emit a tuple unpacking assignment.
+
+        Python: tx, rx = mpsc_channel(10)
+        Rust:   let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        """
+        indent = self.ctx.indent_str()
+        value = self.emit_expression(stmt.value)
+
+        # Build the tuple pattern with mutability
+        target_parts = []
+        for i, target in enumerate(stmt.targets):
+            is_mut = i < len(stmt.is_mutable) and stmt.is_mutable[i]
+            if is_mut:
+                target_parts.append(f"mut {target}")
+            else:
+                target_parts.append(target)
+        targets_str = ", ".join(target_parts)
+
+        # Check if we have type annotations for each target
+        if stmt.type_annotations and any(t is not None for t in stmt.type_annotations):
+            # We have type annotations - emit with types
+            # let (tx, mut rx): (Sender<T>, Receiver<T>) = ...
+            type_parts = []
+            for i, target in enumerate(stmt.targets):
+                if i < len(stmt.type_annotations) and stmt.type_annotations[i]:
+                    rust_type = self.resolver.resolve(stmt.type_annotations[i])
+                    type_parts.append(rust_type.to_rust())
+                else:
+                    type_parts.append("_")  # Use type inference for unannotated
+            types_str = ", ".join(type_parts)
+            return f"{indent}let ({targets_str}): ({types_str}) = {value};"
+
+        # No type annotations - let Rust infer the types
+        return f"{indent}let ({targets_str}) = {value};"
 
     def _emit_if(self, stmt: IRIf) -> str:
         """Emit an if statement."""
@@ -1211,6 +1279,11 @@ class RustEmitter:
         if isinstance(expr, IRFString):
             return self._emit_fstring(expr)
 
+        if isinstance(expr, IRAwait):
+            # Emit await expression: value.await
+            inner = self.emit_expression(expr.value)
+            return f"{inner}.await"
+
         return f"/* unsupported: {type(expr).__name__} */"
 
     def _emit_literal(self, expr: IRLiteral) -> str:
@@ -1383,6 +1456,22 @@ class RustEmitter:
     def _emit_call(self, expr: IRCall) -> str:
         """Emit a function call."""
         args = [self.emit_expression(a) for a in expr.args]
+
+        # Check for standalone function calls imported from stub packages (e.g., sleep())
+        if isinstance(expr.func, IRName):
+            func_name = expr.func.name
+            # Check if this function was imported from a stub package
+            if func_name in self.ctx.stub_imports:
+                crate_name = self.ctx.stub_imports[func_name]
+                # Look up the full mapping key: crate.function (e.g., "tokio.sleep")
+                full_key = f"{crate_name}.{func_name}"
+                mapping = get_stub_mapping(full_key)
+                if mapping:
+                    result = self._apply_stdlib_mapping(mapping, args)
+                    if mapping.needs_result and self.ctx.in_result_context:
+                        if result.endswith(".unwrap()"):
+                            result = result[:-9] + "?"
+                    return result
 
         # Check for stub package Type.method calls (e.g., Result.Ok(), Error.msg())
         if isinstance(expr.func, IRAttribute) and isinstance(expr.func.obj, IRName):

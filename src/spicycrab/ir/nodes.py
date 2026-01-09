@@ -271,6 +271,13 @@ class IRFString(IRExpression):
     parts: list[IRExpression] = field(default_factory=list)
 
 
+@dataclass
+class IRAwait(IRExpression):
+    """An await expression for async code."""
+
+    value: IRExpression | None = None
+
+
 # =============================================================================
 # Statements
 # =============================================================================
@@ -305,6 +312,21 @@ class IRAttrAssign(IRStatement):
     attr: str = ""
     value: IRExpression | None = None
     type_annotation: IRType | None = None  # For annotated: self.x: int = value
+
+
+@dataclass
+class IRTupleUnpack(IRStatement):
+    """Tuple unpacking assignment: (a, b) = expr or a, b = expr.
+
+    Used for patterns like:
+        tx, rx = mpsc_channel(10)  -> let (tx, rx) = mpsc_channel(10);
+    """
+
+    targets: list[str] = field(default_factory=list)  # Variable names to unpack into
+    value: IRExpression | None = None
+    type_annotations: list[IRType | None] = field(default_factory=list)  # Optional types for each target
+    is_declaration: bool = True  # Tuple unpacking is typically a declaration
+    is_mutable: list[bool] = field(default_factory=list)  # Per-target mutability
 
 
 @dataclass
@@ -431,6 +453,7 @@ class IRFunction(IRNode):
     is_method: bool = False
     is_static: bool = False
     is_classmethod: bool = False
+    is_async: bool = False  # True for async functions
     modifies_self: bool = False  # True if method assigns to self.* (needs &mut self)
     docstring: str | None = None
     line: int | None = None

@@ -20,10 +20,21 @@ and then transpile it to Rust, you need **stub packages**. These stubs:
 
 **Workflow:**
 
-1. Generate stubs: ``cookcrab generate <crate_name>``
-2. Install stubs: ``python3 -m pip install -e /path/to/stubs/<crate>``
+1. Install stubs: ``cookcrab install <crate_name>``
+2. Write Python code using the stub types
+3. Transpile: ``crabpy transpile mycode.py``
+
+Or generate your own stubs:
+
+1. Generate stubs: ``cookcrab generate <crate_name> -o /tmp/stubs``
+2. Install stubs: ``cookcrab install <crate_name> --repo /tmp/stubs``
 3. Write Python code using the stub types
 4. Transpile: ``crabpy transpile mycode.py``
+
+.. warning::
+
+   Always use ``cookcrab install`` instead of ``pip install`` directly.
+   This ensures compatibility with spicycrab's stub discovery system.
 
 Installation
 ------------
@@ -40,10 +51,83 @@ cookcrab is included with spicycrab:
 Commands
 --------
 
+install (recommended)
+^^^^^^^^^^^^^^^^^^^^^
+
+Install a stub package from the `spicycrab-stubs <https://github.com/kushaldas/spicycrab-stubs>`_ repository.
+This is the recommended way to get stubs for common crates.
+
+**Basic usage:**
+
+.. code-block:: bash
+
+   # Install from official stubs repository
+   cookcrab install anyhow
+   cookcrab install tokio
+   cookcrab install clap
+
+**Install a specific version:**
+
+.. code-block:: bash
+
+   cookcrab install tokio -v 1.49.0
+   cookcrab install anyhow -v 1.0.100
+
+**Install from a custom repository:**
+
+.. code-block:: bash
+
+   # Install from a local or custom repository
+   cookcrab install mycrate --repo /path/to/my-stubs
+   cookcrab install mycrate --repo https://github.com/user/custom-stubs.git
+
+**What happens during install:**
+
+1. Sparse checkout of the stub from the repository
+2. Build a wheel locally
+3. Install using uv pip (or pip if uv not available)
+
+.. warning::
+
+   Always use ``cookcrab install`` rather than ``pip install`` directly.
+   This ensures:
+
+   - Stubs come from the trusted spicycrab-stubs repository
+   - Proper wheel building and installation
+   - Compatibility with spicycrab's stub discovery system
+
+**Available stubs:**
+
+The official repository includes stubs for:
+
+- ``anyhow`` - Error handling
+- ``tokio`` - Async runtime (spawn, sleep, channels)
+- ``clap`` - Command line argument parsing
+- ``chrono`` - Date and time handling
+- ``fern`` - Logging
+- ``log`` - Logging facade
+
+Check for available stubs:
+
+.. code-block:: bash
+
+   cookcrab search <pattern>
+
+search
+^^^^^^
+
+Search for available stub packages.
+
+.. code-block:: bash
+
+   cookcrab search clap
+   cookcrab search serde
+
 generate
 ^^^^^^^^
 
-Generate Python stubs from a Rust crate.
+Generate Python stubs from a Rust crate. Use this when a stub isn't available
+in the official repository.
 
 **From crates.io (recommended):**
 
@@ -73,33 +157,11 @@ Generate Python stubs from a Rust crate.
            ├── __init__.py      # Python type stubs
            └── _spicycrab.toml  # Transpilation mappings
 
-install
-^^^^^^^
-
-Install a stub package from the spicycrab-stubs repository.
+**After generating, install with:**
 
 .. code-block:: bash
 
-   # Install from official stubs repository
-   cookcrab install clap
-
-   # Install a specific version
-   cookcrab install clap --version 4.5.0
-
-.. note::
-
-   Always use ``cookcrab install`` rather than ``python3 -m pip install`` directly.
-   The stubs index ensures compatibility with spicycrab.
-
-search
-^^^^^^
-
-Search for available stub packages.
-
-.. code-block:: bash
-
-   cookcrab search clap
-   cookcrab search serde
+   cookcrab install clap --repo /tmp/stubs
 
 validate
 ^^^^^^^^
@@ -119,21 +181,17 @@ Build a wheel from a stub package.
 
    cookcrab build /tmp/stubs/clap
 
-Generating Stubs
-----------------
+Quick Start Examples
+--------------------
 
-Basic Example: anyhow
-^^^^^^^^^^^^^^^^^^^^^
+Example 1: Using anyhow for error handling
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Let's generate stubs for the ``anyhow`` error handling crate:
+Install the anyhow stubs:
 
 .. code-block:: bash
 
-   # Generate stubs
-   cookcrab generate anyhow -o /tmp/stubs
-
-   # Install the generated stubs
-   python3 -m pip install -e /tmp/stubs/anyhow
+   cookcrab install anyhow
 
 Now you can write Python code using anyhow types:
 
@@ -174,20 +232,14 @@ Generated Rust:
        println!("{}", format!("Result: {:?}", result));
    }
 
-Complex Example: clap
-^^^^^^^^^^^^^^^^^^^^^
+Example 2: Using clap for CLI argument parsing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The ``clap`` crate demonstrates handling re-exports. clap re-exports from ``clap_builder``,
-so cookcrab automatically generates stubs for both:
+Install the clap stubs (automatically installs clap_builder dependency):
 
 .. code-block:: bash
 
-   # Generate stubs (automatically handles re-exports)
-   cookcrab generate clap -o /tmp/stubs
-
-   # Install both clap and clap_builder stubs
-   python3 -m pip install -e /tmp/stubs/clap_builder
-   python3 -m pip install -e /tmp/stubs/clap
+   cookcrab install clap
 
 Write a CLI application:
 
@@ -234,6 +286,64 @@ Transpile and run:
    cargo build --release
    ./target/release/myapp --help
    ./target/release/myapp "World" -v
+
+Example 3: Using tokio for async programming
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Install the tokio stubs:
+
+.. code-block:: bash
+
+   cookcrab install tokio
+
+Write async code:
+
+.. code-block:: python
+
+   from spicycrab_tokio import spawn, sleep, Duration
+   from spicycrab.types import Result
+
+   async def do_work(task_id: int) -> int:
+       """Simulate async work."""
+       print(f"Task {task_id} starting...")
+       await sleep(Duration.from_millis(100))
+       print(f"Task {task_id} finished!")
+       return task_id * 10
+
+   async def main() -> None:
+       # Spawn concurrent tasks
+       handle1 = spawn(do_work(1))
+       handle2 = spawn(do_work(2))
+
+       # Wait for results
+       result1: int = Result.unwrap(await handle1)
+       result2: int = Result.unwrap(await handle2)
+
+       print(f"Results: {result1}, {result2}")
+
+Transpile and run:
+
+.. code-block:: bash
+
+   crabpy transpile async_example.py -o rust_async -n async_example
+   cd rust_async
+   cargo build --release
+   ./target/release/async_example
+
+Generated Rust code uses tokio with ``#[tokio::main]``:
+
+.. code-block:: rust
+
+   #[tokio::main]
+   async fn main() {
+       let handle1 = tokio::spawn(do_work(1));
+       let handle2 = tokio::spawn(do_work(2));
+       let result1: i64 = handle1.await.unwrap();
+       let result2: i64 = handle2.await.unwrap();
+       println!("{}", format!("Results: {}, {}", result1, result2));
+   }
+
+For more async examples, see the :doc:`async` chapter.
 
 Using Stubs
 -----------
@@ -458,10 +568,12 @@ Contributing Stubs
 
 To contribute stubs to the official repository:
 
-1. Generate stubs: ``cookcrab generate <crate> -o ./stubs``
-2. Review and customize the generated stubs
-3. Validate: ``cookcrab validate ./stubs/<crate>``
-4. Submit a pull request to `spicycrab-stubs <https://github.com/example/spicycrab-stubs>`_
+1. Fork the `spicycrab-stubs <https://github.com/kushaldas/spicycrab-stubs>`_ repository
+2. Generate stubs: ``cookcrab generate <crate> -o ./stubs``
+3. Review and customize the generated stubs
+4. Validate: ``cookcrab validate ./stubs/<crate>``
+5. Test: ``cookcrab install <crate> --repo ./`` and run examples
+6. Submit a pull request
 
 Troubleshooting
 ---------------

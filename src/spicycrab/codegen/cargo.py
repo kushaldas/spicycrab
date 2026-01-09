@@ -77,6 +77,11 @@ SERDE_JSON_DEPS: list[CargoDependency] = [
     CargoDependency("serde_json", "1.0"),
 ]
 
+# Dependencies for async code (tokio runtime)
+ASYNC_DEPS: list[CargoDependency] = [
+    CargoDependency("tokio", "1", features=["full"]),
+]
+
 
 def generate_cargo_toml(
     name: str,
@@ -86,6 +91,7 @@ def generate_cargo_toml(
     extra_deps: list[CargoDependency] | None = None,
     is_library: bool = False,
     uses_serde_json: bool = False,
+    has_async: bool | None = None,
 ) -> str:
     """Generate a Cargo.toml file.
 
@@ -97,6 +103,7 @@ def generate_cargo_toml(
         extra_deps: Additional dependencies to include
         is_library: If True, generate a library crate
         uses_serde_json: If True, include serde_json dependency (for Any type)
+        has_async: If True, include tokio dependency. If None, auto-detect from modules.
 
     Returns:
         Cargo.toml content as string
@@ -131,6 +138,22 @@ def generate_cargo_toml(
         for dep in SERDE_JSON_DEPS:
             deps[dep.name] = dep
 
+    # Detect or use async flag for tokio dependency
+    uses_async = has_async
+    if uses_async is None and modules:
+        # Auto-detect async functions
+        for module in modules:
+            for func in module.functions:
+                if func.is_async:
+                    uses_async = True
+                    break
+            if uses_async:
+                break
+
+    if uses_async:
+        for dep in ASYNC_DEPS:
+            deps[dep.name] = dep
+
     # Add extra dependencies
     if extra_deps:
         for dep in extra_deps:
@@ -162,6 +185,24 @@ def generate_cargo_toml(
         lines.append(f'name = "{name}"')
         lines.append('path = "src/main.rs"')
         lines.append("")
+
+    # Rust lint configuration
+    # - unused_must_use: async channel operations return Results that may be intentionally ignored
+    lines.append("[lints.rust]")
+    lines.append('unused_must_use = "allow"')
+    lines.append("")
+
+    # Clippy lint configuration
+    # - unnecessary_cast: conservative casts ensure type safety for Python int -> Rust u64
+    # - vec_init_then_push: optimizing vec![] + push() requires complex analysis
+    # - unnecessary_to_owned: string literal to String conversion then borrow is safe
+    # - format_in_format_args: f-string transpilation creates format! inside println!
+    lines.append("[lints.clippy]")
+    lines.append('unnecessary_cast = "allow"')
+    lines.append('vec_init_then_push = "allow"')
+    lines.append('unnecessary_to_owned = "allow"')
+    lines.append('format_in_format_args = "allow"')
+    lines.append("")
 
     return "\n".join(lines)
 

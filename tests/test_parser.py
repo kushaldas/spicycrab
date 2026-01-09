@@ -196,14 +196,17 @@ def add(a, b: int) -> int:
         with pytest.raises(TypeAnnotationError):
             parse_source(source)
 
-    def test_unsupported_async(self) -> None:
-        """Test that async functions raise errors."""
+    def test_async_function_is_supported(self) -> None:
+        """Test that async functions are correctly parsed."""
         source = """
 async def fetch(url: str) -> str:
-    pass
+    return url
 """
-        with pytest.raises(UnsupportedFeatureError):
-            parse_source(source)
+        module = parse_source(source)
+        assert len(module.functions) == 1
+        func = module.functions[0]
+        assert func.is_async is True
+        assert func.name == "fetch"
 
     def test_unsupported_nested_function(self) -> None:
         """Test that nested functions raise errors."""

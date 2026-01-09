@@ -1,6 +1,7 @@
 """IR module for crabpy - intermediate representation nodes."""
 
 from spicycrab.ir.nodes import (
+    IRAwait,
     IRClass,
     IRExpression,
     IRFunction,
@@ -18,4 +19,5 @@ __all__ = [
     "IRStatement",
     "IRExpression",
     "IRType",
+    "IRAwait",
 ]

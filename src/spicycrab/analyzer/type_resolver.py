@@ -138,7 +138,10 @@ class TypeResolver:
             # Import here to avoid circular import
             from spicycrab.codegen.stub_discovery import get_stub_type_mapping
 
-            stub_rust_type = get_stub_type_mapping(name)
+            # Use the crate name from stub_imports to avoid conflicts
+            # e.g., Sender from tokio vs Sender from fern
+            crate_name = self.stub_imports[name]
+            stub_rust_type = get_stub_type_mapping(name, crate_name)
             if stub_rust_type:
                 # For anyhow::Result, only use the first type arg (T), not the error type
                 # anyhow::Result<T> is an alias for Result<T, anyhow::Error>
@@ -221,7 +224,9 @@ class TypeResolver:
             # Import here to avoid circular import
             from spicycrab.codegen.stub_discovery import get_stub_type_mapping
 
-            stub_rust_type = get_stub_type_mapping(name)
+            # Use the crate name from stub_imports to avoid conflicts
+            crate_name = self.stub_imports[name]
+            stub_rust_type = get_stub_type_mapping(name, crate_name)
             if stub_rust_type:
                 return RustType(name=stub_rust_type)
 

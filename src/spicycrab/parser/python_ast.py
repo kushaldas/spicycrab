@@ -15,6 +15,7 @@ from spicycrab.ir.nodes import (
     IRAssign,
     IRAttrAssign,
     IRAttribute,
+    IRAwait,
     IRBinaryOp,
     IRBreak,
     IRCall,
@@ -46,6 +47,7 @@ from spicycrab.ir.nodes import (
     IRSubscript,
     IRTry,
     IRTuple,
+    IRTupleUnpack,
     IRType,
     IRUnaryOp,
     IRWhile,
@@ -186,7 +188,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             elif isinstance(child, ast.FunctionDef):
                 functions.append(self.visit_FunctionDef(child))
             elif isinstance(child, ast.AsyncFunctionDef):
-                raise self._unsupported("async functions", child)
+                functions.append(self.visit_AsyncFunctionDef(child))
             elif isinstance(child, ast.ClassDef):
                 classes.append(self.visit_ClassDef(child))
             else:
@@ -260,10 +262,54 @@ class PythonASTVisitor(ast.NodeVisitor):
             line=node.lineno,
         )
 
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> IRFunction:
+        """Visit an async function definition."""
+        self._push_scope()
+
+        # Parse parameters with type annotations
+        params = self._parse_parameters(node.args, node)
+
+        # Parse return type
+        return_type: IRType | None = None
+        if node.returns:
+            return_type = self.type_parser.parse(node.returns, f"{node.name} return")
+
+        # Parse body
+        body: list[IRStatement] = []
+        docstring: str | None = None
+
+        for i, stmt in enumerate(node.body):
+            # Check for docstring
+            if i == 0 and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                if isinstance(stmt.value.value, str):
+                    docstring = stmt.value.value
+                    continue
+
+            ir_stmt = self._visit_statement(stmt)
+            if ir_stmt:
+                body.append(ir_stmt)
+
+        # Analyze mutability - mark variables that are reassigned as mutable
+        self._analyze_mutability(body)
+
+        self._pop_scope()
+
+        return IRFunction(
+            name=node.name,
+            params=params,
+            return_type=return_type,
+            body=body,
+            is_async=True,  # Mark as async
+            docstring=docstring,
+            line=node.lineno,
+        )
+
     def _analyze_mutability(self, body: list[IRStatement]) -> None:
         """Analyze statements to detect mutable variables and mark their declarations."""
         # First pass: find all variable assignments
         declarations: dict[str, IRAssign] = {}  # name -> declaration statement
+        tuple_declarations: dict[str, IRTupleUnpack] = {}  # name -> tuple unpack statement
+        tuple_target_index: dict[str, int] = {}  # name -> index in tuple
         reassigned: set[str] = set()  # names that are reassigned or mutated
 
         # Methods that mutate their receiver
@@ -282,6 +328,10 @@ class PythonASTVisitor(ast.NodeVisitor):
             "update",
             "add",
             "discard",
+            # Async channel methods that require &mut self
+            "recv",
+            "recv_many",
+            "try_recv",
         }
 
         def scan_statements(stmts: list[IRStatement]) -> None:
@@ -292,6 +342,14 @@ class PythonASTVisitor(ast.NodeVisitor):
                     else:
                         # This is a reassignment
                         reassigned.add(stmt.target)
+                    # Also check for mutating calls in the assignment value
+                    if stmt.value:
+                        self._check_mutating_call(stmt.value, reassigned, mutating_methods)
+                elif isinstance(stmt, IRTupleUnpack):
+                    # Track tuple unpacking declarations
+                    for i, target in enumerate(stmt.targets):
+                        tuple_declarations[target] = stmt
+                        tuple_target_index[target] = i
 
                 # Check for method calls that mutate their receiver
                 if isinstance(stmt, IRExprStmt):
@@ -319,6 +377,14 @@ class PythonASTVisitor(ast.NodeVisitor):
         for name in reassigned:
             if name in declarations:
                 declarations[name].is_mutable = True
+            elif name in tuple_declarations:
+                # Mark the specific target in tuple unpacking as mutable
+                stmt = tuple_declarations[name]
+                idx = tuple_target_index[name]
+                # Initialize is_mutable list if needed
+                while len(stmt.is_mutable) < len(stmt.targets):
+                    stmt.is_mutable.append(False)
+                stmt.is_mutable[idx] = True
 
     def _check_mutating_call(self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]) -> None:
         """Check if expression contains a mutating method call and mark the target as reassigned."""
@@ -331,6 +397,10 @@ class PythonASTVisitor(ast.NodeVisitor):
             # Check args for nested method calls
             for arg in expr.args:
                 self._check_mutating_call(arg, reassigned, mutating_methods)
+        elif isinstance(expr, IRAwait):
+            # Check the awaited expression (e.g., await rx.recv())
+            if expr.value:
+                self._check_mutating_call(expr.value, reassigned, mutating_methods)
 
     def _parse_parameters(self, args: ast.arguments, func_node: ast.FunctionDef) -> list[IRParameter]:
         """Parse function parameters with their type annotations."""
@@ -649,6 +719,29 @@ class PythonASTVisitor(ast.NodeVisitor):
                 obj=self._visit_expression(target.value),
                 attr=target.attr,
                 value=value,
+                line=node.lineno,
+            )
+
+        # Handle tuple unpacking (e.g., tx, rx = channel())
+        if isinstance(target, ast.Tuple):
+            targets: list[str] = []
+            for elt in target.elts:
+                if not isinstance(elt, ast.Name):
+                    raise self._unsupported("complex tuple unpacking targets", node)
+                targets.append(elt.id)
+                # Define each variable in scope
+                if self.current_scope.lookup(elt.id) is None:
+                    self.current_scope.define(
+                        SymbolInfo(
+                            name=elt.id,
+                            is_mutable=False,
+                            line=node.lineno,
+                        )
+                    )
+            return IRTupleUnpack(
+                targets=targets,
+                value=value,
+                is_declaration=True,
                 line=node.lineno,
             )
 
@@ -1024,6 +1117,13 @@ class PythonASTVisitor(ast.NodeVisitor):
         elif isinstance(node, ast.FormattedValue):
             # Part of an f-string - just visit the value
             return self._visit_expression(node.value)
+
+        elif isinstance(node, ast.Await):
+            # Await expression for async code
+            return IRAwait(
+                value=self._visit_expression(node.value),
+                line=line,
+            )
 
         else:
             raise self._unsupported(f"expression type {type(node).__name__}", node)
