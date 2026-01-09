@@ -1526,6 +1526,282 @@ Path manipulation from Rust's ``std::path`` module.
        std::path::PathBuf::from(s)
    }
 
+rust_std.sync
+^^^^^^^^^^^^^
+
+Synchronization primitives from Rust's ``std::sync`` module. This includes
+atomic reference counting (``Arc``), mutual exclusion (``Mutex``), reader-writer
+locks (``RwLock``), condition variables (``Condvar``), and channels (``mpsc``).
+
+.. note::
+
+   These are **synchronous** primitives from ``std::sync``. For async
+   equivalents (used with tokio), see the async documentation.
+
+**Arc - Thread-safe shared ownership:**
+
+``Arc<T>`` provides thread-safe shared ownership of a value:
+
+.. code-block:: python
+
+   from rust_std.sync import Arc
+
+   def share_data() -> None:
+       data: Arc[str] = Arc.new("shared")
+       clone1: Arc[str] = Arc.clone(data)
+       count: int = Arc.strong_count(data)  # Returns 2
+
+.. code-block:: rust
+
+   pub fn share_data() {
+       let data: std::sync::Arc<String> = std::sync::Arc::new("shared".to_string());
+       let clone1: std::sync::Arc<String> = std::sync::Arc::clone(&data);
+       let count: i64 = std::sync::Arc::strong_count(&data) as i64;
+   }
+
+**Mutex - Mutual exclusion:**
+
+``Mutex<T>`` provides thread-safe mutable access to a value:
+
+.. code-block:: python
+
+   from rust_std.sync import Arc, Mutex
+
+   def use_mutex() -> None:
+       counter: Arc[Mutex[int]] = Arc.new(Mutex.new(0))
+       # Acquire lock and modify value
+       guard = counter.lock()  # Returns MutexGuard
+
+.. code-block:: rust
+
+   pub fn use_mutex() {
+       let counter: std::sync::Arc<std::sync::Mutex<i64>> =
+           std::sync::Arc::new(std::sync::Mutex::new(0));
+       let guard = counter.lock().unwrap();
+   }
+
+**RwLock - Reader-writer lock:**
+
+``RwLock<T>`` allows multiple readers or one writer:
+
+.. code-block:: python
+
+   from rust_std.sync import RwLock
+
+   def use_rwlock() -> None:
+       lock: RwLock[str] = RwLock.new("data")
+       # Multiple readers allowed
+       reader = lock.read()
+       # Single writer allowed
+       writer = lock.write()
+
+.. code-block:: rust
+
+   pub fn use_rwlock() {
+       let lock: std::sync::RwLock<String> =
+           std::sync::RwLock::new("data".to_string());
+       let reader = lock.read().unwrap();
+       let writer = lock.write().unwrap();
+   }
+
+**Condvar - Condition variable:**
+
+``Condvar`` allows threads to wait for conditions:
+
+.. code-block:: python
+
+   from rust_std.sync import Condvar, Mutex
+
+   def use_condvar() -> None:
+       cvar: Condvar = Condvar.new()
+       cvar.notify_one()   # Wake one waiting thread
+       cvar.notify_all()   # Wake all waiting threads
+
+.. code-block:: rust
+
+   pub fn use_condvar() {
+       let cvar: std::sync::Condvar = std::sync::Condvar::new();
+       cvar.notify_one();
+       cvar.notify_all();
+   }
+
+**Barrier - Thread synchronization point:**
+
+``Barrier`` waits for multiple threads to reach a point:
+
+.. code-block:: python
+
+   from rust_std.sync import Barrier
+
+   def use_barrier() -> None:
+       barrier: Barrier = Barrier.new(3)  # Wait for 3 threads
+       barrier.wait()  # Block until 3 threads call wait()
+
+.. code-block:: rust
+
+   pub fn use_barrier() {
+       let barrier: std::sync::Barrier = std::sync::Barrier::new(3);
+       barrier.wait();
+   }
+
+**Once and OnceLock - One-time initialization:**
+
+``Once`` ensures code runs exactly once; ``OnceLock`` lazily initializes a value:
+
+.. code-block:: python
+
+   from rust_std.sync import Once, OnceLock
+
+   def use_once() -> None:
+       once: Once = Once.new()
+       once.call_once(lambda: print("runs once"))
+
+   def use_once_lock() -> None:
+       cell: OnceLock[int] = OnceLock.new()
+       cell.set(42)
+       value = cell.get()  # Returns Option<&T>
+
+.. code-block:: rust
+
+   pub fn use_once() {
+       let once: std::sync::Once = std::sync::Once::new();
+       once.call_once(|| println!("runs once"));
+   }
+
+   pub fn use_once_lock() {
+       let cell: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+       cell.set(42);
+       let value = cell.get();
+   }
+
+**mpsc - Multi-producer, single-consumer channels:**
+
+Channels for thread communication:
+
+.. code-block:: python
+
+   from rust_std.sync import mpsc_channel, mpsc_sync_channel
+
+   def use_channel() -> None:
+       # Unbounded channel
+       tx, rx = mpsc_channel()
+       tx.send("message")
+       received = rx.recv()
+
+       # Bounded channel (sync_channel)
+       tx2, rx2 = mpsc_sync_channel(10)  # Buffer size 10
+
+.. code-block:: rust
+
+   pub fn use_channel() {
+       let (tx, rx) = std::sync::mpsc::channel();
+       tx.send("message".to_string()).unwrap();
+       let received = rx.recv().unwrap();
+
+       let (tx2, rx2) = std::sync::mpsc::sync_channel(10);
+   }
+
+**Atomic types:**
+
+Lock-free atomic operations:
+
+.. code-block:: python
+
+   from rust_std.sync import AtomicBool, AtomicUsize, Ordering
+
+   def use_atomics() -> None:
+       flag: AtomicBool = AtomicBool.new(False)
+       flag.store(True, Ordering.SeqCst)
+       value: bool = flag.load(Ordering.SeqCst)
+
+       counter: AtomicUsize = AtomicUsize.new(0)
+       old: int = counter.fetch_add(1, Ordering.SeqCst)
+
+.. code-block:: rust
+
+   pub fn use_atomics() {
+       let flag: std::sync::atomic::AtomicBool =
+           std::sync::atomic::AtomicBool::new(false);
+       flag.store(true, std::sync::atomic::Ordering::SeqCst);
+       let value: bool = flag.load(std::sync::atomic::Ordering::SeqCst);
+
+       let counter: std::sync::atomic::AtomicUsize =
+           std::sync::atomic::AtomicUsize::new(0);
+       let old: usize = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+   }
+
+**Sync primitives reference table:**
+
++--------------------------------------+-----------------------------------------------+
+| Python                               | Rust                                          |
++======================================+===============================================+
+| ``Arc.new(value)``                   | ``std::sync::Arc::new(value)``                |
++--------------------------------------+-----------------------------------------------+
+| ``Arc.clone(arc)``                   | ``std::sync::Arc::clone(&arc)``               |
++--------------------------------------+-----------------------------------------------+
+| ``Arc.strong_count(arc)``            | ``std::sync::Arc::strong_count(&arc) as i64`` |
++--------------------------------------+-----------------------------------------------+
+| ``Arc.downgrade(arc)``               | ``std::sync::Arc::downgrade(&arc)``           |
++--------------------------------------+-----------------------------------------------+
+| ``Mutex.new(value)``                 | ``std::sync::Mutex::new(value)``              |
++--------------------------------------+-----------------------------------------------+
+| ``mutex.lock()``                     | ``mutex.lock().unwrap()``                     |
++--------------------------------------+-----------------------------------------------+
+| ``mutex.try_lock()``                 | ``mutex.try_lock()``                          |
++--------------------------------------+-----------------------------------------------+
+| ``RwLock.new(value)``                | ``std::sync::RwLock::new(value)``             |
++--------------------------------------+-----------------------------------------------+
+| ``rwlock.read()``                    | ``rwlock.read().unwrap()``                    |
++--------------------------------------+-----------------------------------------------+
+| ``rwlock.write()``                   | ``rwlock.write().unwrap()``                   |
++--------------------------------------+-----------------------------------------------+
+| ``Condvar.new()``                    | ``std::sync::Condvar::new()``                 |
++--------------------------------------+-----------------------------------------------+
+| ``condvar.notify_one()``             | ``condvar.notify_one()``                      |
++--------------------------------------+-----------------------------------------------+
+| ``condvar.notify_all()``             | ``condvar.notify_all()``                      |
++--------------------------------------+-----------------------------------------------+
+| ``Barrier.new(n)``                   | ``std::sync::Barrier::new(n)``                |
++--------------------------------------+-----------------------------------------------+
+| ``barrier.wait()``                   | ``barrier.wait()``                            |
++--------------------------------------+-----------------------------------------------+
+| ``Once.new()``                       | ``std::sync::Once::new()``                    |
++--------------------------------------+-----------------------------------------------+
+| ``once.call_once(f)``                | ``once.call_once(f)``                         |
++--------------------------------------+-----------------------------------------------+
+| ``OnceLock.new()``                   | ``std::sync::OnceLock::new()``                |
++--------------------------------------+-----------------------------------------------+
+| ``mpsc_channel()``                   | ``std::sync::mpsc::channel()``                |
++--------------------------------------+-----------------------------------------------+
+| ``mpsc_sync_channel(n)``             | ``std::sync::mpsc::sync_channel(n)``          |
++--------------------------------------+-----------------------------------------------+
+| ``sender.send(value)``               | ``sender.send(value).unwrap()``               |
++--------------------------------------+-----------------------------------------------+
+| ``receiver.recv()``                  | ``receiver.recv().unwrap()``                  |
++--------------------------------------+-----------------------------------------------+
+| ``AtomicBool.new(value)``            | ``std::sync::atomic::AtomicBool::new(value)`` |
++--------------------------------------+-----------------------------------------------+
+| ``atomic.load(ordering)``            | ``atomic.load(ordering)``                     |
++--------------------------------------+-----------------------------------------------+
+| ``atomic.store(val, ordering)``      | ``atomic.store(val, ordering)``               |
++--------------------------------------+-----------------------------------------------+
+
+**Ordering variants:**
+
++--------------------------------------+----------------------------------------------------+
+| Python                               | Rust                                               |
++======================================+====================================================+
+| ``Ordering.Relaxed``                 | ``std::sync::atomic::Ordering::Relaxed``           |
++--------------------------------------+----------------------------------------------------+
+| ``Ordering.Acquire``                 | ``std::sync::atomic::Ordering::Acquire``           |
++--------------------------------------+----------------------------------------------------+
+| ``Ordering.Release``                 | ``std::sync::atomic::Ordering::Release``           |
++--------------------------------------+----------------------------------------------------+
+| ``Ordering.AcqRel``                  | ``std::sync::atomic::Ordering::AcqRel``            |
++--------------------------------------+----------------------------------------------------+
+| ``Ordering.SeqCst``                  | ``std::sync::atomic::Ordering::SeqCst``            |
++--------------------------------------+----------------------------------------------------+
+
 Generated Dependencies
 ----------------------
 

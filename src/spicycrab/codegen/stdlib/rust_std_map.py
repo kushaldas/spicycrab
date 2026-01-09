@@ -9,6 +9,7 @@ Supported modules:
 - std::fs - File system operations
 - std::io - Input/Output traits and types
 - std::path - Path manipulation (extended from os_map.py)
+- std::sync - Synchronization primitives (Arc, Mutex, RwLock, Condvar, etc.)
 - std::thread - Threading primitives
 - std::time - Time and duration types
 """
@@ -1438,6 +1439,672 @@ RUST_TIME_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
 }
 
 # =============================================================================
+# std::sync - Synchronization primitives
+# =============================================================================
+
+SYNC_MAPPINGS: dict[str, StdlibMapping] = {
+    # Arc - Atomically Reference Counted pointer
+    "rust_std.sync.Arc": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc",
+        rust_code="std::sync::Arc",
+        rust_imports=["std::sync::Arc"],
+    ),
+    "rust_std.sync.Arc.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.new",
+        rust_code="std::sync::Arc::new({args})",
+        rust_imports=["std::sync::Arc"],
+    ),
+    "rust_std.sync.Arc.clone": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.clone",
+        rust_code="std::sync::Arc::clone(&{args})",
+        rust_imports=["std::sync::Arc"],
+    ),
+    "rust_std.sync.Arc.strong_count": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.strong_count",
+        rust_code="std::sync::Arc::strong_count(&{args}) as i64",
+        rust_imports=["std::sync::Arc"],
+    ),
+    "rust_std.sync.Arc.weak_count": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.weak_count",
+        rust_code="std::sync::Arc::weak_count(&{args}) as i64",
+        rust_imports=["std::sync::Arc"],
+    ),
+    "rust_std.sync.Arc.try_unwrap": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.try_unwrap",
+        rust_code="std::sync::Arc::try_unwrap({args}).ok()",
+        rust_imports=["std::sync::Arc"],
+    ),
+    "rust_std.sync.Arc.into_inner": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.into_inner",
+        rust_code="std::sync::Arc::into_inner({args})",
+        rust_imports=["std::sync::Arc"],
+    ),
+    # Weak - Weak reference to Arc
+    "rust_std.sync.Weak": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Weak",
+        rust_code="std::sync::Weak",
+        rust_imports=["std::sync::Weak"],
+    ),
+    "rust_std.sync.Arc.downgrade": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Arc.downgrade",
+        rust_code="std::sync::Arc::downgrade(&{args})",
+        rust_imports=["std::sync::Arc"],
+    ),
+    # Mutex - Mutual exclusion primitive
+    "rust_std.sync.Mutex": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Mutex",
+        rust_code="std::sync::Mutex",
+        rust_imports=["std::sync::Mutex"],
+    ),
+    "rust_std.sync.Mutex.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Mutex.new",
+        rust_code="std::sync::Mutex::new({args})",
+        rust_imports=["std::sync::Mutex"],
+    ),
+    # RwLock - Reader-writer lock
+    "rust_std.sync.RwLock": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="RwLock",
+        rust_code="std::sync::RwLock",
+        rust_imports=["std::sync::RwLock"],
+    ),
+    "rust_std.sync.RwLock.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="RwLock.new",
+        rust_code="std::sync::RwLock::new({args})",
+        rust_imports=["std::sync::RwLock"],
+    ),
+    # Condvar - Condition variable
+    "rust_std.sync.Condvar": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Condvar",
+        rust_code="std::sync::Condvar",
+        rust_imports=["std::sync::Condvar"],
+    ),
+    "rust_std.sync.Condvar.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Condvar.new",
+        rust_code="std::sync::Condvar::new()",
+        rust_imports=["std::sync::Condvar"],
+    ),
+    # Barrier - Synchronization barrier
+    "rust_std.sync.Barrier": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Barrier",
+        rust_code="std::sync::Barrier",
+        rust_imports=["std::sync::Barrier"],
+    ),
+    "rust_std.sync.Barrier.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Barrier.new",
+        rust_code="std::sync::Barrier::new({args})",
+        rust_imports=["std::sync::Barrier"],
+    ),
+    # Once - One-time initialization
+    "rust_std.sync.Once": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Once",
+        rust_code="std::sync::Once",
+        rust_imports=["std::sync::Once"],
+    ),
+    "rust_std.sync.Once.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Once.new",
+        rust_code="std::sync::Once::new()",
+        rust_imports=["std::sync::Once"],
+    ),
+    # OnceLock - Thread-safe cell that can be written once
+    "rust_std.sync.OnceLock": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="OnceLock",
+        rust_code="std::sync::OnceLock",
+        rust_imports=["std::sync::OnceLock"],
+    ),
+    "rust_std.sync.OnceLock.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="OnceLock.new",
+        rust_code="std::sync::OnceLock::new()",
+        rust_imports=["std::sync::OnceLock"],
+    ),
+    # Atomic types
+    "rust_std.sync.AtomicBool": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicBool",
+        rust_code="std::sync::atomic::AtomicBool",
+        rust_imports=["std::sync::atomic::AtomicBool"],
+    ),
+    "rust_std.sync.AtomicBool.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicBool.new",
+        rust_code="std::sync::atomic::AtomicBool::new({args})",
+        rust_imports=["std::sync::atomic::AtomicBool"],
+    ),
+    "rust_std.sync.AtomicI32": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicI32",
+        rust_code="std::sync::atomic::AtomicI32",
+        rust_imports=["std::sync::atomic::AtomicI32"],
+    ),
+    "rust_std.sync.AtomicI32.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicI32.new",
+        rust_code="std::sync::atomic::AtomicI32::new({args})",
+        rust_imports=["std::sync::atomic::AtomicI32"],
+    ),
+    "rust_std.sync.AtomicI64": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicI64",
+        rust_code="std::sync::atomic::AtomicI64",
+        rust_imports=["std::sync::atomic::AtomicI64"],
+    ),
+    "rust_std.sync.AtomicI64.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicI64.new",
+        rust_code="std::sync::atomic::AtomicI64::new({args})",
+        rust_imports=["std::sync::atomic::AtomicI64"],
+    ),
+    "rust_std.sync.AtomicU32": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicU32",
+        rust_code="std::sync::atomic::AtomicU32",
+        rust_imports=["std::sync::atomic::AtomicU32"],
+    ),
+    "rust_std.sync.AtomicU32.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicU32.new",
+        rust_code="std::sync::atomic::AtomicU32::new({args})",
+        rust_imports=["std::sync::atomic::AtomicU32"],
+    ),
+    "rust_std.sync.AtomicU64": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicU64",
+        rust_code="std::sync::atomic::AtomicU64",
+        rust_imports=["std::sync::atomic::AtomicU64"],
+    ),
+    "rust_std.sync.AtomicU64.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicU64.new",
+        rust_code="std::sync::atomic::AtomicU64::new({args})",
+        rust_imports=["std::sync::atomic::AtomicU64"],
+    ),
+    "rust_std.sync.AtomicUsize": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicUsize",
+        rust_code="std::sync::atomic::AtomicUsize",
+        rust_imports=["std::sync::atomic::AtomicUsize"],
+    ),
+    "rust_std.sync.AtomicUsize.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicUsize.new",
+        rust_code="std::sync::atomic::AtomicUsize::new({args})",
+        rust_imports=["std::sync::atomic::AtomicUsize"],
+    ),
+    "rust_std.sync.AtomicIsize": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicIsize",
+        rust_code="std::sync::atomic::AtomicIsize",
+        rust_imports=["std::sync::atomic::AtomicIsize"],
+    ),
+    "rust_std.sync.AtomicIsize.new": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="AtomicIsize.new",
+        rust_code="std::sync::atomic::AtomicIsize::new({args})",
+        rust_imports=["std::sync::atomic::AtomicIsize"],
+    ),
+    # Ordering enum for atomic operations
+    "rust_std.sync.Ordering.Relaxed": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Ordering.Relaxed",
+        rust_code="std::sync::atomic::Ordering::Relaxed",
+        rust_imports=["std::sync::atomic::Ordering"],
+    ),
+    "rust_std.sync.Ordering.Release": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Ordering.Release",
+        rust_code="std::sync::atomic::Ordering::Release",
+        rust_imports=["std::sync::atomic::Ordering"],
+    ),
+    "rust_std.sync.Ordering.Acquire": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Ordering.Acquire",
+        rust_code="std::sync::atomic::Ordering::Acquire",
+        rust_imports=["std::sync::atomic::Ordering"],
+    ),
+    "rust_std.sync.Ordering.AcqRel": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Ordering.AcqRel",
+        rust_code="std::sync::atomic::Ordering::AcqRel",
+        rust_imports=["std::sync::atomic::Ordering"],
+    ),
+    "rust_std.sync.Ordering.SeqCst": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="Ordering.SeqCst",
+        rust_code="std::sync::atomic::Ordering::SeqCst",
+        rust_imports=["std::sync::atomic::Ordering"],
+    ),
+    # mpsc channel
+    "rust_std.sync.mpsc_channel": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="mpsc_channel",
+        rust_code="std::sync::mpsc::channel()",
+        rust_imports=["std::sync::mpsc"],
+    ),
+    "rust_std.sync.mpsc_sync_channel": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="mpsc_sync_channel",
+        rust_code="std::sync::mpsc::sync_channel({args})",
+        rust_imports=["std::sync::mpsc"],
+    ),
+}
+
+# std::sync method mappings
+SYNC_METHOD_MAPPINGS: dict[str, StdlibMapping] = {
+    # Mutex methods
+    "Mutex.lock": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="lock",
+        rust_code="{self}.lock().unwrap()",
+        rust_imports=[],
+    ),
+    "Mutex.try_lock": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="try_lock",
+        rust_code="{self}.try_lock()",
+        rust_imports=[],
+    ),
+    "Mutex.is_poisoned": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="is_poisoned",
+        rust_code="{self}.is_poisoned()",
+        rust_imports=[],
+    ),
+    "Mutex.into_inner": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="into_inner",
+        rust_code="{self}.into_inner().unwrap()",
+        rust_imports=[],
+    ),
+    "Mutex.get_mut": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="get_mut",
+        rust_code="{self}.get_mut().unwrap()",
+        rust_imports=[],
+    ),
+    # RwLock methods
+    "RwLock.read": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="read",
+        rust_code="{self}.read().unwrap()",
+        rust_imports=[],
+    ),
+    "RwLock.try_read": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="try_read",
+        rust_code="{self}.try_read()",
+        rust_imports=[],
+    ),
+    "RwLock.write": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="write",
+        rust_code="{self}.write().unwrap()",
+        rust_imports=[],
+    ),
+    "RwLock.try_write": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="try_write",
+        rust_code="{self}.try_write()",
+        rust_imports=[],
+    ),
+    "RwLock.is_poisoned": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="is_poisoned",
+        rust_code="{self}.is_poisoned()",
+        rust_imports=[],
+    ),
+    "RwLock.into_inner": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="into_inner",
+        rust_code="{self}.into_inner().unwrap()",
+        rust_imports=[],
+    ),
+    "RwLock.get_mut": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="get_mut",
+        rust_code="{self}.get_mut().unwrap()",
+        rust_imports=[],
+    ),
+    # Condvar methods
+    "Condvar.wait": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="wait",
+        rust_code="{self}.wait({args}).unwrap()",
+        rust_imports=[],
+    ),
+    "Condvar.wait_timeout": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="wait_timeout",
+        rust_code="{self}.wait_timeout({args}).unwrap()",
+        rust_imports=[],
+    ),
+    "Condvar.notify_one": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="notify_one",
+        rust_code="{self}.notify_one()",
+        rust_imports=[],
+    ),
+    "Condvar.notify_all": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="notify_all",
+        rust_code="{self}.notify_all()",
+        rust_imports=[],
+    ),
+    # Barrier methods
+    "Barrier.wait": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="wait",
+        rust_code="{self}.wait()",
+        rust_imports=[],
+    ),
+    # BarrierWaitResult methods
+    "BarrierWaitResult.is_leader": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="is_leader",
+        rust_code="{self}.is_leader()",
+        rust_imports=[],
+    ),
+    # Once methods
+    "Once.call_once": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="call_once",
+        rust_code="{self}.call_once({args})",
+        rust_imports=[],
+    ),
+    "Once.is_completed": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="is_completed",
+        rust_code="{self}.is_completed()",
+        rust_imports=[],
+    ),
+    # OnceLock methods
+    "OnceLock.get": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="get",
+        rust_code="{self}.get()",
+        rust_imports=[],
+    ),
+    "OnceLock.set": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="set",
+        rust_code="{self}.set({args})",
+        rust_imports=[],
+    ),
+    "OnceLock.get_or_init": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="get_or_init",
+        rust_code="{self}.get_or_init({args})",
+        rust_imports=[],
+    ),
+    # Weak methods
+    "Weak.upgrade": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="upgrade",
+        rust_code="{self}.upgrade()",
+        rust_imports=[],
+    ),
+    "Weak.strong_count": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="strong_count",
+        rust_code="{self}.strong_count() as i64",
+        rust_imports=[],
+    ),
+    "Weak.weak_count": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="weak_count",
+        rust_code="{self}.weak_count() as i64",
+        rust_imports=[],
+    ),
+    # MutexGuard methods (dereference)
+    "MutexGuard.deref": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="deref",
+        rust_code="*{self}",
+        rust_imports=[],
+    ),
+    # Atomic methods (common to all atomic types)
+    "AtomicBool.load": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="load",
+        rust_code="{self}.load({args})",
+        rust_imports=[],
+    ),
+    "AtomicBool.store": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="store",
+        rust_code="{self}.store({args})",
+        rust_imports=[],
+    ),
+    "AtomicBool.swap": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="swap",
+        rust_code="{self}.swap({args})",
+        rust_imports=[],
+    ),
+    "AtomicBool.compare_exchange": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="compare_exchange",
+        rust_code="{self}.compare_exchange({args})",
+        rust_imports=[],
+    ),
+    "AtomicBool.fetch_and": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_and",
+        rust_code="{self}.fetch_and({args})",
+        rust_imports=[],
+    ),
+    "AtomicBool.fetch_or": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_or",
+        rust_code="{self}.fetch_or({args})",
+        rust_imports=[],
+    ),
+    "AtomicBool.fetch_xor": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_xor",
+        rust_code="{self}.fetch_xor({args})",
+        rust_imports=[],
+    ),
+    # Atomic integer methods
+    "AtomicI64.load": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="load",
+        rust_code="{self}.load({args})",
+        rust_imports=[],
+    ),
+    "AtomicI64.store": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="store",
+        rust_code="{self}.store({args})",
+        rust_imports=[],
+    ),
+    "AtomicI64.swap": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="swap",
+        rust_code="{self}.swap({args})",
+        rust_imports=[],
+    ),
+    "AtomicI64.fetch_add": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_add",
+        rust_code="{self}.fetch_add({args})",
+        rust_imports=[],
+    ),
+    "AtomicI64.fetch_sub": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_sub",
+        rust_code="{self}.fetch_sub({args})",
+        rust_imports=[],
+    ),
+    "AtomicI64.fetch_max": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_max",
+        rust_code="{self}.fetch_max({args})",
+        rust_imports=[],
+    ),
+    "AtomicI64.fetch_min": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_min",
+        rust_code="{self}.fetch_min({args})",
+        rust_imports=[],
+    ),
+    "AtomicU64.load": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="load",
+        rust_code="{self}.load({args})",
+        rust_imports=[],
+    ),
+    "AtomicU64.store": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="store",
+        rust_code="{self}.store({args})",
+        rust_imports=[],
+    ),
+    "AtomicU64.swap": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="swap",
+        rust_code="{self}.swap({args})",
+        rust_imports=[],
+    ),
+    "AtomicU64.fetch_add": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_add",
+        rust_code="{self}.fetch_add({args})",
+        rust_imports=[],
+    ),
+    "AtomicU64.fetch_sub": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_sub",
+        rust_code="{self}.fetch_sub({args})",
+        rust_imports=[],
+    ),
+    "AtomicUsize.load": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="load",
+        rust_code="{self}.load({args})",
+        rust_imports=[],
+    ),
+    "AtomicUsize.store": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="store",
+        rust_code="{self}.store({args})",
+        rust_imports=[],
+    ),
+    "AtomicUsize.swap": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="swap",
+        rust_code="{self}.swap({args})",
+        rust_imports=[],
+    ),
+    "AtomicUsize.fetch_add": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_add",
+        rust_code="{self}.fetch_add({args})",
+        rust_imports=[],
+    ),
+    "AtomicUsize.fetch_sub": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="fetch_sub",
+        rust_code="{self}.fetch_sub({args})",
+        rust_imports=[],
+    ),
+    # mpsc Sender methods
+    "Sender.send": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="send",
+        rust_code="{self}.send({args}).unwrap()",
+        rust_imports=[],
+    ),
+    "Sender.clone": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="clone",
+        rust_code="{self}.clone()",
+        rust_imports=[],
+    ),
+    # mpsc SyncSender methods
+    "SyncSender.send": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="send",
+        rust_code="{self}.send({args}).unwrap()",
+        rust_imports=[],
+    ),
+    "SyncSender.try_send": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="try_send",
+        rust_code="{self}.try_send({args})",
+        rust_imports=[],
+    ),
+    "SyncSender.clone": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="clone",
+        rust_code="{self}.clone()",
+        rust_imports=[],
+    ),
+    # mpsc Receiver methods
+    "Receiver.recv": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="recv",
+        rust_code="{self}.recv().unwrap()",
+        rust_imports=[],
+    ),
+    "Receiver.try_recv": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="try_recv",
+        rust_code="{self}.try_recv()",
+        rust_imports=[],
+    ),
+    "Receiver.recv_timeout": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="recv_timeout",
+        rust_code="{self}.recv_timeout({args})",
+        rust_imports=[],
+    ),
+    "Receiver.iter": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="iter",
+        rust_code="{self}.iter()",
+        rust_imports=[],
+    ),
+    "Receiver.try_iter": StdlibMapping(
+        python_module="rust_std.sync",
+        python_func="try_iter",
+        rust_code="{self}.try_iter()",
+        rust_imports=[],
+    ),
+}
+
+
+def get_sync_mapping(key: str) -> StdlibMapping | None:
+    """Get mapping for a std::sync function."""
+    return SYNC_MAPPINGS.get(key)
+
+
+def get_sync_method_mapping(type_name: str, method_name: str) -> StdlibMapping | None:
+    """Get mapping for a std::sync method."""
+    key = f"{type_name}.{method_name}"
+    return SYNC_METHOD_MAPPINGS.get(key)
+
+
+# =============================================================================
 # Type mappings for Rust std types (used by cookcrab stub generator)
 # =============================================================================
 
@@ -1515,6 +2182,55 @@ RUST_STD_TYPE_MAPPINGS: dict[str, str] = {
     "std::time::SystemTime": "SystemTime",
     "time::SystemTimeError": "SystemTimeError",
     "std::time::SystemTimeError": "SystemTimeError",
+    # std::sync types
+    "sync::Arc": "Arc",
+    "std::sync::Arc": "Arc",
+    "sync::Weak": "Weak",
+    "std::sync::Weak": "Weak",
+    "sync::Mutex": "Mutex",
+    "std::sync::Mutex": "Mutex",
+    "sync::MutexGuard": "MutexGuard",
+    "std::sync::MutexGuard": "MutexGuard",
+    "sync::RwLock": "RwLock",
+    "std::sync::RwLock": "RwLock",
+    "sync::RwLockReadGuard": "RwLockReadGuard",
+    "std::sync::RwLockReadGuard": "RwLockReadGuard",
+    "sync::RwLockWriteGuard": "RwLockWriteGuard",
+    "std::sync::RwLockWriteGuard": "RwLockWriteGuard",
+    "sync::Condvar": "Condvar",
+    "std::sync::Condvar": "Condvar",
+    "sync::Barrier": "Barrier",
+    "std::sync::Barrier": "Barrier",
+    "sync::BarrierWaitResult": "BarrierWaitResult",
+    "std::sync::BarrierWaitResult": "BarrierWaitResult",
+    "sync::Once": "Once",
+    "std::sync::Once": "Once",
+    "sync::OnceLock": "OnceLock",
+    "std::sync::OnceLock": "OnceLock",
+    # std::sync::atomic types
+    "sync::atomic::AtomicBool": "AtomicBool",
+    "std::sync::atomic::AtomicBool": "AtomicBool",
+    "sync::atomic::AtomicI32": "AtomicI32",
+    "std::sync::atomic::AtomicI32": "AtomicI32",
+    "sync::atomic::AtomicI64": "AtomicI64",
+    "std::sync::atomic::AtomicI64": "AtomicI64",
+    "sync::atomic::AtomicU32": "AtomicU32",
+    "std::sync::atomic::AtomicU32": "AtomicU32",
+    "sync::atomic::AtomicU64": "AtomicU64",
+    "std::sync::atomic::AtomicU64": "AtomicU64",
+    "sync::atomic::AtomicUsize": "AtomicUsize",
+    "std::sync::atomic::AtomicUsize": "AtomicUsize",
+    "sync::atomic::AtomicIsize": "AtomicIsize",
+    "std::sync::atomic::AtomicIsize": "AtomicIsize",
+    "sync::atomic::Ordering": "Ordering",
+    "std::sync::atomic::Ordering": "Ordering",
+    # std::sync::mpsc types
+    "sync::mpsc::Sender": "Sender",
+    "std::sync::mpsc::Sender": "Sender",
+    "sync::mpsc::SyncSender": "SyncSender",
+    "std::sync::mpsc::SyncSender": "SyncSender",
+    "sync::mpsc::Receiver": "Receiver",
+    "std::sync::mpsc::Receiver": "Receiver",
 }
 
 
