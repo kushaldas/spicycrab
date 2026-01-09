@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from spicycrab.cookcrab._parser import (
         RustCrate,
+        RustFunction,
         RustMethod,
         RustTypeAlias,
     )
@@ -100,6 +101,521 @@ RUST_TO_PYTHON_TYPES: dict[str, str] = {
     "()": "None",
 }
 
+# Special function path overrides for crates that re-export functions at different paths
+# Format: (crate_name, function_name) -> (rust_path, rust_imports)
+FUNCTION_PATH_OVERRIDES: dict[tuple[str, str], tuple[str, list[str]]] = {
+    ("tokio", "sleep"): ("tokio::time::sleep({arg0})", ["tokio::time::sleep"]),
+    ("tokio", "sleep_until"): ("tokio::time::sleep_until({arg0})", ["tokio::time::sleep_until"]),
+    ("tokio", "spawn"): ("tokio::spawn({arg0})", []),
+    ("tokio", "spawn_blocking"): ("tokio::task::spawn_blocking({arg0})", ["tokio::task::spawn_blocking"]),
+}
+
+
+# Standard library types that are commonly used and need stubs
+# Format: (crate_name, type_name) -> (class_code, type_mapping, function_mappings)
+STD_TYPE_STUBS: dict[tuple[str, str], tuple[str, str, list[tuple[str, str]]]] = {
+    ("tokio", "Duration"): (
+        # Class stub
+        '''
+class Duration:
+    """A Duration type representing a span of time.
+
+    Maps to std::time::Duration in Rust.
+    """
+
+    @staticmethod
+    def from_secs(secs: int) -> "Duration":
+        """Creates a new Duration from seconds."""
+        ...
+
+    @staticmethod
+    def from_millis(millis: int) -> "Duration":
+        """Creates a new Duration from milliseconds."""
+        ...
+
+    @staticmethod
+    def from_micros(micros: int) -> "Duration":
+        """Creates a new Duration from microseconds."""
+        ...
+
+    @staticmethod
+    def from_nanos(nanos: int) -> "Duration":
+        """Creates a new Duration from nanoseconds."""
+        ...
+
+    def as_secs(self) -> int:
+        """Returns the number of whole seconds."""
+        ...
+
+    def as_millis(self) -> int:
+        """Returns the total number of milliseconds."""
+        ...
+''',
+        # Type mapping
+        "std::time::Duration",
+        # Function mappings (python_suffix, rust_code)
+        [
+            ("Duration.from_secs", "std::time::Duration::from_secs({arg0} as u64)"),
+            ("Duration.from_millis", "std::time::Duration::from_millis({arg0} as u64)"),
+            ("Duration.from_micros", "std::time::Duration::from_micros({arg0} as u64)"),
+            ("Duration.from_nanos", "std::time::Duration::from_nanos({arg0} as u64)"),
+        ],
+    ),
+    ("tokio", "Instant"): (
+        # Class stub
+        '''
+class Instant:
+    """A measurement of a monotonically nondecreasing clock.
+
+    Maps to tokio::time::Instant in Rust.
+    """
+
+    @staticmethod
+    def now() -> "Instant":
+        """Returns the current instant."""
+        ...
+
+    def elapsed(self) -> Duration:
+        """Returns the time elapsed since this instant."""
+        ...
+''',
+        # Type mapping
+        "tokio::time::Instant",
+        # Function mappings
+        [
+            ("Instant.now", "tokio::time::Instant::now()"),
+        ],
+    ),
+    ("tokio", "MpscSender"): (
+        # Class stub for mpsc bounded channel sender
+        '''
+class MpscSender:
+    """Sender half of a bounded mpsc channel.
+
+    Maps to tokio::sync::mpsc::Sender<String> in Rust.
+    Use with mpsc_channel() for type-safe channel creation.
+    """
+
+    async def send(self, value: str) -> None:
+        """Sends a value, waiting until there is capacity."""
+        ...
+
+    def clone(self) -> "MpscSender":
+        """Clones this sender."""
+        ...
+
+    def is_closed(self) -> bool:
+        """Returns True if the receiver has been dropped."""
+        ...
+''',
+        # Type mapping
+        "tokio::sync::mpsc::Sender<String>",
+        # Function mappings - none needed, methods are instance methods
+        [],
+    ),
+    ("tokio", "MpscReceiver"): (
+        # Class stub for mpsc bounded channel receiver
+        '''
+class MpscReceiver:
+    """Receiver half of a bounded mpsc channel.
+
+    Maps to tokio::sync::mpsc::Receiver<String> in Rust.
+    Use with mpsc_channel() for type-safe channel creation.
+    """
+
+    async def recv(self) -> str | None:
+        """Receives the next value, or None if the channel is closed."""
+        ...
+
+    def close(self) -> None:
+        """Closes the receiving half without dropping it."""
+        ...
+''',
+        # Type mapping
+        "tokio::sync::mpsc::Receiver<String>",
+        # Function mappings - none needed, methods are instance methods
+        [],
+    ),
+    ("tokio", "Arc"): (
+        # Class stub for Arc (thread-safe reference counting)
+        '''
+from typing import TypeVar, Generic
+
+T = TypeVar("T")
+
+
+class Arc(Generic[T]):
+    """Thread-safe reference-counting pointer.
+
+    Arc stands for Atomically Reference Counted. It provides shared ownership
+    of a value of type T, allocated on the heap. Cloning an Arc produces a new
+    Arc that points to the same allocation, increasing the reference count.
+
+    Maps to std::sync::Arc<T> in Rust.
+
+    Common use cases:
+    - Sharing immutable data between spawned tasks
+    - Combined with Mutex for shared mutable state: Arc[Mutex[T]]
+
+    Example:
+        data: Arc[str] = Arc.new("shared config")
+        cloned: Arc[str] = Arc.clone(data)
+
+        # Share between tasks
+        handle1 = spawn(worker(Arc.clone(data)))
+        handle2 = spawn(worker(Arc.clone(data)))
+    """
+
+    @staticmethod
+    def new(value: T) -> "Arc[T]":
+        """Constructs a new Arc<T>.
+
+        Args:
+            value: The value to wrap in an Arc.
+
+        Returns:
+            A new Arc containing the value.
+        """
+        ...
+
+    @staticmethod
+    def clone(arc: "Arc[T]") -> "Arc[T]":
+        """Creates a new Arc that points to the same allocation.
+
+        This increments the strong reference count.
+
+        Args:
+            arc: The Arc to clone.
+
+        Returns:
+            A new Arc pointing to the same data.
+        """
+        ...
+
+    @staticmethod
+    def strong_count(arc: "Arc[T]") -> int:
+        """Gets the number of strong (Arc) pointers to this allocation.
+
+        Args:
+            arc: The Arc to check.
+
+        Returns:
+            The number of strong references.
+        """
+        ...
+
+    @staticmethod
+    def weak_count(arc: "Arc[T]") -> int:
+        """Gets the number of weak (Weak) pointers to this allocation.
+
+        Args:
+            arc: The Arc to check.
+
+        Returns:
+            The number of weak references.
+        """
+        ...
+
+    @staticmethod
+    def try_unwrap(arc: "Arc[T]") -> T | None:
+        """Returns the inner value if the Arc has exactly one strong reference.
+
+        If there are multiple strong references, returns None.
+
+        Args:
+            arc: The Arc to unwrap.
+
+        Returns:
+            The inner value if ref count is 1, otherwise None.
+        """
+        ...
+
+    @staticmethod
+    def into_inner(arc: "Arc[T]") -> T | None:
+        """Returns the inner value if the Arc has exactly one strong reference.
+
+        This is similar to try_unwrap but available on Rust 1.70+.
+
+        Args:
+            arc: The Arc to unwrap.
+
+        Returns:
+            The inner value if ref count is 1, otherwise None.
+        """
+        ...
+''',
+        # Type mapping - generic Arc<T>
+        "std::sync::Arc",
+        # Function mappings for static methods
+        [
+            ("Arc.new", "std::sync::Arc::new({arg0})"),
+            ("Arc.clone", "std::sync::Arc::clone(&{arg0})"),
+            ("Arc.strong_count", "std::sync::Arc::strong_count(&{arg0}) as i64"),
+            ("Arc.weak_count", "std::sync::Arc::weak_count(&{arg0}) as i64"),
+            ("Arc.try_unwrap", "std::sync::Arc::try_unwrap({arg0}).ok()"),
+            ("Arc.into_inner", "std::sync::Arc::into_inner({arg0})"),
+        ],
+    ),
+    ("tokio", "Mutex"): (
+        # Class stub for tokio's async Mutex
+        '''
+class Mutex(Generic[T]):
+    """An asynchronous mutual exclusion primitive.
+
+    This is tokio's async-aware Mutex, suitable for use across .await points.
+    Unlike std::sync::Mutex, holding a tokio::sync::Mutex guard across an
+    await point is safe.
+
+    Maps to tokio::sync::Mutex<T> in Rust.
+
+    Common use case - shared mutable state between tasks:
+        counter: Arc[Mutex[int]] = Arc.new(Mutex.new(0))
+
+        async def increment(c: Arc[Mutex[int]]) -> None:
+            guard = await c.lock()
+            # modify the value through the guard
+
+    Example:
+        mutex: Mutex[int] = Mutex.new(0)
+        guard = await mutex.lock()
+    """
+
+    @staticmethod
+    def new(value: T) -> "Mutex[T]":
+        """Creates a new Mutex wrapping the given value.
+
+        Args:
+            value: The value to protect with the mutex.
+
+        Returns:
+            A new Mutex containing the value.
+        """
+        ...
+
+    async def lock(self) -> "MutexGuard[T]":
+        """Locks this mutex, waiting asynchronously if it's already locked.
+
+        Returns:
+            A guard that releases the lock when dropped.
+        """
+        ...
+
+    def try_lock(self) -> "MutexGuard[T] | None":
+        """Attempts to acquire the lock without waiting.
+
+        Returns:
+            A guard if successful, None if the mutex is already locked.
+        """
+        ...
+
+    def is_locked(self) -> bool:
+        """Returns True if the mutex is currently locked.
+
+        Returns:
+            True if locked, False otherwise.
+        """
+        ...
+
+
+class MutexGuard(Generic[T]):
+    """A guard that releases the mutex when dropped.
+
+    This is returned by Mutex.lock() and provides access to the protected data.
+    The lock is automatically released when the guard goes out of scope.
+    """
+    pass
+''',
+        # Type mapping
+        "tokio::sync::Mutex",
+        # Function mappings
+        [
+            ("Mutex.new", "tokio::sync::Mutex::new({arg0})"),
+        ],
+    ),
+    ("tokio", "RwLock"): (
+        # Class stub for tokio's async RwLock
+        '''
+class RwLock(Generic[T]):
+    """An asynchronous reader-writer lock.
+
+    This type of lock allows multiple readers or a single writer at any point
+    in time. Useful when you have data that is read frequently but written
+    infrequently.
+
+    Maps to tokio::sync::RwLock<T> in Rust.
+
+    Example:
+        data: RwLock[list[str]] = RwLock.new(["initial"])
+
+        # Multiple readers allowed
+        read_guard = await data.read()
+
+        # Single writer, blocks readers
+        write_guard = await data.write()
+    """
+
+    @staticmethod
+    def new(value: T) -> "RwLock[T]":
+        """Creates a new RwLock wrapping the given value.
+
+        Args:
+            value: The value to protect with the lock.
+
+        Returns:
+            A new RwLock containing the value.
+        """
+        ...
+
+    async def read(self) -> "RwLockReadGuard[T]":
+        """Locks this RwLock for reading, waiting if a writer holds the lock.
+
+        Multiple readers can hold the lock simultaneously.
+
+        Returns:
+            A read guard that releases the lock when dropped.
+        """
+        ...
+
+    async def write(self) -> "RwLockWriteGuard[T]":
+        """Locks this RwLock for writing, waiting if any readers or writers hold the lock.
+
+        Returns:
+            A write guard that releases the lock when dropped.
+        """
+        ...
+
+    def try_read(self) -> "RwLockReadGuard[T] | None":
+        """Attempts to acquire the read lock without waiting.
+
+        Returns:
+            A read guard if successful, None if the lock is held by a writer.
+        """
+        ...
+
+    def try_write(self) -> "RwLockWriteGuard[T] | None":
+        """Attempts to acquire the write lock without waiting.
+
+        Returns:
+            A write guard if successful, None if the lock is held.
+        """
+        ...
+
+
+class RwLockReadGuard(Generic[T]):
+    """A guard that releases the read lock when dropped."""
+    pass
+
+
+class RwLockWriteGuard(Generic[T]):
+    """A guard that releases the write lock when dropped."""
+    pass
+''',
+        # Type mapping
+        "tokio::sync::RwLock",
+        # Function mappings
+        [
+            ("RwLock.new", "tokio::sync::RwLock::new({arg0})"),
+        ],
+    ),
+}
+
+
+# Standalone function stubs for functions that aren't detected by the parser
+# (e.g., re-exported functions like tokio::spawn which is actually tokio::task::spawn)
+# Format: (crate_name, function_name) -> (stub_code, rust_code, rust_imports, is_async)
+FUNCTION_STUBS: dict[tuple[str, str], tuple[str, str, list[str], bool]] = {
+    ("tokio", "spawn"): (
+        '''
+async def spawn(future: F) -> JoinHandle:
+    """Spawns a new asynchronous task.
+
+    The spawned task may execute on the current thread or another thread.
+    Maps to tokio::spawn in Rust.
+    """
+    ...
+''',
+        "tokio::spawn({arg0})",
+        [],
+        True,
+    ),
+    ("tokio", "spawn_blocking"): (
+        '''
+async def spawn_blocking(f: F) -> JoinHandle:
+    """Runs a blocking function on a dedicated thread pool.
+
+    Maps to tokio::task::spawn_blocking in Rust.
+    """
+    ...
+''',
+        "tokio::task::spawn_blocking({arg0})",
+        ["tokio::task::spawn_blocking"],
+        True,
+    ),
+    ("tokio", "mpsc_channel"): (
+        '''
+def mpsc_channel(buffer: int) -> tuple:
+    """Creates a bounded mpsc channel for communication between tasks.
+
+    Returns a tuple of (Sender, Receiver).
+    Maps to tokio::sync::mpsc::channel in Rust.
+    """
+    ...
+''',
+        "tokio::sync::mpsc::channel({arg0})",
+        ["tokio::sync::mpsc"],
+        False,
+    ),
+    ("tokio", "mpsc_unbounded_channel"): (
+        '''
+def mpsc_unbounded_channel() -> tuple:
+    """Creates an unbounded mpsc channel for communication between tasks.
+
+    Returns a tuple of (UnboundedSender, UnboundedReceiver).
+    Maps to tokio::sync::mpsc::unbounded_channel in Rust.
+    """
+    ...
+''',
+        "tokio::sync::mpsc::unbounded_channel()",
+        ["tokio::sync::mpsc"],
+        False,
+    ),
+}
+
+
+# Mapping of methods that require trait imports
+# Format: crate_name -> {method_name -> trait_import}
+TRAIT_METHOD_IMPORTS: dict[str, dict[str, str]] = {
+    "chrono": {
+        # Datelike trait methods
+        "year": "chrono::Datelike",
+        "month": "chrono::Datelike",
+        "month0": "chrono::Datelike",
+        "day": "chrono::Datelike",
+        "day0": "chrono::Datelike",
+        "ordinal": "chrono::Datelike",
+        "ordinal0": "chrono::Datelike",
+        "weekday": "chrono::Datelike",
+        "iso_week": "chrono::Datelike",
+        "with_year": "chrono::Datelike",
+        "with_month": "chrono::Datelike",
+        "with_month0": "chrono::Datelike",
+        "with_day": "chrono::Datelike",
+        "with_day0": "chrono::Datelike",
+        "with_ordinal": "chrono::Datelike",
+        "with_ordinal0": "chrono::Datelike",
+        # Timelike trait methods
+        "hour": "chrono::Timelike",
+        "minute": "chrono::Timelike",
+        "second": "chrono::Timelike",
+        "nanosecond": "chrono::Timelike",
+        "with_hour": "chrono::Timelike",
+        "with_minute": "chrono::Timelike",
+        "with_second": "chrono::Timelike",
+        "with_nanosecond": "chrono::Timelike",
+        "num_seconds_from_midnight": "chrono::Timelike",
+    },
+}
+
 
 @dataclass
 class FunctionMapping:
@@ -165,6 +681,10 @@ def sanitize_rust_type(rust_type: str) -> str:
     if rust_type.startswith("(") and "," in rust_type:
         return "object"
 
+    # Handle malformed tuple types (unbalanced parentheses)
+    if rust_type.startswith("(") and rust_type.count("(") != rust_type.count(")"):
+        return "object"
+
     # Handle types with references inside generics (e.g., Bound<&usize>)
     # These can't be represented in Python type hints
     if "<&" in rust_type or "< &" in rust_type:
@@ -177,6 +697,11 @@ def sanitize_rust_type(rust_type: str) -> str:
 
     # Handle Rust array types [T; N]
     if rust_type.startswith("[") and ";" in rust_type:
+        return "object"
+
+    # Handle Rust slice types &[T] or [T] -> object
+    # These appear in types like &[IoSlice] which becomes IoSlice] after sanitization
+    if "[" in rust_type or "]" in rust_type:
         return "object"
 
     # Handle Rust unit type () and Result<()>
@@ -222,6 +747,11 @@ def sanitize_rust_type(rust_type: str) -> str:
     # Remove mut keyword (handle both "mut " and "mut" prefix)
     rust_type = re.sub(r"\bmut\s+", "", rust_type)
     rust_type = re.sub(r"\bmut([A-Z])", r"\1", rust_type)  # mutE -> E
+    rust_type = re.sub(r"\bmut\(", "(", rust_type)  # mut(...) -> (...)
+
+    # Handle impl Trait types (can't be expressed in Python)
+    if "impl" in rust_type.lower():
+        return "object"
 
     # Remove * const and * mut (raw pointers) -> object
     if rust_type.startswith("*"):
@@ -356,7 +886,8 @@ def rust_type_to_python(rust_type: str) -> str:
                 elif rust_type[i : i + 2] == "::" and depth == 0:
                     last_sep = i
             if last_sep >= 0:
-                return rust_type[last_sep + 2 :]
+                # Recursively process the remaining type after stripping namespace
+                return rust_type_to_python(rust_type[last_sep + 2 :])
         else:
             # :: is inside angle brackets (associated type like U::Target)
             # This is too complex to represent in Python, use object
@@ -444,6 +975,31 @@ def generate_static_method_signature(method: RustMethod, type_name: str) -> str:
     return f"def {safe_method_name}({params_str}) -> {ret_type}: ..."
 
 
+def generate_function_signature(func: RustFunction) -> str:
+    """Generate Python function signature from Rust free-standing function."""
+    params = []
+
+    for param in func.params:
+        py_type = rust_type_to_python(param.rust_type)
+        safe_param_name = python_safe_name(param.name)
+        params.append(f"{safe_param_name}: {py_type}")
+
+    params_str = ", ".join(params)
+
+    # Determine return type
+    if func.return_type:
+        ret_type = rust_type_to_python(func.return_type)
+    else:
+        ret_type = "None"
+
+    # Use safe name for function name
+    safe_func_name = python_safe_name(func.name)
+
+    # Add async keyword for async functions
+    async_kw = "async " if func.is_async else ""
+    return f"{async_kw}def {safe_func_name}({params_str}) -> {ret_type}: ..."
+
+
 def is_result_type_alias(alias: RustTypeAlias) -> bool:
     """Check if this type alias is a Result type (wraps core::result::Result)."""
     target = alias.target_type.lower()
@@ -502,6 +1058,20 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
         if is_result_type_alias(alias):
             lines.extend(generate_result_class(alias, crate_name))
 
+    # Add standard library type stubs (e.g., Duration for tokio)
+    std_types_added = []
+    for (stub_crate, type_name), (class_code, _rust_type, _func_mappings) in STD_TYPE_STUBS.items():
+        if stub_crate == crate_name:
+            lines.append(class_code)
+            std_types_added.append(type_name)
+
+    # Add standalone function stubs (e.g., spawn for tokio)
+    manual_functions_added = []
+    for (stub_crate, func_name), (stub_code, _rust_code, _rust_imports, _is_async) in FUNCTION_STUBS.items():
+        if stub_crate == crate_name:
+            lines.append(stub_code)
+            manual_functions_added.append(func_name)
+
     # Collect all types and their methods
     type_methods: dict[str, list[RustMethod]] = {}
     for impl in crate.impls:
@@ -559,14 +1129,27 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
                     sig = generate_method_signature(method, enum.name)
                 lines.append(f"    {sig}")
 
+    # Generate free-standing functions
+    all_functions = []
+    for func in crate.functions:
+        if func.is_pub:  # Only export public functions
+            safe_name = python_safe_name(func.name)
+            all_functions.append(safe_name)
+            lines.append("")
+            if func.doc:
+                lines.append(f'"""{func.doc}"""')
+            sig = generate_function_signature(func)
+            lines.append(sig)
+
     # Add Result type aliases to all_types
     for alias in crate.type_aliases:
         if is_result_type_alias(alias):
             all_types.insert(0, alias.name)  # Put Result first
 
-    # Add __all__
+    # Add __all__ - order: functions, manual stubs, std types, crate types
     lines.append("")
-    all_str = ", ".join(f'"{t}"' for t in all_types)
+    all_items = all_functions + manual_functions_added + std_types_added + all_types
+    all_str = ", ".join(f'"{t}"' for t in all_items)
     lines.append(f"__all__: list[str] = [{all_str}]")
     lines.append("")
 
@@ -586,6 +1169,11 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         f'{crate_name} = "{version}"',
         "",
     ]
+
+    # Collect type names that are handled by STD_TYPE_STUBS to avoid duplicates
+    std_type_names: set[str] = {
+        type_name for (stub_crate, type_name), _ in STD_TYPE_STUBS.items() if stub_crate == crate_name
+    }
 
     # Generate mappings for Result type aliases (Result.Ok, Result.Err)
     for alias in crate.type_aliases:
@@ -607,6 +1195,69 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append("needs_result = false")
             lines.append("")
 
+    # Generate mappings for standard library types (e.g., Duration for tokio)
+    for (stub_crate, type_name), (_class_code, rust_type, func_mappings) in STD_TYPE_STUBS.items():
+        if stub_crate == crate_name:
+            # Add function mappings for constructors
+            for py_suffix, rust_code in func_mappings:
+                lines.append(f"# {type_name} constructor from std")
+                lines.append("[[mappings.functions]]")
+                lines.append(f'python = "{crate_name}.{py_suffix}"')
+                lines.append(f'rust_code = "{rust_code}"')
+                lines.append("rust_imports = []")
+                lines.append("needs_result = false")
+                lines.append("")
+
+    # Generate mappings for standalone function stubs (e.g., spawn for tokio)
+    for (stub_crate, func_name), (_stub_code, rust_code, rust_imports, is_async) in FUNCTION_STUBS.items():
+        if stub_crate == crate_name:
+            lines.append(f"# {func_name} standalone function")
+            lines.append("[[mappings.functions]]")
+            lines.append(f'python = "{crate_name}.{func_name}"')
+            lines.append(f'rust_code = "{rust_code}"')
+            if rust_imports:
+                imports_str = ", ".join(f'"{i}"' for i in rust_imports)
+                lines.append(f"rust_imports = [{imports_str}]")
+            else:
+                lines.append("rust_imports = []")
+            lines.append("needs_result = false")
+            if is_async:
+                lines.append("is_async = true")
+            lines.append("")
+
+    # Generate mappings for free-standing functions
+    for func in crate.functions:
+        if func.is_pub:
+            # Generate argument placeholders
+            args = ", ".join(f"{{arg{i}}}" for i in range(len(func.params)))
+            py_func_name = python_safe_name(func.name)
+            param_types = [p.rust_type for p in func.params]
+            param_types_str = ", ".join(f'"{t}"' for t in param_types)
+
+            # Check for path overrides (e.g., tokio::sleep -> tokio::time::sleep)
+            override_key = (crate_name, func.name)
+            if override_key in FUNCTION_PATH_OVERRIDES:
+                rust_code_template, rust_imports = FUNCTION_PATH_OVERRIDES[override_key]
+                rust_code = rust_code_template
+            else:
+                rust_code = f"{crate_name}::{func.name}({args})"
+                rust_imports = [f"{crate_name}::{func.name}"]
+
+            lines.append("[[mappings.functions]]")
+            lines.append(f'python = "{crate_name}.{py_func_name}"')
+            lines.append(f'rust_code = "{rust_code}"')
+            if rust_imports:
+                imports_str = ", ".join(f'"{i}"' for i in rust_imports)
+                lines.append(f"rust_imports = [{imports_str}]")
+            else:
+                lines.append("rust_imports = []")
+            lines.append("needs_result = false")
+            if func.is_async:
+                lines.append("is_async = true")
+            if param_types:
+                lines.append(f"param_types = [{param_types_str}]")
+            lines.append("")
+
     # Collect all types and their methods
     type_methods: dict[str, list[RustMethod]] = {}
     for impl in crate.impls:
@@ -615,7 +1266,10 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         type_methods[impl.type_name].extend(impl.methods)
 
     # Generate function mappings (static methods / constructors)
+    # Skip structs that are handled by STD_TYPE_STUBS to avoid duplicate/conflicting mappings
     for struct in crate.structs:
+        if struct.name in std_type_names:
+            continue
         methods = type_methods.get(struct.name, [])
         for method in methods:
             if method.is_static:
@@ -649,7 +1303,13 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append("")
 
     # Generate method mappings (instance methods)
+    # Get trait method imports for this crate
+    crate_trait_methods = TRAIT_METHOD_IMPORTS.get(crate_name, {})
+
+    # Skip structs that are handled by STD_TYPE_STUBS
     for struct in crate.structs:
+        if struct.name in std_type_names:
+            continue
         methods = type_methods.get(struct.name, [])
         for method in methods:
             if not method.is_static:
@@ -663,13 +1323,28 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 returns_self = method.return_type and (
                     "Self" in method.return_type or struct.name in method.return_type
                 )
+
+                # Check if this method requires a trait import
+                trait_import = crate_trait_methods.get(method.name, "")
+                rust_imports = [trait_import] if trait_import else []
+
+                # Check if return type needs conversion to i64 (Python int)
+                # Small integer types (i32, u32, i16, u16, etc.) need explicit cast
+                # Use "as i64" instead of ".into()" to avoid ambiguity in format contexts
+                needs_cast = method.return_type in {"i8", "i16", "i32", "u8", "u16", "u32"}
+                into_suffix = " as i64" if needs_cast else ""
+
                 lines.append("[[mappings.methods]]")
                 lines.append(f'python = "{struct.name}.{py_method_name}"')
                 if args:
-                    lines.append(f'rust_code = "{{self}}.{method.name}({args})"')
+                    lines.append(f'rust_code = "{{self}}.{method.name}({args}){into_suffix}"')
                 else:
-                    lines.append(f'rust_code = "{{self}}.{method.name}()"')
-                lines.append("rust_imports = []")
+                    lines.append(f'rust_code = "{{self}}.{method.name}(){into_suffix}"')
+                if rust_imports:
+                    imports_str = ", ".join(f'"{i}"' for i in rust_imports)
+                    lines.append(f"rust_imports = [{imports_str}]")
+                else:
+                    lines.append("rust_imports = []")
                 lines.append("needs_result = false")
                 if returns_self:
                     lines.append("returns_self = true")
@@ -686,14 +1361,27 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append(f'rust = "{crate_name}::{alias.name}"')
             lines.append("")
 
-    # Generate type mappings for structs
+    # Generate type mappings for standard library types
+    for (stub_crate, type_name), (_class_code, rust_type, _func_mappings) in STD_TYPE_STUBS.items():
+        if stub_crate == crate_name:
+            lines.append(f"# {type_name} from std")
+            lines.append("[[mappings.types]]")
+            lines.append(f'python = "{type_name}"')
+            lines.append(f'rust = "{rust_type}"')
+            lines.append("")
+
+    # Generate type mappings for structs (skip those handled by STD_TYPE_STUBS)
     for struct in crate.structs:
+        if struct.name in std_type_names:
+            continue
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{struct.name}"')
         lines.append(f'rust = "{crate_name}::{struct.name}"')
         lines.append("")
 
     for enum in crate.enums:
+        if enum.name in std_type_names:
+            continue
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{enum.name}"')
         lines.append(f'rust = "{crate_name}::{enum.name}"')

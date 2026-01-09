@@ -20,6 +20,7 @@ It converts idiomatic, typed Python into idiomatic Rust, handling:
 - Classes → structs with impl blocks
 - Context managers → RAII (Drop trait)
 - Error handling → Result types with ``?`` operator
+- Async/await → tokio runtime with ``#[tokio::main]``
 - Standard library → Rust equivalents
 
 Quick Example
@@ -66,6 +67,7 @@ Rust output:
    control_flow
    error_handling
    stdlib
+   async
    cookcrab
    multifile
    code_quality

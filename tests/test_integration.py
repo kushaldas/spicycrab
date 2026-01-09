@@ -1,16 +1,16 @@
 """Integration tests that compile and run generated Rust code."""
 
-import shutil
 import subprocess
 import tempfile
+import shutil
 from pathlib import Path
 
 import pytest
 
-from spicycrab.analyzer.type_resolver import resolve_types
-from spicycrab.codegen.cargo import generate_cargo_toml
-from spicycrab.codegen.emitter import RustEmitter
 from spicycrab.parser import parse_file
+from spicycrab.analyzer.type_resolver import resolve_types
+from spicycrab.codegen.emitter import RustEmitter
+from spicycrab.codegen.cargo import generate_cargo_toml
 
 
 def transpile_and_run(python_code: str, expected_output: str | list[str]) -> None:
@@ -60,13 +60,15 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         # - unused_imports: chrono traits may be imported preemptively
         # - vec_init_then_push: would require detecting push after vec![] creation
         # - unnecessary_to_owned: emitter converts literals to String, then borrows
+        # - format_in_format_args: f-string transpilation creates format! inside println!
         result = subprocess.run(
             ["cargo", "clippy", "--", "-D", "warnings",
              "-A", "unused_variables",
              "-A", "unused_mut",
              "-A", "unused_imports",
              "-A", "clippy::vec_init_then_push",
-             "-A", "clippy::unnecessary_to_owned"],
+             "-A", "clippy::unnecessary_to_owned",
+             "-A", "clippy::format_in_format_args"],
             cwd=tmpdir,
             capture_output=True,
             text=True,
@@ -1221,3 +1223,87 @@ def main() -> None:
         print("ok")
 '''
         transpile_and_run(code, "ok")
+
+
+class TestAsyncTokio:
+    """Test async/await transpilation with tokio runtime."""
+
+    def test_basic_async_function(self, check_cargo):
+        """Test basic async function definition and call."""
+        code = '''
+async def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+async def main() -> None:
+    message: str = await greet("World")
+    print(message)
+'''
+        transpile_and_run(code, "Hello, World!")
+
+    def test_async_main_no_await(self, check_cargo):
+        """Test async main without any await calls."""
+        code = '''
+async def compute(x: int) -> int:
+    return x * 2
+
+async def main() -> None:
+    # No await call, just sync operations
+    result: int = 21
+    print(result)
+'''
+        transpile_and_run(code, "21")
+
+    def test_multiple_async_functions(self, check_cargo):
+        """Test multiple async functions calling each other."""
+        code = '''
+async def add(a: int, b: int) -> int:
+    return a + b
+
+async def multiply(a: int, b: int) -> int:
+    return a * b
+
+async def compute(x: int, y: int) -> int:
+    sum_result: int = await add(x, y)
+    prod_result: int = await multiply(x, y)
+    return sum_result + prod_result
+
+async def main() -> None:
+    result: int = await compute(3, 4)
+    print(result)
+'''
+        # (3+4) + (3*4) = 7 + 12 = 19
+        transpile_and_run(code, "19")
+
+    def test_async_with_loop(self, check_cargo):
+        """Test async function with loop."""
+        code = '''
+async def sum_range(n: int) -> int:
+    total: int = 0
+    for i in range(n):
+        total = total + i
+    return total
+
+async def main() -> None:
+    result: int = await sum_range(5)
+    print(result)
+'''
+        # 0+1+2+3+4 = 10
+        transpile_and_run(code, "10")
+
+    def test_async_with_conditional(self, check_cargo):
+        """Test async function with conditional logic."""
+        code = '''
+async def classify(n: int) -> str:
+    if n < 0:
+        return "negative"
+    if n == 0:
+        return "zero"
+    return "positive"
+
+async def main() -> None:
+    r1: str = await classify(-5)
+    r2: str = await classify(0)
+    r3: str = await classify(10)
+    print(f"{r1},{r2},{r3}")
+'''
+        transpile_and_run(code, "negative,zero,positive")

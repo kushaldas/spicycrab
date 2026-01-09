@@ -6,6 +6,8 @@ from spicycrab.codegen.stdlib import (
     IO_MAPPINGS,
     PATH_MAPPINGS,
     RUST_TIME_MAPPINGS,
+    SYNC_MAPPINGS,
+    SYNC_METHOD_MAPPINGS,
     THREAD_MAPPINGS,
     get_collections_mapping,
     get_fs_mapping,
@@ -21,6 +23,8 @@ from spicycrab.codegen.stdlib import (
     get_rust_time_mapping,
     get_rust_time_method_mapping,
     get_stdlib_mapping,
+    get_sync_mapping,
+    get_sync_method_mapping,
     get_thread_mapping,
     get_thread_method_mapping,
     is_rust_std_type,
@@ -1288,3 +1292,401 @@ class TestRustStdThreadTimeTypeHelpers:
         assert is_rust_std_type("std::time::Duration")
         assert is_rust_std_type("time::Instant")
         assert is_rust_std_type("time::SystemTime")
+
+
+class TestRustStdSyncMappings:
+    """Tests for Rust std::sync module mappings."""
+
+    def test_arc_new(self):
+        """Test std::sync::Arc::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Arc.new")
+        assert mapping is not None
+        assert "std::sync::Arc::new" in mapping.rust_code
+        assert "std::sync::Arc" in mapping.rust_imports
+
+    def test_arc_clone(self):
+        """Test std::sync::Arc::clone mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Arc.clone")
+        assert mapping is not None
+        assert "std::sync::Arc::clone" in mapping.rust_code
+
+    def test_arc_strong_count(self):
+        """Test std::sync::Arc::strong_count mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Arc.strong_count")
+        assert mapping is not None
+        assert "std::sync::Arc::strong_count" in mapping.rust_code
+        assert "as i64" in mapping.rust_code  # Cast to i64
+
+    def test_arc_weak_count(self):
+        """Test std::sync::Arc::weak_count mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Arc.weak_count")
+        assert mapping is not None
+        assert "std::sync::Arc::weak_count" in mapping.rust_code
+
+    def test_weak_type(self):
+        """Test std::sync::Weak type mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Weak")
+        assert mapping is not None
+        assert "std::sync::Weak" in mapping.rust_code
+
+    def test_mutex_new(self):
+        """Test std::sync::Mutex::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Mutex.new")
+        assert mapping is not None
+        assert "std::sync::Mutex::new" in mapping.rust_code
+        assert "std::sync::Mutex" in mapping.rust_imports
+
+    def test_rwlock_new(self):
+        """Test std::sync::RwLock::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.RwLock.new")
+        assert mapping is not None
+        assert "std::sync::RwLock::new" in mapping.rust_code
+        assert "std::sync::RwLock" in mapping.rust_imports
+
+    def test_condvar_new(self):
+        """Test std::sync::Condvar::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Condvar.new")
+        assert mapping is not None
+        assert "std::sync::Condvar::new()" in mapping.rust_code
+        assert "std::sync::Condvar" in mapping.rust_imports
+
+    def test_barrier_new(self):
+        """Test std::sync::Barrier::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Barrier.new")
+        assert mapping is not None
+        assert "std::sync::Barrier::new" in mapping.rust_code
+        assert "std::sync::Barrier" in mapping.rust_imports
+
+    def test_once_new(self):
+        """Test std::sync::Once::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Once.new")
+        assert mapping is not None
+        assert "std::sync::Once::new()" in mapping.rust_code
+
+    def test_once_lock_new(self):
+        """Test std::sync::OnceLock::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.OnceLock.new")
+        assert mapping is not None
+        assert "std::sync::OnceLock::new()" in mapping.rust_code
+        assert "std::sync::OnceLock" in mapping.rust_imports
+
+    def test_mpsc_channel(self):
+        """Test std::sync::mpsc::channel mapping."""
+        mapping = get_sync_mapping("rust_std.sync.mpsc_channel")
+        assert mapping is not None
+        assert "std::sync::mpsc::channel()" in mapping.rust_code
+
+    def test_mpsc_sync_channel(self):
+        """Test std::sync::mpsc::sync_channel mapping."""
+        mapping = get_sync_mapping("rust_std.sync.mpsc_sync_channel")
+        assert mapping is not None
+        assert "std::sync::mpsc::sync_channel" in mapping.rust_code
+
+    def test_atomic_bool_new(self):
+        """Test std::sync::atomic::AtomicBool::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.AtomicBool.new")
+        assert mapping is not None
+        assert "std::sync::atomic::AtomicBool::new" in mapping.rust_code
+
+    def test_atomic_usize_new(self):
+        """Test std::sync::atomic::AtomicUsize::new mapping."""
+        mapping = get_sync_mapping("rust_std.sync.AtomicUsize.new")
+        assert mapping is not None
+        assert "std::sync::atomic::AtomicUsize::new" in mapping.rust_code
+
+    def test_ordering_relaxed(self):
+        """Test std::sync::atomic::Ordering::Relaxed mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Ordering.Relaxed")
+        assert mapping is not None
+        assert "std::sync::atomic::Ordering::Relaxed" in mapping.rust_code
+
+    def test_ordering_seqcst(self):
+        """Test std::sync::atomic::Ordering::SeqCst mapping."""
+        mapping = get_sync_mapping("rust_std.sync.Ordering.SeqCst")
+        assert mapping is not None
+        assert "std::sync::atomic::Ordering::SeqCst" in mapping.rust_code
+
+
+class TestRustStdSyncMethodMappings:
+    """Tests for Rust std::sync method mappings."""
+
+    def test_arc_downgrade(self):
+        """Test Arc.downgrade method mapping (in SYNC_MAPPINGS as static)."""
+        mapping = get_sync_mapping("rust_std.sync.Arc.downgrade")
+        assert mapping is not None
+        assert "std::sync::Arc::downgrade" in mapping.rust_code
+
+    def test_weak_upgrade(self):
+        """Test Weak.upgrade method mapping."""
+        mapping = get_sync_method_mapping("Weak", "upgrade")
+        assert mapping is not None
+        assert ".upgrade()" in mapping.rust_code
+
+    def test_weak_strong_count(self):
+        """Test Weak.strong_count method mapping."""
+        mapping = get_sync_method_mapping("Weak", "strong_count")
+        assert mapping is not None
+        assert ".strong_count()" in mapping.rust_code
+
+    def test_mutex_lock(self):
+        """Test Mutex.lock method mapping."""
+        mapping = get_sync_method_mapping("Mutex", "lock")
+        assert mapping is not None
+        assert ".lock()" in mapping.rust_code
+        assert ".unwrap()" in mapping.rust_code  # Handles poison
+
+    def test_mutex_try_lock(self):
+        """Test Mutex.try_lock method mapping."""
+        mapping = get_sync_method_mapping("Mutex", "try_lock")
+        assert mapping is not None
+        assert ".try_lock()" in mapping.rust_code
+
+    def test_mutex_is_poisoned(self):
+        """Test Mutex.is_poisoned method mapping."""
+        mapping = get_sync_method_mapping("Mutex", "is_poisoned")
+        assert mapping is not None
+        assert ".is_poisoned()" in mapping.rust_code
+
+    def test_rwlock_read(self):
+        """Test RwLock.read method mapping."""
+        mapping = get_sync_method_mapping("RwLock", "read")
+        assert mapping is not None
+        assert ".read()" in mapping.rust_code
+
+    def test_rwlock_write(self):
+        """Test RwLock.write method mapping."""
+        mapping = get_sync_method_mapping("RwLock", "write")
+        assert mapping is not None
+        assert ".write()" in mapping.rust_code
+
+    def test_rwlock_try_read(self):
+        """Test RwLock.try_read method mapping."""
+        mapping = get_sync_method_mapping("RwLock", "try_read")
+        assert mapping is not None
+        assert ".try_read()" in mapping.rust_code
+
+    def test_rwlock_try_write(self):
+        """Test RwLock.try_write method mapping."""
+        mapping = get_sync_method_mapping("RwLock", "try_write")
+        assert mapping is not None
+        assert ".try_write()" in mapping.rust_code
+
+    def test_condvar_wait(self):
+        """Test Condvar.wait method mapping."""
+        mapping = get_sync_method_mapping("Condvar", "wait")
+        assert mapping is not None
+        assert ".wait(" in mapping.rust_code
+
+    def test_condvar_notify_one(self):
+        """Test Condvar.notify_one method mapping."""
+        mapping = get_sync_method_mapping("Condvar", "notify_one")
+        assert mapping is not None
+        assert ".notify_one()" in mapping.rust_code
+
+    def test_condvar_notify_all(self):
+        """Test Condvar.notify_all method mapping."""
+        mapping = get_sync_method_mapping("Condvar", "notify_all")
+        assert mapping is not None
+        assert ".notify_all()" in mapping.rust_code
+
+    def test_barrier_wait(self):
+        """Test Barrier.wait method mapping."""
+        mapping = get_sync_method_mapping("Barrier", "wait")
+        assert mapping is not None
+        assert ".wait()" in mapping.rust_code
+
+    def test_once_call_once(self):
+        """Test Once.call_once method mapping."""
+        mapping = get_sync_method_mapping("Once", "call_once")
+        assert mapping is not None
+        assert ".call_once(" in mapping.rust_code
+
+    def test_once_is_completed(self):
+        """Test Once.is_completed method mapping."""
+        mapping = get_sync_method_mapping("Once", "is_completed")
+        assert mapping is not None
+        assert ".is_completed()" in mapping.rust_code
+
+    def test_once_lock_get(self):
+        """Test OnceLock.get method mapping."""
+        mapping = get_sync_method_mapping("OnceLock", "get")
+        assert mapping is not None
+        assert ".get()" in mapping.rust_code
+
+    def test_once_lock_set(self):
+        """Test OnceLock.set method mapping."""
+        mapping = get_sync_method_mapping("OnceLock", "set")
+        assert mapping is not None
+        assert ".set(" in mapping.rust_code
+
+    def test_once_lock_get_or_init(self):
+        """Test OnceLock.get_or_init method mapping."""
+        mapping = get_sync_method_mapping("OnceLock", "get_or_init")
+        assert mapping is not None
+        assert ".get_or_init(" in mapping.rust_code
+
+    def test_sender_send(self):
+        """Test Sender.send method mapping."""
+        mapping = get_sync_method_mapping("Sender", "send")
+        assert mapping is not None
+        assert ".send(" in mapping.rust_code
+
+    def test_receiver_recv(self):
+        """Test Receiver.recv method mapping."""
+        mapping = get_sync_method_mapping("Receiver", "recv")
+        assert mapping is not None
+        assert ".recv()" in mapping.rust_code
+
+    def test_receiver_try_recv(self):
+        """Test Receiver.try_recv method mapping."""
+        mapping = get_sync_method_mapping("Receiver", "try_recv")
+        assert mapping is not None
+        assert ".try_recv()" in mapping.rust_code
+
+    def test_receiver_iter(self):
+        """Test Receiver.iter method mapping."""
+        mapping = get_sync_method_mapping("Receiver", "iter")
+        assert mapping is not None
+        assert ".iter()" in mapping.rust_code
+
+    def test_atomic_bool_load(self):
+        """Test AtomicBool.load method mapping."""
+        mapping = get_sync_method_mapping("AtomicBool", "load")
+        assert mapping is not None
+        assert ".load(" in mapping.rust_code
+
+    def test_atomic_bool_store(self):
+        """Test AtomicBool.store method mapping."""
+        mapping = get_sync_method_mapping("AtomicBool", "store")
+        assert mapping is not None
+        assert ".store(" in mapping.rust_code
+
+    def test_atomic_usize_fetch_add(self):
+        """Test AtomicUsize.fetch_add method mapping."""
+        mapping = get_sync_method_mapping("AtomicUsize", "fetch_add")
+        assert mapping is not None
+        assert ".fetch_add(" in mapping.rust_code
+
+    def test_atomic_bool_compare_exchange(self):
+        """Test AtomicBool.compare_exchange method mapping."""
+        mapping = get_sync_method_mapping("AtomicBool", "compare_exchange")
+        assert mapping is not None
+        assert ".compare_exchange(" in mapping.rust_code
+
+
+class TestRustStdSyncMappingCoverage:
+    """Tests to ensure comprehensive coverage of std::sync mappings."""
+
+    def test_sync_mappings_count(self):
+        """Verify expected number of sync mappings."""
+        # Should have Arc, Weak, Mutex, RwLock, Condvar, Barrier, Once,
+        # OnceLock, atomics, mpsc, and Ordering variants
+        assert len(SYNC_MAPPINGS) >= 30
+        sync_funcs = [
+            "rust_std.sync.Arc.new",
+            "rust_std.sync.Arc.clone",
+            "rust_std.sync.Arc.strong_count",
+            "rust_std.sync.Weak",
+            "rust_std.sync.Mutex.new",
+            "rust_std.sync.RwLock.new",
+            "rust_std.sync.Condvar.new",
+            "rust_std.sync.Barrier.new",
+            "rust_std.sync.Once.new",
+            "rust_std.sync.OnceLock.new",
+            "rust_std.sync.mpsc_channel",
+            "rust_std.sync.AtomicBool.new",
+            "rust_std.sync.Ordering.SeqCst",
+        ]
+        for func in sync_funcs:
+            assert func in SYNC_MAPPINGS, f"Missing {func}"
+
+    def test_sync_method_mappings_count(self):
+        """Verify expected number of sync method mappings."""
+        # Should have methods for Weak, Mutex, RwLock, Condvar, etc.
+        # Note: Arc.downgrade is a static method in SYNC_MAPPINGS
+        assert len(SYNC_METHOD_MAPPINGS) >= 40
+        methods = [
+            ("Weak", "upgrade"),
+            ("Weak", "strong_count"),
+            ("Mutex", "lock"),
+            ("Mutex", "try_lock"),
+            ("RwLock", "read"),
+            ("RwLock", "write"),
+            ("Condvar", "wait"),
+            ("Condvar", "notify_one"),
+            ("Barrier", "wait"),
+            ("Once", "call_once"),
+            ("OnceLock", "get"),
+            ("Sender", "send"),
+            ("Receiver", "recv"),
+            ("AtomicBool", "load"),
+            ("AtomicUsize", "fetch_add"),
+        ]
+        for type_name, method_name in methods:
+            mapping = get_sync_method_mapping(type_name, method_name)
+            assert mapping is not None, f"Missing {type_name}.{method_name}"
+
+
+class TestRustStdSyncViaGetStdlibMapping:
+    """Tests for std::sync mappings via get_stdlib_mapping."""
+
+    def test_sync_arc_via_get_stdlib_mapping(self):
+        """Test rust_std.sync.Arc mappings accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.sync", "Arc.new")
+        assert mapping is not None
+        assert "std::sync::Arc::new" in mapping.rust_code
+
+    def test_sync_mutex_via_get_stdlib_mapping(self):
+        """Test rust_std.sync.Mutex mappings accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.sync", "Mutex.new")
+        assert mapping is not None
+        assert "std::sync::Mutex::new" in mapping.rust_code
+
+    def test_sync_mpsc_via_get_stdlib_mapping(self):
+        """Test rust_std.sync.mpsc mappings accessible via get_stdlib_mapping."""
+        mapping = get_stdlib_mapping("rust_std.sync", "mpsc_channel")
+        assert mapping is not None
+        assert "std::sync::mpsc::channel()" in mapping.rust_code
+
+
+class TestRustStdSyncTypeHelpers:
+    """Tests for std::sync type helper functions."""
+
+    def test_get_rust_std_type_arc(self):
+        """Test getting Python type for std::sync::Arc."""
+        assert get_rust_std_type("std::sync::Arc") == "Arc"
+        assert get_rust_std_type("sync::Arc") == "Arc"
+
+    def test_get_rust_std_type_mutex(self):
+        """Test getting Python type for std::sync::Mutex."""
+        assert get_rust_std_type("std::sync::Mutex") == "Mutex"
+        assert get_rust_std_type("sync::Mutex") == "Mutex"
+
+    def test_get_rust_std_type_rwlock(self):
+        """Test getting Python type for std::sync::RwLock."""
+        assert get_rust_std_type("std::sync::RwLock") == "RwLock"
+        assert get_rust_std_type("sync::RwLock") == "RwLock"
+
+    def test_get_rust_std_type_condvar(self):
+        """Test getting Python type for std::sync::Condvar."""
+        assert get_rust_std_type("std::sync::Condvar") == "Condvar"
+        assert get_rust_std_type("sync::Condvar") == "Condvar"
+
+    def test_get_rust_std_type_barrier(self):
+        """Test getting Python type for std::sync::Barrier."""
+        assert get_rust_std_type("std::sync::Barrier") == "Barrier"
+        assert get_rust_std_type("sync::Barrier") == "Barrier"
+
+    def test_is_rust_std_type_sync(self):
+        """Test is_rust_std_type for sync types."""
+        assert is_rust_std_type("std::sync::Arc")
+        assert is_rust_std_type("sync::Mutex")
+        assert is_rust_std_type("sync::RwLock")
+        assert is_rust_std_type("sync::Condvar")
+        assert is_rust_std_type("sync::Barrier")
+
+    def test_is_rust_std_type_sync_with_generic(self):
+        """Test is_rust_std_type handles generic sync types."""
+        assert is_rust_std_type("Arc<String>")
+        assert is_rust_std_type("std::sync::Arc<std::sync::Mutex<i32>>")
+        assert is_rust_std_type("Mutex<Vec<u8>>")

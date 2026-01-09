@@ -40,6 +40,8 @@ from spicycrab.codegen.stdlib.rust_std_map import (
     RUST_STD_TYPE_MAPPINGS,
     RUST_TIME_MAPPINGS,
     RUST_TIME_METHOD_MAPPINGS,
+    SYNC_MAPPINGS,
+    SYNC_METHOD_MAPPINGS,
     THREAD_MAPPINGS,
     THREAD_METHOD_MAPPINGS,
     get_fs_mapping,
@@ -51,6 +53,8 @@ from spicycrab.codegen.stdlib.rust_std_map import (
     get_rust_std_type,
     get_rust_time_mapping,
     get_rust_time_method_mapping,
+    get_sync_mapping,
+    get_sync_method_mapping,
     get_thread_mapping,
     get_thread_method_mapping,
     is_rust_std_type,
@@ -195,6 +199,8 @@ __all__ = [
     "IO_METHOD_MAPPINGS",
     "PATH_MAPPINGS",
     "PATH_METHOD_MAPPINGS",
+    "SYNC_MAPPINGS",
+    "SYNC_METHOD_MAPPINGS",
     "THREAD_MAPPINGS",
     "THREAD_METHOD_MAPPINGS",
     "RUST_TIME_MAPPINGS",
@@ -206,6 +212,8 @@ __all__ = [
     "get_io_method_mapping",
     "get_path_mapping",
     "get_path_method_mapping",
+    "get_sync_mapping",
+    "get_sync_method_mapping",
     "get_thread_mapping",
     "get_thread_method_mapping",
     "get_rust_time_mapping",
@@ -264,6 +272,8 @@ def get_stdlib_mapping(module: str, func: str) -> StdlibMapping | None:
         return IO_MAPPINGS[key]
     if key in PATH_MAPPINGS:
         return PATH_MAPPINGS[key]
+    if key in SYNC_MAPPINGS:
+        return SYNC_MAPPINGS[key]
     if key in THREAD_MAPPINGS:
         return THREAD_MAPPINGS[key]
     if key in RUST_TIME_MAPPINGS:

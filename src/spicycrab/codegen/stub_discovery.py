@@ -202,16 +202,33 @@ def get_stub_method_mapping(type_name: str, method_name: str) -> StdlibMapping |
     return None
 
 
-def get_stub_type_mapping(python_type: str) -> str | None:
+def get_stub_type_mapping(python_type: str, crate_name: str | None = None) -> str | None:
     """Get Rust type for a Python type from installed stub packages.
 
     Args:
         python_type: Python type name (e.g., "Command")
+        crate_name: Optional crate name to restrict lookup to (e.g., "tokio").
+                    If provided, only looks in that crate's mappings.
+                    If None, searches all crates (legacy behavior, not recommended).
 
     Returns:
         Rust type path if found, None otherwise
+
+    Note:
+        When multiple crates export the same type name (e.g., Sender in fern and tokio),
+        you MUST provide crate_name to get the correct mapping. Without it, the first
+        match is returned which may be from the wrong crate.
     """
     cache = _get_cache()
+
+    # If crate_name is specified, only look in that crate's package
+    if crate_name is not None:
+        pkg = cache.get(crate_name)
+        if pkg and python_type in pkg.type_mappings:
+            return pkg.type_mappings[python_type]
+        return None
+
+    # Legacy behavior: search all packages (not recommended for conflicting names)
     for pkg in cache.values():
         if python_type in pkg.type_mappings:
             return pkg.type_mappings[python_type]

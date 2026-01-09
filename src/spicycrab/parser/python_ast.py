@@ -15,6 +15,7 @@ from spicycrab.ir.nodes import (
     IRAssign,
     IRAttrAssign,
     IRAttribute,
+    IRAwait,
     IRBinaryOp,
     IRBreak,
     IRCall,
@@ -46,6 +47,7 @@ from spicycrab.ir.nodes import (
     IRSubscript,
     IRTry,
     IRTuple,
+    IRTupleUnpack,
     IRType,
     IRUnaryOp,
     IRWhile,
@@ -186,7 +188,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             elif isinstance(child, ast.FunctionDef):
                 functions.append(self.visit_FunctionDef(child))
             elif isinstance(child, ast.AsyncFunctionDef):
-                raise self._unsupported("async functions", child)
+                functions.append(self.visit_AsyncFunctionDef(child))
             elif isinstance(child, ast.ClassDef):
                 classes.append(self.visit_ClassDef(child))
             else:
@@ -260,10 +262,54 @@ class PythonASTVisitor(ast.NodeVisitor):
             line=node.lineno,
         )
 
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> IRFunction:
+        """Visit an async function definition."""
+        self._push_scope()
+
+        # Parse parameters with type annotations
+        params = self._parse_parameters(node.args, node)
+
+        # Parse return type
+        return_type: IRType | None = None
+        if node.returns:
+            return_type = self.type_parser.parse(node.returns, f"{node.name} return")
+
+        # Parse body
+        body: list[IRStatement] = []
+        docstring: str | None = None
+
+        for i, stmt in enumerate(node.body):
+            # Check for docstring
+            if i == 0 and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                if isinstance(stmt.value.value, str):
+                    docstring = stmt.value.value
+                    continue
+
+            ir_stmt = self._visit_statement(stmt)
+            if ir_stmt:
+                body.append(ir_stmt)
+
+        # Analyze mutability - mark variables that are reassigned as mutable
+        self._analyze_mutability(body)
+
+        self._pop_scope()
+
+        return IRFunction(
+            name=node.name,
+            params=params,
+            return_type=return_type,
+            body=body,
+            is_async=True,  # Mark as async
+            docstring=docstring,
+            line=node.lineno,
+        )
+
     def _analyze_mutability(self, body: list[IRStatement]) -> None:
         """Analyze statements to detect mutable variables and mark their declarations."""
         # First pass: find all variable assignments
         declarations: dict[str, IRAssign] = {}  # name -> declaration statement
+        tuple_declarations: dict[str, IRTupleUnpack] = {}  # name -> tuple unpack statement
+        tuple_target_index: dict[str, int] = {}  # name -> index in tuple
         reassigned: set[str] = set()  # names that are reassigned or mutated
 
         # Methods that mutate their receiver
@@ -282,6 +328,10 @@ class PythonASTVisitor(ast.NodeVisitor):
             "update",
             "add",
             "discard",
+            # Async channel methods that require &mut self
+            "recv",
+            "recv_many",
+            "try_recv",
         }
 
         def scan_statements(stmts: list[IRStatement]) -> None:
@@ -292,6 +342,14 @@ class PythonASTVisitor(ast.NodeVisitor):
                     else:
                         # This is a reassignment
                         reassigned.add(stmt.target)
+                    # Also check for mutating calls in the assignment value
+                    if stmt.value:
+                        self._check_mutating_call(stmt.value, reassigned, mutating_methods)
+                elif isinstance(stmt, IRTupleUnpack):
+                    # Track tuple unpacking declarations
+                    for i, target in enumerate(stmt.targets):
+                        tuple_declarations[target] = stmt
+                        tuple_target_index[target] = i
 
                 # Check for method calls that mutate their receiver
                 if isinstance(stmt, IRExprStmt):
@@ -319,6 +377,14 @@ class PythonASTVisitor(ast.NodeVisitor):
         for name in reassigned:
             if name in declarations:
                 declarations[name].is_mutable = True
+            elif name in tuple_declarations:
+                # Mark the specific target in tuple unpacking as mutable
+                stmt = tuple_declarations[name]
+                idx = tuple_target_index[name]
+                # Initialize is_mutable list if needed
+                while len(stmt.is_mutable) < len(stmt.targets):
+                    stmt.is_mutable.append(False)
+                stmt.is_mutable[idx] = True
 
     def _check_mutating_call(self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]) -> None:
         """Check if expression contains a mutating method call and mark the target as reassigned."""
@@ -331,6 +397,10 @@ class PythonASTVisitor(ast.NodeVisitor):
             # Check args for nested method calls
             for arg in expr.args:
                 self._check_mutating_call(arg, reassigned, mutating_methods)
+        elif isinstance(expr, IRAwait):
+            # Check the awaited expression (e.g., await rx.recv())
+            if expr.value:
+                self._check_mutating_call(expr.value, reassigned, mutating_methods)
 
     def _parse_parameters(self, args: ast.arguments, func_node: ast.FunctionDef) -> list[IRParameter]:
         """Parse function parameters with their type annotations."""
@@ -652,6 +722,29 @@ class PythonASTVisitor(ast.NodeVisitor):
                 line=node.lineno,
             )
 
+        # Handle tuple unpacking (e.g., tx, rx = channel())
+        if isinstance(target, ast.Tuple):
+            targets: list[str] = []
+            for elt in target.elts:
+                if not isinstance(elt, ast.Name):
+                    raise self._unsupported("complex tuple unpacking targets", node)
+                targets.append(elt.id)
+                # Define each variable in scope
+                if self.current_scope.lookup(elt.id) is None:
+                    self.current_scope.define(
+                        SymbolInfo(
+                            name=elt.id,
+                            is_mutable=False,
+                            line=node.lineno,
+                        )
+                    )
+            return IRTupleUnpack(
+                targets=targets,
+                value=value,
+                is_declaration=True,
+                line=node.lineno,
+            )
+
         if not isinstance(target, ast.Name):
             raise self._unsupported("complex assignment targets", node)
 
@@ -767,7 +860,12 @@ class PythonASTVisitor(ast.NodeVisitor):
     def _visit_if(self, node: ast.If) -> IRIf:
         """Visit an if statement."""
         condition = self._visit_expression(node.test)
-        then_body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        then_body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                then_body.append(ir_stmt)
 
         elif_clauses: list[tuple[IRExpression, list[IRStatement]]] = []
         else_body: list[IRStatement] = []
@@ -779,29 +877,42 @@ class PythonASTVisitor(ast.NodeVisitor):
                 # This is an elif
                 elif_node = current_else[0]
                 elif_cond = self._visit_expression(elif_node.test)
-                elif_body = [self._visit_statement(s) for s in elif_node.body if self._visit_statement(s)]
-                elif_clauses.append((elif_cond, [s for s in elif_body if s]))
+                # Visit each statement only once
+                elif_body = []
+                for s in elif_node.body:
+                    ir_stmt = self._visit_statement(s)
+                    if ir_stmt:
+                        elif_body.append(ir_stmt)
+                elif_clauses.append((elif_cond, elif_body))
                 current_else = elif_node.orelse
             else:
-                # This is the final else
-                else_body = [self._visit_statement(s) for s in current_else if self._visit_statement(s)]
+                # This is the final else - visit each statement only once
+                for s in current_else:
+                    ir_stmt = self._visit_statement(s)
+                    if ir_stmt:
+                        else_body.append(ir_stmt)
                 break
 
         return IRIf(
             condition=condition,
-            then_body=[s for s in then_body if s],
+            then_body=then_body,
             elif_clauses=elif_clauses,
-            else_body=[s for s in else_body if s],
+            else_body=else_body,
             line=node.lineno,
         )
 
     def _visit_while(self, node: ast.While) -> IRWhile:
         """Visit a while loop."""
         condition = self._visit_expression(node.test)
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
         return IRWhile(
             condition=condition,
-            body=[s for s in body if s],
+            body=body,
             line=node.lineno,
         )
 
@@ -812,12 +923,17 @@ class PythonASTVisitor(ast.NodeVisitor):
 
         target = node.target.id
         iter_expr = self._visit_expression(node.iter)
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
 
         return IRFor(
             target=target,
             iter=iter_expr,
-            body=[s for s in body if s],
+            body=body,
             line=node.lineno,
         )
 
@@ -835,18 +951,28 @@ class PythonASTVisitor(ast.NodeVisitor):
                 raise self._unsupported("complex with target", node)
             target = item.optional_vars.id
 
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
 
         return IRWith(
             context=context,
             target=target,
-            body=[s for s in body if s],
+            body=body,
             line=node.lineno,
         )
 
     def _visit_try(self, node: ast.Try) -> IRTry:
         """Visit a try statement."""
-        body = [self._visit_statement(s) for s in node.body if self._visit_statement(s)]
+        # Visit each statement only once to avoid double-definition in scope tracking
+        body = []
+        for s in node.body:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                body.append(ir_stmt)
 
         handlers: list[IRExceptHandler] = []
         for handler in node.handlers:
@@ -857,21 +983,31 @@ class PythonASTVisitor(ast.NodeVisitor):
                 elif isinstance(handler.type, ast.Attribute):
                     exc_type = handler.type.attr
 
-            handler_body = [self._visit_statement(s) for s in handler.body if self._visit_statement(s)]
+            # Visit each statement only once
+            handler_body = []
+            for s in handler.body:
+                ir_stmt = self._visit_statement(s)
+                if ir_stmt:
+                    handler_body.append(ir_stmt)
             handlers.append(
                 IRExceptHandler(
                     exc_type=exc_type,
                     name=handler.name,
-                    body=[s for s in handler_body if s],
+                    body=handler_body,
                 )
             )
 
-        finally_body = [self._visit_statement(s) for s in node.finalbody if self._visit_statement(s)]
+        # Visit each statement only once
+        finally_body = []
+        for s in node.finalbody:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                finally_body.append(ir_stmt)
 
         return IRTry(
-            body=[s for s in body if s],
+            body=body,
             handlers=handlers,
-            finally_body=[s for s in finally_body if s],
+            finally_body=finally_body,
             line=node.lineno,
         )
 
@@ -981,6 +1117,13 @@ class PythonASTVisitor(ast.NodeVisitor):
         elif isinstance(node, ast.FormattedValue):
             # Part of an f-string - just visit the value
             return self._visit_expression(node.value)
+
+        elif isinstance(node, ast.Await):
+            # Await expression for async code
+            return IRAwait(
+                value=self._visit_expression(node.value),
+                line=line,
+            )
 
         else:
             raise self._unsupported(f"expression type {type(node).__name__}", node)
