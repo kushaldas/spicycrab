@@ -151,6 +151,9 @@ class TypeResolver:
                 # For other stub types, resolve all type args
                 generics = [self.resolve(t) for t in ir_type.type_args]
                 return RustType(name=stub_rust_type, generics=generics)
+            # Fallback: use crate_name::type_name for stub types without explicit mapping
+            generics = [self.resolve(t) for t in ir_type.type_args]
+            return RustType(name=f"{crate_name}::{name}", generics=generics)
 
         # Standard generics
         rust_name = GENERIC_MAP.get(name, name)
@@ -229,6 +232,9 @@ class TypeResolver:
             stub_rust_type = get_stub_type_mapping(name, crate_name)
             if stub_rust_type:
                 return RustType(name=stub_rust_type)
+            # Fallback: use crate_name::type_name for stub types without explicit mapping
+            # This handles re-exported types like reqwest::StatusCode
+            return RustType(name=f"{crate_name}::{name}")
 
         # Check custom types
         if name in self.custom_types:

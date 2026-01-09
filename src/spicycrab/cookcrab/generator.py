@@ -101,6 +101,144 @@ RUST_TO_PYTHON_TYPES: dict[str, str] = {
     "()": "None",
 }
 
+def returns_result(return_type: str | None) -> bool:
+    """Check if a return type is a Result type.
+
+    Detects:
+    - Result<T, E>
+    - crate::Result<T>
+    - std::result::Result<T, E>
+    - Custom Result type aliases (e.g., reqwest::Result)
+    """
+    if not return_type:
+        return False
+    # Remove leading/trailing whitespace
+    rt = return_type.strip()
+    # Check for Result pattern
+    if rt.startswith("Result<") or rt.startswith("Result "):
+        return True
+    # Check for qualified Result (e.g., std::result::Result, crate::Result)
+    if "::Result<" in rt or "::Result " in rt:
+        return True
+    # Check for just "Result" at the end of a path (e.g., crate::Result)
+    if rt.endswith("::Result") or rt == "Result":
+        return True
+    return False
+
+
+def extract_return_type_name(return_type: str | None, self_type: str) -> str | None:
+    """Extract the simple type name from a Rust return type.
+
+    Used for method chaining - when a method returns RequestBuilder,
+    we need to know that so subsequent method calls can be looked up
+    on RequestBuilder rather than the original receiver type.
+
+    Args:
+        return_type: The Rust return type string (e.g., "RequestBuilder", "Result<Response, Error>")
+        self_type: The type name that "Self" should resolve to
+
+    Returns:
+        The type name (e.g., "RequestBuilder", "Response") or None if not determinable
+    """
+    if not return_type:
+        return None
+
+    rt = return_type.strip()
+
+    # Handle Self -> return the struct name
+    if rt == "Self":
+        return self_type
+
+    # Handle &Self or &mut Self
+    if rt in ("&Self", "&mut Self"):
+        return self_type
+
+    # Handle references (&T, &mut T)
+    if rt.startswith("&"):
+        rt = rt[1:].strip()
+        if rt.startswith("mut "):
+            rt = rt[4:].strip()
+
+    # Handle Result<T, E> -> extract T
+    if rt.startswith("Result<") or "::Result<" in rt:
+        # Find the content inside Result<...>
+        start = rt.find("<")
+        if start != -1:
+            depth = 0
+            end = start
+            for i, c in enumerate(rt[start:], start):
+                if c == "<":
+                    depth += 1
+                elif c == ">":
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            inner = rt[start + 1 : end]
+            # Get the Ok type (before the first comma at depth 0)
+            depth = 0
+            for i, c in enumerate(inner):
+                if c == "<":
+                    depth += 1
+                elif c == ">":
+                    depth -= 1
+                elif c == "," and depth == 0:
+                    inner = inner[:i].strip()
+                    break
+            rt = inner
+
+    # Handle Option<T> -> extract T
+    if rt.startswith("Option<") or "::Option<" in rt:
+        start = rt.find("<")
+        if start != -1:
+            end = rt.rfind(">")
+            if end != -1:
+                rt = rt[start + 1 : end].strip()
+
+    # Handle Box<T> -> extract T
+    if rt.startswith("Box<") or "::Box<" in rt:
+        start = rt.find("<")
+        if start != -1:
+            end = rt.rfind(">")
+            if end != -1:
+                rt = rt[start + 1 : end].strip()
+
+    # Strip path prefix (e.g., crate::module::Type -> Type)
+    if "::" in rt:
+        # Find last :: that's outside angle brackets
+        depth = 0
+        last_sep = -1
+        for i, c in enumerate(rt):
+            if c == "<":
+                depth += 1
+            elif c == ">":
+                depth -= 1
+            elif rt[i : i + 2] == "::" and depth == 0:
+                last_sep = i
+        if last_sep >= 0:
+            rt = rt[last_sep + 2 :]
+
+    # Skip impl Trait types - too complex to infer
+    if rt.startswith("impl "):
+        return None
+
+    # Skip primitive types - no need to track these
+    primitive_types = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char", "str", "String", "()", "usize", "isize"}
+    if rt in primitive_types:
+        return None
+
+    # Skip if result is empty or just punctuation
+    if not rt or rt in ("()", "(,)", ""):
+        return None
+
+    # Final validation - should be a valid identifier
+    base_name = rt.split("<")[0].strip()  # Handle generics like Vec<T>
+    if not base_name or not base_name[0].isalpha():
+        return None
+
+    return base_name
+
+
 # Special function path overrides for crates that re-export functions at different paths
 # Format: (crate_name, function_name) -> (rust_path, rust_imports)
 FUNCTION_PATH_OVERRIDES: dict[tuple[str, str], tuple[str, list[str]]] = {
@@ -1251,7 +1389,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 lines.append(f"rust_imports = [{imports_str}]")
             else:
                 lines.append("rust_imports = []")
-            lines.append("needs_result = false")
+            # Check if function returns a Result type
+            needs_result_val = "true" if returns_result(func.return_type) else "false"
+            lines.append(f"needs_result = {needs_result_val}")
             if func.is_async:
                 lines.append("is_async = true")
             if param_types:
@@ -1281,6 +1421,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 param_types = [p.rust_type for p in method.params]
                 param_types_str = ", ".join(f'"{t}"' for t in param_types)
 
+                # Check if method returns a Result type
+                needs_result_val = "true" if returns_result(method.return_type) else "false"
+
                 # Special case: Error.msg in anyhow should use anyhow! macro
                 if struct.name == "Error" and method.name == "msg" and crate_name == "anyhow":
                     lines.append("# Error.msg - use anyhow! macro for string messages")
@@ -1288,7 +1431,7 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
                     lines.append(f'rust_code = "{crate_name}::anyhow!({args})"')
                     lines.append("rust_imports = []")
-                    lines.append("needs_result = false")
+                    lines.append(f"needs_result = {needs_result_val}")
                     if param_types:
                         lines.append(f"param_types = [{param_types_str}]")
                     lines.append("")
@@ -1297,7 +1440,7 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
                     lines.append(f'rust_code = "{crate_name}::{struct.name}::{method.name}({args})"')
                     lines.append(f'rust_imports = ["{crate_name}::{struct.name}"]')
-                    lines.append("needs_result = false")
+                    lines.append(f"needs_result = {needs_result_val}")
                     if param_types:
                         lines.append(f"param_types = [{param_types_str}]")
                     lines.append("")
@@ -1334,6 +1477,12 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 needs_cast = method.return_type in {"i8", "i16", "i32", "u8", "u16", "u32"}
                 into_suffix = " as i64" if needs_cast else ""
 
+                # Check if method returns a Result type
+                needs_result_val = "true" if returns_result(method.return_type) else "false"
+
+                # Extract return type for method chaining
+                returns_type = extract_return_type_name(method.return_type, struct.name)
+
                 lines.append("[[mappings.methods]]")
                 lines.append(f'python = "{struct.name}.{py_method_name}"')
                 if args:
@@ -1345,9 +1494,11 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append(f"rust_imports = [{imports_str}]")
                 else:
                     lines.append("rust_imports = []")
-                lines.append("needs_result = false")
+                lines.append(f"needs_result = {needs_result_val}")
                 if returns_self:
                     lines.append("returns_self = true")
+                if returns_type:
+                    lines.append(f'returns = "{returns_type}"')
                 if param_types:
                     lines.append(f"param_types = [{param_types_str}]")
                 lines.append("")

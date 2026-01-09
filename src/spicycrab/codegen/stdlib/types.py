@@ -16,3 +16,4 @@ class StdlibMapping:
     needs_result: bool = False  # Whether it returns Result
     param_types: list[str] | None = None  # Rust types for params (for char/&str handling)
     cargo_deps: list[str] | None = None  # Required cargo dependencies
+    returns: str | None = None  # Return type for method chaining (e.g., "RequestBuilder")

@@ -1,5 +1,6 @@
 """Integration tests that compile and run generated Rust code."""
 
+import os
 import subprocess
 import tempfile
 import shutil
@@ -12,9 +13,26 @@ from spicycrab.analyzer.type_resolver import resolve_types
 from spicycrab.codegen.emitter import RustEmitter
 from spicycrab.codegen.cargo import generate_cargo_toml
 
+# Shared target directory for all tests to reuse compiled dependencies
+# This dramatically speeds up test runs after the first compilation
+_SHARED_TARGET_DIR: Path | None = None
+
+
+def _get_shared_target_dir() -> Path:
+    """Get or create a shared target directory for cargo builds."""
+    global _SHARED_TARGET_DIR
+    if _SHARED_TARGET_DIR is None:
+        # Use a persistent directory in /tmp that survives across test runs
+        _SHARED_TARGET_DIR = Path("/tmp/spicycrab-test-target")
+        _SHARED_TARGET_DIR.mkdir(exist_ok=True)
+    return _SHARED_TARGET_DIR
+
 
 def transpile_and_run(python_code: str, expected_output: str | list[str]) -> None:
     """Transpile Python code to Rust, compile, run, and verify output."""
+    # Get shared target directory to reuse compiled dependencies
+    shared_target = _get_shared_target_dir()
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
 
@@ -44,12 +62,18 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         )
         cargo_toml.write_text(cargo_content)
 
+        # Set up environment with shared target directory
+        # This reuses compiled dependencies across tests, dramatically speeding up runs
+        env = os.environ.copy()
+        env["CARGO_TARGET_DIR"] = str(shared_target)
+
         # Build
         result = subprocess.run(
             ["cargo", "build", "--release"],
             cwd=tmpdir,
             capture_output=True,
             text=True,
+            env=env,
         )
         assert result.returncode == 0, f"Cargo build failed:\n{result.stderr}"
 
@@ -72,6 +96,7 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
             cwd=tmpdir,
             capture_output=True,
             text=True,
+            env=env,
         )
         assert result.returncode == 0, f"Cargo clippy failed:\n{result.stderr}\n\nGenerated code:\n{rust_code}"
 
@@ -81,6 +106,7 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
             cwd=tmpdir,
             capture_output=True,
             text=True,
+            env=env,
         )
         assert result.returncode == 0, f"Cargo run failed:\n{result.stderr}"
 
