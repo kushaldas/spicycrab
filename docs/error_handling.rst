@@ -115,6 +115,71 @@ Chaining fallible calls
        Ok(b)
    }
 
+Using ? with External Crate Stubs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When calling functions from external Rust crates via cookcrab-generated stubs,
+the ``?`` operator is automatically added when **both** conditions are met:
+
+1. Your Python function returns ``Result[T, E]``
+2. The stub mapping has a ``returns`` field indicating it returns ``Result``
+
+**How it works:**
+
+1. **Stub Definition** (``_spicycrab.toml``): The ``returns`` field tells the
+   transpiler that the function is fallible:
+
+   .. code-block:: toml
+
+      [[mappings.functions]]
+      python = "reqwest.blocking.get"
+      rust_code = "reqwest::blocking::get({arg0})"
+      returns = "Result<Response, Error>"
+
+2. **Stub Discovery**: When the emitter encounters a call to ``reqwest.blocking.get``,
+   it looks up the mapping and finds ``returns = "Result<Response, Error>"``.
+
+3. **Emitter Decision**: If the current function returns ``Result`` and the called
+   function returns ``Result``, the ``?`` operator is added automatically.
+
+**Example with reqwest:**
+
+.. code-block:: python
+
+   from spicycrab_reqwest.blocking import get, Response
+   from spicycrab.types import Result, Ok, Err
+
+   def fetch_url(url: str) -> Result[str, str]:
+       # Because fetch_url returns Result AND reqwest.blocking.get returns Result,
+       # the transpiler adds ? automatically
+       response: Response = get(url)
+       text: str = response.text()
+       return Ok(text)
+
+.. code-block:: rust
+
+   use reqwest;
+
+   pub fn fetch_url(url: String) -> Result<String, String> {
+       let response: reqwest::blocking::Response = reqwest::blocking::get(url)?;
+       let text: String = response.text()?;
+       Ok(text)
+   }
+
+**Important**: If your function does NOT return ``Result``, the ``?`` operator
+won't be added (Rust wouldn't allow it). In that case, you must explicitly
+handle the error using ``Result.unwrap()`` or a try/except block:
+
+.. code-block:: python
+
+   from spicycrab_reqwest.blocking import get, Response
+   from spicycrab.types import Result
+
+   def fetch_url_unsafe(url: str) -> str:
+       # No Result return type, so must explicitly unwrap
+       response: Response = Result.unwrap(get(url))
+       return Result.unwrap(response.text())
+
 raise → return Err
 ------------------
 
