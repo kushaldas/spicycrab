@@ -59,6 +59,10 @@ GENERIC_TYPES: set[str] = {
     "Callable",
     "FrozenSet",
     "frozenset",
+    # Smart pointers from spicycrab.types
+    "Box",  # Box[T] -> Box<T>
+    "Arc",  # Arc[T] -> Arc<T>
+    "Rc",  # Rc[T] -> Rc<T>
 }
 
 

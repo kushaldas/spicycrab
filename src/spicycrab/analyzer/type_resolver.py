@@ -98,6 +98,10 @@ GENERIC_MAP: dict[str, str] = {
     "frozenset": "HashSet",
     "Iterable": "Vec",  # Simplified
     "Iterator": "Vec",  # Simplified
+    # Smart pointers from spicycrab.types
+    "Box": "Box",  # Box[T] -> Box<T>
+    "Arc": "std::sync::Arc",  # Arc[T] -> Arc<T>
+    "Rc": "std::rc::Rc",  # Rc[T] -> Rc<T>
 }
 
 

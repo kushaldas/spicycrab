@@ -2096,6 +2096,14 @@ class RustEmitter:
                     if len(args) >= 2:
                         return f"{args[0]}.{method}({args[1]})"
 
+            # Handle Box static method calls
+            # Box.new(x) -> Box::new(x), Box.into_inner(x) -> *x
+            if type_name == "Box" and args:
+                if method == "new":
+                    return f"Box::new({args[0]})"
+                if method == "into_inner":
+                    return f"*{args[0]}"
+
         obj = self.emit_expression(expr.obj)
 
         # Handle .clone() -> .to_string() when target type is String

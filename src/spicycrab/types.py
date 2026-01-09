@@ -233,6 +233,42 @@ class Some(Generic[T]):
 
 
 # =============================================================================
+# Box Type (Heap Allocation)
+# =============================================================================
+
+
+class Box(Generic[T]):
+    """Rust Box<T> type for heap allocation.
+
+    Box is a smart pointer that allocates data on the heap. Use it for:
+    - Recursive data structures (linked lists, trees)
+    - Large data that shouldn't be on the stack
+    - Transferring ownership of data
+
+    Example:
+        from spicycrab.types import Box
+
+        # Allocate an integer on the heap
+        boxed: Box[int] = Box.new(42)
+
+        # For recursive structures
+        class Node:
+            value: int
+            next: Box[Node] | None
+    """
+
+    @staticmethod
+    def new(value: T) -> "Box[T]":
+        """Create a new Box containing the value. Transpiles to: Box::new(value)"""
+        ...
+
+    @staticmethod
+    def into_inner(boxed: "Box[T]") -> T:
+        """Extract the value from the Box. Transpiles to: *boxed"""
+        ...
+
+
+# =============================================================================
 # All exported types
 # =============================================================================
 
@@ -260,4 +296,6 @@ __all__ = [
     # Option type
     "Option",
     "Some",
+    # Smart pointers
+    "Box",
 ]

@@ -85,6 +85,7 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
         # - vec_init_then_push: would require detecting push after vec![] creation
         # - unnecessary_to_owned: emitter converts literals to String, then borrows
         # - format_in_format_args: f-string transpilation creates format! inside println!
+        # - boxed_local: Box types are intentional when user specifies them
         result = subprocess.run(
             ["cargo", "clippy", "--", "-D", "warnings",
              "-A", "unused_variables",
@@ -92,7 +93,8 @@ def transpile_and_run(python_code: str, expected_output: str | list[str]) -> Non
              "-A", "unused_imports",
              "-A", "clippy::vec_init_then_push",
              "-A", "clippy::unnecessary_to_owned",
-             "-A", "clippy::format_in_format_args"],
+             "-A", "clippy::format_in_format_args",
+             "-A", "clippy::boxed_local"],
             cwd=tmpdir,
             capture_output=True,
             text=True,
@@ -1447,3 +1449,71 @@ def main() -> None:
     print(dist)
 '''
         transpile_and_run(code, "25")
+
+
+class TestBoxType:
+    """Integration tests for Box smart pointer type."""
+
+    def test_box_new_basic(self, check_cargo):
+        """Test Box.new() with basic types."""
+        code = '''
+from spicycrab.types import Box
+
+def create_boxed(value: int) -> Box[int]:
+    return Box.new(value)
+
+def main() -> None:
+    boxed: Box[int] = create_boxed(42)
+    print("created")
+'''
+        transpile_and_run(code, "created")
+
+    def test_box_into_inner(self, check_cargo):
+        """Test Box.into_inner() to extract value."""
+        code = '''
+from spicycrab.types import Box
+
+def create_boxed(value: int) -> Box[int]:
+    return Box.new(value)
+
+def extract(boxed: Box[int]) -> int:
+    return Box.into_inner(boxed)
+
+def main() -> None:
+    boxed: Box[int] = create_boxed(42)
+    value: int = extract(boxed)
+    print(value)
+'''
+        transpile_and_run(code, "42")
+
+    def test_box_with_string(self, check_cargo):
+        """Test Box with String type."""
+        code = '''
+from spicycrab.types import Box
+
+def box_string(s: str) -> Box[str]:
+    return Box.new(s)
+
+def main() -> None:
+    boxed: Box[str] = box_string("hello")
+    print("boxed string")
+'''
+        transpile_and_run(code, "boxed string")
+
+    def test_box_arithmetic(self, check_cargo):
+        """Test arithmetic with boxed values."""
+        code = '''
+from spicycrab.types import Box
+
+def add_boxed(a: Box[int], b: Box[int]) -> int:
+    val_a: int = Box.into_inner(a)
+    val_b: int = Box.into_inner(b)
+    return val_a + val_b
+
+def main() -> None:
+    a: Box[int] = Box.new(10)
+    b: Box[int] = Box.new(32)
+    result: int = add_boxed(a, b)
+    print(result)
+'''
+        transpile_and_run(code, "42")

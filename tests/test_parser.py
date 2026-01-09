@@ -349,3 +349,82 @@ def process(count: u32, values: list[f64]) -> int:
         assert func.params[1].type.name == "list"
         # return type is Python int -> will resolve to i64
         assert func.return_type.kind == PrimitiveType.INT
+
+
+class TestBoxType:
+    """Test parsing of Box smart pointer type."""
+
+    def test_parse_box_basic(self) -> None:
+        """Test parsing Box[T] type annotations."""
+        source = """
+from spicycrab.types import Box
+
+def create_boxed(value: int) -> Box[int]:
+    pass
+
+def extract(boxed: Box[int]) -> int:
+    pass
+"""
+        module = parse_source(source)
+        assert len(module.functions) == 2
+
+        # Check create_boxed return type
+        func1 = module.functions[0]
+        assert func1.name == "create_boxed"
+        assert isinstance(func1.return_type, IRGenericType)
+        assert func1.return_type.name == "Box"
+        assert len(func1.return_type.type_args) == 1
+
+        # Check extract parameter type
+        func2 = module.functions[1]
+        assert func2.params[0].type.name == "Box"
+
+    def test_parse_box_with_struct(self) -> None:
+        """Test parsing Box with struct types."""
+        source = """
+from spicycrab.types import Box
+
+class Node:
+    value: int
+    next: Box[Node] | None
+"""
+        module = parse_source(source)
+        assert len(module.classes) == 1
+        cls = module.classes[0]
+        assert cls.name == "Node"
+
+    def test_parse_nested_box(self) -> None:
+        """Test parsing nested Box types like Box[Box[int]]."""
+        source = """
+from spicycrab.types import Box
+
+def nested(value: Box[Box[int]]) -> Box[Box[int]]:
+    return value
+"""
+        module = parse_source(source)
+        func = module.functions[0]
+        # Check parameter type
+        param_type = func.params[0].type
+        assert isinstance(param_type, IRGenericType)
+        assert param_type.name == "Box"
+        inner_type = param_type.type_args[0]
+        assert isinstance(inner_type, IRGenericType)
+        assert inner_type.name == "Box"
+
+    def test_parse_box_with_other_generics(self) -> None:
+        """Test parsing Box combined with other generic types."""
+        source = """
+from spicycrab.types import Box
+
+def boxed_list(items: Box[list[int]]) -> Box[list[int]]:
+    return items
+"""
+        module = parse_source(source)
+        func = module.functions[0]
+        param_type = func.params[0].type
+        assert isinstance(param_type, IRGenericType)
+        assert param_type.name == "Box"
+        # Inner should be list[int]
+        inner = param_type.type_args[0]
+        assert isinstance(inner, IRGenericType)
+        assert inner.name == "list"

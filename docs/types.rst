@@ -326,6 +326,87 @@ For error handling, use ``Result[T, E]``:
 
 See :doc:`error_handling` for more details.
 
+Smart Pointers
+--------------
+
+Box (Heap Allocation)
+^^^^^^^^^^^^^^^^^^^^^
+
+``Box<T>`` is Rust's smart pointer for heap allocation. Use it for:
+
+- Recursive data structures (linked lists, trees)
+- Large data that shouldn't be on the stack
+- Transferring ownership of data
+
+.. code-block:: python
+
+   from spicycrab.types import Box
+
+   def create_boxed(value: int) -> Box[int]:
+       return Box.new(value)
+
+   def extract_value(boxed: Box[int]) -> int:
+       return Box.into_inner(boxed)
+
+   def main() -> None:
+       boxed: Box[int] = create_boxed(42)
+       value: int = extract_value(boxed)
+       print(value)
+
+.. code-block:: rust
+
+   pub fn create_boxed(value: i64) -> Box<i64> {
+       Box::new(value)
+   }
+
+   pub fn extract_value(boxed: Box<i64>) -> i64 {
+       *boxed
+   }
+
+   pub fn main() {
+       let boxed: Box<i64> = create_boxed(42);
+       let value: i64 = extract_value(boxed);
+       println!("{}", value);
+   }
+
+Box with complex types
+""""""""""""""""""""""
+
+.. code-block:: python
+
+   from spicycrab.types import Box
+
+   class Node:
+       value: int
+       next: Box[Node] | None
+
+       def __init__(self, value: int) -> None:
+           self.value = value
+           self.next = None
+
+.. code-block:: rust
+
+   pub struct Node {
+       pub value: i64,
+       pub next: Option<Box<Node>>,
+   }
+
+   impl Node {
+       pub fn new(value: i64) -> Self {
+           Self { value, next: None }
+       }
+   }
+
++-------------------+---------------------+
+| Python            | Rust                |
++===================+=====================+
+| ``Box[T]``        | ``Box<T>``          |
++-------------------+---------------------+
+| ``Box.new(x)``    | ``Box::new(x)``     |
++-------------------+---------------------+
+| ``Box.into_inner``| ``*boxed``          |
++-------------------+---------------------+
+
 Path Types
 ----------
 
@@ -457,4 +538,16 @@ Type Mapping Reference
 | ``f32``           | ``f32``             |
 +-------------------+---------------------+
 | ``f64``           | ``f64``             |
++-------------------+---------------------+
+
+**Smart Pointers (from spicycrab.types):**
+
++-------------------+---------------------+
+| Python            | Rust                |
++===================+=====================+
+| ``Box[T]``        | ``Box<T>``          |
++-------------------+---------------------+
+| ``Arc[T]``        | ``Arc<T>``          |
++-------------------+---------------------+
+| ``Rc[T]``         | ``Rc<T>``           |
 +-------------------+---------------------+
