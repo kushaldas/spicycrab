@@ -234,8 +234,7 @@ class RustEmitter:
         # Filter out `if __name__ == "__main__"` patterns as they don't apply in Rust
         # Filter out `asyncio.run(main())` as #[tokio::main] handles this
         filtered_statements = [
-            stmt for stmt in module.statements
-            if not self._is_name_main_check(stmt) and not self._is_asyncio_run(stmt)
+            stmt for stmt in module.statements if not self._is_name_main_check(stmt) and not self._is_asyncio_run(stmt)
         ]
         if filtered_statements:
             body_lines.append("fn main() {")
@@ -360,7 +359,8 @@ class RustEmitter:
         known_traits = {"Datelike", "Timelike", "SubsecRound", "DurationRound"}
         for crate_name in stub_crates:
             imports = {
-                imp for imp in imports
+                imp
+                for imp in imports
                 if not imp.startswith(f"use {crate_name}::")
                 or any(imp.endswith(f"::{trait};") for trait in known_traits)
             }

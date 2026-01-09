@@ -449,6 +449,243 @@ Output:
    Received: Message 2 from producer 2
    All messages received!
 
+Shared State with Arc
+---------------------
+
+When multiple async tasks need to share data, use ``Arc`` (Atomically Reference
+Counted pointer). Arc allows multiple tasks to safely share ownership of data.
+
+Arc basics
+^^^^^^^^^^
+
+Import Arc from spicycrab_tokio:
+
+.. code-block:: python
+
+   from spicycrab_tokio import Arc
+
+Create shared data with ``Arc.new()``:
+
+.. code-block:: python
+
+   # Create shared config wrapped in Arc
+   config: Arc[str] = Arc.new("shared configuration data")
+
+Clone Arc for each task (increments reference count):
+
+.. code-block:: python
+
+   config1: Arc[str] = Arc.clone(config)
+   config2: Arc[str] = Arc.clone(config)
+
+Check reference count:
+
+.. code-block:: python
+
+   count: int = Arc.strong_count(config)
+
+Sharing data between tasks
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A common pattern is to clone Arc for each spawned task:
+
+.. code-block:: python
+
+   from spicycrab_tokio import spawn, sleep, Duration, Arc
+   from spicycrab.types import Result
+
+   async def print_config(config: Arc[str], task_id: int) -> None:
+       """A worker task that reads shared config data."""
+       print(f"Task {task_id}: Starting with config")
+       await sleep(Duration.from_millis(50))
+       count: int = Arc.strong_count(config)
+       print(f"Task {task_id}: Done. Strong count = {count}")
+
+   async def main() -> None:
+       """Main function demonstrating Arc usage."""
+       config: Arc[str] = Arc.new("shared configuration data")
+       print(f"Initial strong count: {Arc.strong_count(config)}")
+
+       # Clone for each task
+       config1: Arc[str] = Arc.clone(config)
+       config2: Arc[str] = Arc.clone(config)
+       config3: Arc[str] = Arc.clone(config)
+
+       print(f"After cloning: strong count = {Arc.strong_count(config)}")
+
+       # Spawn tasks that share the config
+       handle1 = spawn(print_config(config1, 1))
+       handle2 = spawn(print_config(config2, 2))
+       handle3 = spawn(print_config(config3, 3))
+
+       # Wait for all tasks to complete
+       Result.unwrap(await handle1)
+       Result.unwrap(await handle2)
+       Result.unwrap(await handle3)
+
+       print(f"After tasks complete: strong count = {Arc.strong_count(config)}")
+       print("All tasks completed!")
+
+.. code-block:: rust
+
+   /// A worker task that reads shared config data.
+   pub async fn print_config(config: std::sync::Arc<String>, task_id: i64) {
+       println!("{}", format!("Task {}: Starting with config", task_id));
+       tokio::time::sleep(std::time::Duration::from_millis(50 as u64)).await;
+       let count: i64 = std::sync::Arc::strong_count(&config) as i64;
+       println!("{}", format!("Task {}: Done. Strong count = {}", task_id, count));
+   }
+
+   #[tokio::main]
+   /// Main function demonstrating Arc usage.
+   pub async fn main() {
+       let config: std::sync::Arc<String> =
+           std::sync::Arc::new("shared configuration data".to_string());
+       println!("{}", format!("Initial strong count: {}",
+           std::sync::Arc::strong_count(&config) as i64));
+       let config1: std::sync::Arc<String> = std::sync::Arc::clone(&config);
+       let config2: std::sync::Arc<String> = std::sync::Arc::clone(&config);
+       let config3: std::sync::Arc<String> = std::sync::Arc::clone(&config);
+       println!("{}", format!("After cloning: strong count = {}",
+           std::sync::Arc::strong_count(&config) as i64));
+       let handle1 = tokio::spawn(print_config(config1, 1));
+       let handle2 = tokio::spawn(print_config(config2, 2));
+       let handle3 = tokio::spawn(print_config(config3, 3));
+       handle1.await.unwrap();
+       handle2.await.unwrap();
+       handle3.await.unwrap();
+       println!("{}", format!("After tasks complete: strong count = {}",
+           std::sync::Arc::strong_count(&config) as i64));
+       println!("All tasks completed!");
+   }
+
+Output:
+
+.. code-block:: text
+
+   Initial strong count: 1
+   After cloning: strong count = 4
+   Task 1: Starting with config
+   Task 2: Starting with config
+   Task 3: Starting with config
+   Task 3: Done. Strong count = 4
+   Task 1: Done. Strong count = 3
+   Task 2: Done. Strong count = 2
+   After tasks complete: strong count = 1
+   All tasks completed!
+
+Arc with Mutex for shared mutable state
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For shared *mutable* state, combine Arc with Mutex. The tokio stubs provide
+``Mutex`` for async-aware mutual exclusion:
+
+.. code-block:: python
+
+   from spicycrab_tokio import spawn, sleep, Duration, Arc, Mutex
+   from spicycrab.types import Result
+
+   async def increment_counter(counter: Arc[Mutex[int]], task_id: int, times: int) -> None:
+       """Increment the shared counter multiple times."""
+       for i in range(times):
+           # Lock the mutex to get exclusive access
+           # In Rust: let mut guard = counter.lock().await;
+           # Then: *guard += 1;
+           print(f"Task {task_id}: incrementing (iteration {i + 1})")
+           await sleep(Duration.from_millis(10))
+
+   async def main() -> None:
+       """Main function demonstrating Arc<Mutex<T>> usage."""
+       # Create a shared counter protected by a mutex, wrapped in Arc
+       counter: Arc[Mutex[int]] = Arc.new(Mutex.new(0))
+
+       print("Starting concurrent counter increments...")
+       print(f"Initial strong count: {Arc.strong_count(counter)}")
+
+       # Clone the Arc for each task
+       counter1: Arc[Mutex[int]] = Arc.clone(counter)
+       counter2: Arc[Mutex[int]] = Arc.clone(counter)
+       counter3: Arc[Mutex[int]] = Arc.clone(counter)
+
+       print(f"After cloning: strong count = {Arc.strong_count(counter)}")
+
+       # Spawn tasks that all increment the same counter
+       handle1 = spawn(increment_counter(counter1, 1, 3))
+       handle2 = spawn(increment_counter(counter2, 2, 3))
+       handle3 = spawn(increment_counter(counter3, 3, 3))
+
+       # Wait for all tasks to complete
+       Result.unwrap(await handle1)
+       Result.unwrap(await handle2)
+       Result.unwrap(await handle3)
+
+       print(f"After tasks complete: strong count = {Arc.strong_count(counter)}")
+       print("All increments completed!")
+
+.. code-block:: rust
+
+   /// Increment the shared counter multiple times.
+   pub async fn increment_counter(
+       counter: std::sync::Arc<tokio::sync::Mutex<i64>>,
+       task_id: i64,
+       times: i64
+   ) {
+       for i in 0..times {
+           println!("{}", format!("Task {}: incrementing (iteration {})",
+               task_id, i + 1));
+           tokio::time::sleep(std::time::Duration::from_millis(10 as u64)).await;
+       }
+   }
+
+   #[tokio::main]
+   /// Main function demonstrating Arc<Mutex<T>> usage.
+   pub async fn main() {
+       let counter: std::sync::Arc<tokio::sync::Mutex<i64>> =
+           std::sync::Arc::new(tokio::sync::Mutex::new(0));
+       println!("Starting concurrent counter increments...");
+       println!("{}", format!("Initial strong count: {}",
+           std::sync::Arc::strong_count(&counter) as i64));
+       let counter1 = std::sync::Arc::clone(&counter);
+       let counter2 = std::sync::Arc::clone(&counter);
+       let counter3 = std::sync::Arc::clone(&counter);
+       println!("{}", format!("After cloning: strong count = {}",
+           std::sync::Arc::strong_count(&counter) as i64));
+       let handle1 = tokio::spawn(increment_counter(counter1, 1, 3));
+       let handle2 = tokio::spawn(increment_counter(counter2, 2, 3));
+       let handle3 = tokio::spawn(increment_counter(counter3, 3, 3));
+       handle1.await.unwrap();
+       handle2.await.unwrap();
+       handle3.await.unwrap();
+       println!("{}", format!("After tasks complete: strong count = {}",
+           std::sync::Arc::strong_count(&counter) as i64));
+       println!("All increments completed!");
+   }
+
+.. note::
+
+   ``tokio::sync::Mutex`` is used (not ``std::sync::Mutex``) because it is
+   async-aware and safe to hold across ``.await`` points.
+
+Arc methods
+^^^^^^^^^^^
+
+The following Arc methods are available:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Python
+     - Rust
+   * - ``Arc.new(value)``
+     - ``std::sync::Arc::new(value)``
+   * - ``Arc.clone(arc)``
+     - ``std::sync::Arc::clone(&arc)``
+   * - ``Arc.strong_count(arc)``
+     - ``std::sync::Arc::strong_count(&arc) as i64``
+   * - ``Arc.weak_count(arc)``
+     - ``std::sync::Arc::weak_count(&arc) as i64``
+
 Async Patterns
 --------------
 

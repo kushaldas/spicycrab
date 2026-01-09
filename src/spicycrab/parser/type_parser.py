@@ -183,8 +183,9 @@ class TypeParser:
         if base_name in GENERIC_TYPES:
             return IRGenericType(name=base_name, type_args=type_args)
 
-        # User-defined generic class
-        return IRClassType(name=base_name)
+        # User-defined generic class or crate type with type args (e.g., Arc[str])
+        # Return as IRGenericType to preserve type arguments
+        return IRGenericType(name=base_name, type_args=type_args)
 
     def _parse_type_args(self, slice_node: ast.expr, name: str | None, line: int | None) -> list[IRType]:
         """Parse type arguments from a subscript slice."""

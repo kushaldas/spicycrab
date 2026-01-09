@@ -236,6 +236,287 @@ class MpscReceiver:
         # Function mappings - none needed, methods are instance methods
         [],
     ),
+    ("tokio", "Arc"): (
+        # Class stub for Arc (thread-safe reference counting)
+        '''
+from typing import TypeVar, Generic
+
+T = TypeVar("T")
+
+
+class Arc(Generic[T]):
+    """Thread-safe reference-counting pointer.
+
+    Arc stands for Atomically Reference Counted. It provides shared ownership
+    of a value of type T, allocated on the heap. Cloning an Arc produces a new
+    Arc that points to the same allocation, increasing the reference count.
+
+    Maps to std::sync::Arc<T> in Rust.
+
+    Common use cases:
+    - Sharing immutable data between spawned tasks
+    - Combined with Mutex for shared mutable state: Arc[Mutex[T]]
+
+    Example:
+        data: Arc[str] = Arc.new("shared config")
+        cloned: Arc[str] = Arc.clone(data)
+
+        # Share between tasks
+        handle1 = spawn(worker(Arc.clone(data)))
+        handle2 = spawn(worker(Arc.clone(data)))
+    """
+
+    @staticmethod
+    def new(value: T) -> "Arc[T]":
+        """Constructs a new Arc<T>.
+
+        Args:
+            value: The value to wrap in an Arc.
+
+        Returns:
+            A new Arc containing the value.
+        """
+        ...
+
+    @staticmethod
+    def clone(arc: "Arc[T]") -> "Arc[T]":
+        """Creates a new Arc that points to the same allocation.
+
+        This increments the strong reference count.
+
+        Args:
+            arc: The Arc to clone.
+
+        Returns:
+            A new Arc pointing to the same data.
+        """
+        ...
+
+    @staticmethod
+    def strong_count(arc: "Arc[T]") -> int:
+        """Gets the number of strong (Arc) pointers to this allocation.
+
+        Args:
+            arc: The Arc to check.
+
+        Returns:
+            The number of strong references.
+        """
+        ...
+
+    @staticmethod
+    def weak_count(arc: "Arc[T]") -> int:
+        """Gets the number of weak (Weak) pointers to this allocation.
+
+        Args:
+            arc: The Arc to check.
+
+        Returns:
+            The number of weak references.
+        """
+        ...
+
+    @staticmethod
+    def try_unwrap(arc: "Arc[T]") -> T | None:
+        """Returns the inner value if the Arc has exactly one strong reference.
+
+        If there are multiple strong references, returns None.
+
+        Args:
+            arc: The Arc to unwrap.
+
+        Returns:
+            The inner value if ref count is 1, otherwise None.
+        """
+        ...
+
+    @staticmethod
+    def into_inner(arc: "Arc[T]") -> T | None:
+        """Returns the inner value if the Arc has exactly one strong reference.
+
+        This is similar to try_unwrap but available on Rust 1.70+.
+
+        Args:
+            arc: The Arc to unwrap.
+
+        Returns:
+            The inner value if ref count is 1, otherwise None.
+        """
+        ...
+''',
+        # Type mapping - generic Arc<T>
+        "std::sync::Arc",
+        # Function mappings for static methods
+        [
+            ("Arc.new", "std::sync::Arc::new({arg0})"),
+            ("Arc.clone", "std::sync::Arc::clone(&{arg0})"),
+            ("Arc.strong_count", "std::sync::Arc::strong_count(&{arg0}) as i64"),
+            ("Arc.weak_count", "std::sync::Arc::weak_count(&{arg0}) as i64"),
+            ("Arc.try_unwrap", "std::sync::Arc::try_unwrap({arg0}).ok()"),
+            ("Arc.into_inner", "std::sync::Arc::into_inner({arg0})"),
+        ],
+    ),
+    ("tokio", "Mutex"): (
+        # Class stub for tokio's async Mutex
+        '''
+class Mutex(Generic[T]):
+    """An asynchronous mutual exclusion primitive.
+
+    This is tokio's async-aware Mutex, suitable for use across .await points.
+    Unlike std::sync::Mutex, holding a tokio::sync::Mutex guard across an
+    await point is safe.
+
+    Maps to tokio::sync::Mutex<T> in Rust.
+
+    Common use case - shared mutable state between tasks:
+        counter: Arc[Mutex[int]] = Arc.new(Mutex.new(0))
+
+        async def increment(c: Arc[Mutex[int]]) -> None:
+            guard = await c.lock()
+            # modify the value through the guard
+
+    Example:
+        mutex: Mutex[int] = Mutex.new(0)
+        guard = await mutex.lock()
+    """
+
+    @staticmethod
+    def new(value: T) -> "Mutex[T]":
+        """Creates a new Mutex wrapping the given value.
+
+        Args:
+            value: The value to protect with the mutex.
+
+        Returns:
+            A new Mutex containing the value.
+        """
+        ...
+
+    async def lock(self) -> "MutexGuard[T]":
+        """Locks this mutex, waiting asynchronously if it's already locked.
+
+        Returns:
+            A guard that releases the lock when dropped.
+        """
+        ...
+
+    def try_lock(self) -> "MutexGuard[T] | None":
+        """Attempts to acquire the lock without waiting.
+
+        Returns:
+            A guard if successful, None if the mutex is already locked.
+        """
+        ...
+
+    def is_locked(self) -> bool:
+        """Returns True if the mutex is currently locked.
+
+        Returns:
+            True if locked, False otherwise.
+        """
+        ...
+
+
+class MutexGuard(Generic[T]):
+    """A guard that releases the mutex when dropped.
+
+    This is returned by Mutex.lock() and provides access to the protected data.
+    The lock is automatically released when the guard goes out of scope.
+    """
+    pass
+''',
+        # Type mapping
+        "tokio::sync::Mutex",
+        # Function mappings
+        [
+            ("Mutex.new", "tokio::sync::Mutex::new({arg0})"),
+        ],
+    ),
+    ("tokio", "RwLock"): (
+        # Class stub for tokio's async RwLock
+        '''
+class RwLock(Generic[T]):
+    """An asynchronous reader-writer lock.
+
+    This type of lock allows multiple readers or a single writer at any point
+    in time. Useful when you have data that is read frequently but written
+    infrequently.
+
+    Maps to tokio::sync::RwLock<T> in Rust.
+
+    Example:
+        data: RwLock[list[str]] = RwLock.new(["initial"])
+
+        # Multiple readers allowed
+        read_guard = await data.read()
+
+        # Single writer, blocks readers
+        write_guard = await data.write()
+    """
+
+    @staticmethod
+    def new(value: T) -> "RwLock[T]":
+        """Creates a new RwLock wrapping the given value.
+
+        Args:
+            value: The value to protect with the lock.
+
+        Returns:
+            A new RwLock containing the value.
+        """
+        ...
+
+    async def read(self) -> "RwLockReadGuard[T]":
+        """Locks this RwLock for reading, waiting if a writer holds the lock.
+
+        Multiple readers can hold the lock simultaneously.
+
+        Returns:
+            A read guard that releases the lock when dropped.
+        """
+        ...
+
+    async def write(self) -> "RwLockWriteGuard[T]":
+        """Locks this RwLock for writing, waiting if any readers or writers hold the lock.
+
+        Returns:
+            A write guard that releases the lock when dropped.
+        """
+        ...
+
+    def try_read(self) -> "RwLockReadGuard[T] | None":
+        """Attempts to acquire the read lock without waiting.
+
+        Returns:
+            A read guard if successful, None if the lock is held by a writer.
+        """
+        ...
+
+    def try_write(self) -> "RwLockWriteGuard[T] | None":
+        """Attempts to acquire the write lock without waiting.
+
+        Returns:
+            A write guard if successful, None if the lock is held.
+        """
+        ...
+
+
+class RwLockReadGuard(Generic[T]):
+    """A guard that releases the read lock when dropped."""
+    pass
+
+
+class RwLockWriteGuard(Generic[T]):
+    """A guard that releases the write lock when dropped."""
+    pass
+''',
+        # Type mapping
+        "tokio::sync::RwLock",
+        # Function mappings
+        [
+            ("RwLock.new", "tokio::sync::RwLock::new({arg0})"),
+        ],
+    ),
 }
 
 
@@ -865,9 +1146,9 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
         if is_result_type_alias(alias):
             all_types.insert(0, alias.name)  # Put Result first
 
-    # Add __all__
+    # Add __all__ - order: functions, manual stubs, std types, crate types
     lines.append("")
-    all_items = all_functions + manual_functions_added + std_types_added + all_types  # Functions, manual stubs, std types, then crate types
+    all_items = all_functions + manual_functions_added + std_types_added + all_types
     all_str = ", ".join(f'"{t}"' for t in all_items)
     lines.append(f"__all__: list[str] = [{all_str}]")
     lines.append("")
@@ -888,6 +1169,11 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         f'{crate_name} = "{version}"',
         "",
     ]
+
+    # Collect type names that are handled by STD_TYPE_STUBS to avoid duplicates
+    std_type_names: set[str] = {
+        type_name for (stub_crate, type_name), _ in STD_TYPE_STUBS.items() if stub_crate == crate_name
+    }
 
     # Generate mappings for Result type aliases (Result.Ok, Result.Err)
     for alias in crate.type_aliases:
@@ -980,7 +1266,10 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         type_methods[impl.type_name].extend(impl.methods)
 
     # Generate function mappings (static methods / constructors)
+    # Skip structs that are handled by STD_TYPE_STUBS to avoid duplicate/conflicting mappings
     for struct in crate.structs:
+        if struct.name in std_type_names:
+            continue
         methods = type_methods.get(struct.name, [])
         for method in methods:
             if method.is_static:
@@ -1017,7 +1306,10 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
     # Get trait method imports for this crate
     crate_trait_methods = TRAIT_METHOD_IMPORTS.get(crate_name, {})
 
+    # Skip structs that are handled by STD_TYPE_STUBS
     for struct in crate.structs:
+        if struct.name in std_type_names:
+            continue
         methods = type_methods.get(struct.name, [])
         for method in methods:
             if not method.is_static:
@@ -1078,14 +1370,18 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append(f'rust = "{rust_type}"')
             lines.append("")
 
-    # Generate type mappings for structs
+    # Generate type mappings for structs (skip those handled by STD_TYPE_STUBS)
     for struct in crate.structs:
+        if struct.name in std_type_names:
+            continue
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{struct.name}"')
         lines.append(f'rust = "{crate_name}::{struct.name}"')
         lines.append("")
 
     for enum in crate.enums:
+        if enum.name in std_type_names:
+            continue
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{enum.name}"')
         lines.append(f'rust = "{crate_name}::{enum.name}"')

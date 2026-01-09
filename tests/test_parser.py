@@ -86,6 +86,47 @@ def process(items: List[int], mapping: Dict[str, int]) -> Optional[str]:
         assert isinstance(return_type, IRGenericType)
         assert return_type.name == "Optional"
 
+    def test_parse_user_defined_generic_types(self) -> None:
+        """Test parsing user-defined generic types (e.g., Arc[str], Mutex[int]).
+
+        User-defined or crate-specific generic types should preserve their type arguments,
+        even if they are not in the standard GENERIC_TYPES set.
+        """
+        source = """
+def use_arc(config: Arc[str]) -> None:
+    pass
+
+def use_mutex(counter: Arc[Mutex[int]]) -> None:
+    pass
+"""
+        module = parse_source(source)
+
+        # Check Arc[str] - should be IRGenericType with type arg preserved
+        func1 = module.functions[0]
+        param_type = func1.params[0].type
+        assert isinstance(param_type, IRGenericType)
+        assert param_type.name == "Arc"
+        assert len(param_type.type_args) == 1
+        inner_type = param_type.type_args[0]
+        assert isinstance(inner_type, IRPrimitiveType)
+        assert inner_type.kind == PrimitiveType.STR
+
+        # Check Arc[Mutex[int]] - nested generic types
+        func2 = module.functions[1]
+        param_type = func2.params[0].type
+        assert isinstance(param_type, IRGenericType)
+        assert param_type.name == "Arc"
+        assert len(param_type.type_args) == 1
+        # Inner type should be Mutex[int]
+        inner_type = param_type.type_args[0]
+        assert isinstance(inner_type, IRGenericType)
+        assert inner_type.name == "Mutex"
+        assert len(inner_type.type_args) == 1
+        # Innermost type should be int
+        innermost_type = inner_type.type_args[0]
+        assert isinstance(innermost_type, IRPrimitiveType)
+        assert innermost_type.kind == PrimitiveType.INT
+
 
 class TestParseClasses:
     """Test class parsing."""
