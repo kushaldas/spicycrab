@@ -111,6 +111,22 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         rust_code="std::env::var({args}).ok()",
         rust_imports=[],  # Using full path, no import needed
     ),
+    "os.path.splitext": StdlibMapping(
+        python_module="os.path",
+        python_func="splitext",
+        # Returns (stem, extension_with_dot) - returns tuple for indexing like Python
+        # Using {arg0} instead of {args} to avoid format() escaping issues with braces
+        rust_code=(
+            '({ '
+            'let __path = std::path::Path::new(&{arg0}); '
+            '('
+            '__path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), '
+            '__path.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default()'
+            ')'
+            ' })'
+        ),
+        rust_imports=[],
+    ),
 }
 
 # pathlib.Path mappings (method calls on Path objects)

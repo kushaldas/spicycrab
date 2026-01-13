@@ -14,6 +14,61 @@ from spicycrab.codegen.emitter import RustEmitter
 from spicycrab.parser import parse_file
 from spicycrab.utils.errors import CrabpyError
 
+# Type hints
+if False:  # TYPE_CHECKING
+    from spicycrab.ir.nodes import IRModule
+
+
+def _generate_error_conversion_helpers(modules: list["IRModule"]) -> str:
+    """Generate error conversion helpers for lib.rs when needed.
+
+    When actix-web handlers return Result<T, anyhow::Error>, we need to convert
+    to an error type that implements ResponseError.
+
+    Due to Rust's orphan rule, we can't impl ResponseError for anyhow::Error directly.
+    Instead, we create a newtype AppError that wraps strings and impl ResponseError.
+    """
+    # Check which crates are used by looking at imports
+    uses_actix_web = False
+
+    for module in modules:
+        for imp in module.imports:
+            if "actix_web" in imp.module or "actix-web" in imp.module:
+                uses_actix_web = True
+
+    # No error conversion needed if not using actix-web
+    if not uses_actix_web:
+        return ""
+
+    # Generate a wrapper type that implements ResponseError
+    # This will be used to convert anyhow::Error at handler boundaries
+    return """
+use std::fmt;
+
+/// Wrapper type for errors to implement ResponseError for actix-web.
+/// This works around Rust's orphan rule (can't impl ResponseError for anyhow::Error).
+#[derive(Debug)]
+pub struct AppError(pub anyhow::Error);
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl actix_web::ResponseError for AppError {
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
+        AppError(err)
+    }
+}
+""".strip()
+
 
 @click.group(invoke_without_command=True)
 @click.option("--version", "-V", is_flag=True, help="Show version and exit.")
@@ -292,9 +347,9 @@ def _transpile_directory(
         resolver = resolve_types(module)
         module_name = py_file.stem.replace("-", "_")
 
-        # Use crate_name for main.rs (binary imports from library)
-        crate_name = name if module_name == main_module_name else None
-        emitter = RustEmitter(resolver, local_modules=local_module_set, crate_name=crate_name)
+        # All library modules use crate:: for internal imports
+        # (main.rs uses crate_name:: and is generated separately by generate_main_rs)
+        emitter = RustEmitter(resolver, local_modules=local_module_set, crate_name=None)
         rust_code = emitter.emit_module(module)
 
         # Validate and format the generated Rust code
@@ -316,6 +371,12 @@ def _transpile_directory(
     # Generate lib.rs that exports all modules
     if module_names:
         lib_content = "\n".join(f"pub mod {name};" for name in sorted(module_names))
+
+        # Check if we need error conversion helpers (actix-web + redis/anyhow)
+        extra_lib_content = _generate_error_conversion_helpers(modules)
+        if extra_lib_content:
+            lib_content = lib_content + "\n\n" + extra_lib_content
+
         lib_rs = src_dir / "lib.rs"
         lib_rs.write_text(lib_content + "\n")
         if verbose:
@@ -323,7 +384,7 @@ def _transpile_directory(
 
     # Generate main.rs
     main_rs = src_dir / "main.rs"
-    main_content = generate_main_rs(None)
+    main_content = generate_main_rs(entry_module=main_module_name, crate_name=name)
     main_rs.write_text(main_content)
     if verbose:
         click.echo(f"  Wrote {main_rs}")

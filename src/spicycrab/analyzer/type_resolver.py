@@ -159,6 +159,17 @@ class TypeResolver:
                 return RustType(name=f"({inner})")
             return RustType(name="()")
 
+        # Handle module.Type pattern (e.g., web.Data, web.Query)
+        if "." in name:
+            module, type_name = name.split(".", 1)
+            if module in self.stub_imports:
+                crate_name = self.stub_imports[module]
+                # Convert crate name from hyphen to underscore for Rust path
+                rust_crate = crate_name.replace("-", "_")
+                # Construct full path: crate::module::Type (e.g., actix_web::web::Data)
+                generics = [self.resolve(t) for t in ir_type.type_args]
+                return RustType(name=f"{rust_crate}::{module}::{type_name}", generics=generics)
+
         # Check for stub type mappings (e.g., Result from anyhow)
         if name in self.stub_imports:
             # Import here to avoid circular import
@@ -169,9 +180,17 @@ class TypeResolver:
             crate_name = self.stub_imports[name]
             stub_rust_type = get_stub_type_mapping(name, crate_name)
             if stub_rust_type:
-                # For anyhow::Result, only use the first type arg (T), not the error type
+                # For anyhow::Result, check if user specified a different error type
                 # anyhow::Result<T> is an alias for Result<T, anyhow::Error>
                 if stub_rust_type == "anyhow::Result" and ir_type.type_args:
+                    if len(ir_type.type_args) >= 2:
+                        # User specified both T and E - resolve the error type
+                        error_type = self.resolve(ir_type.type_args[1])
+                        # If error type is NOT anyhow::Error, use standard Result<T, E>
+                        if error_type.name not in ("anyhow::Error", "Error"):
+                            ok_type = self.resolve(ir_type.type_args[0])
+                            return RustType(name="Result", generics=[ok_type, error_type])
+                    # Otherwise use anyhow::Result<T>
                     inner = self.resolve(ir_type.type_args[0])
                     return RustType(name="anyhow::Result", generics=[inner])
                 # For other stub types, resolve all type args
@@ -251,6 +270,20 @@ class TypeResolver:
                 return RustType(name="chrono::Duration")
             if name == "timezone":
                 return RustType(name="chrono::FixedOffset")
+
+        # Check for module-qualified stub types (e.g., error.Error from actix_web)
+        # This handles cases like: from spicycrab_actix_web import error
+        # And then using error.Error in type annotations
+        if module and module in self.stub_imports:
+            # Import here to avoid circular import
+            from spicycrab.codegen.stub_discovery import get_stub_type_mapping
+
+            crate_name = self.stub_imports[module]
+            stub_rust_type = get_stub_type_mapping(name, crate_name)
+            if stub_rust_type:
+                return RustType(name=stub_rust_type)
+            # Fallback: use crate_name::module::type_name for module-qualified types
+            return RustType(name=f"{crate_name}::{module}::{name}")
 
         # Check for stub type mappings (e.g., Error from anyhow)
         if name in self.stub_imports:

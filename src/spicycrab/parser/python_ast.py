@@ -43,6 +43,7 @@ from spicycrab.ir.nodes import (
     IRRaise,
     IRReturn,
     IRSet,
+    IRSlice,
     IRStatement,
     IRSubscript,
     IRTry,
@@ -600,6 +601,12 @@ class PythonASTVisitor(ast.NodeVisitor):
 
                 method = self.visit_FunctionDef(item)
                 method.is_method = True
+
+                # Check for @staticmethod decorator
+                method.is_static = any(
+                    isinstance(d, ast.Name) and d.id == "staticmethod"
+                    for d in item.decorator_list
+                )
 
                 # Detect if method modifies self (needs &mut self)
                 if item.name != "__init__":
@@ -1183,6 +1190,15 @@ class PythonASTVisitor(ast.NodeVisitor):
             # Await expression for async code
             return IRAwait(
                 value=self._visit_expression(node.value),
+                line=line,
+            )
+
+        elif isinstance(node, ast.Slice):
+            # Slice expression (e.g., [0:n], [:n], [n:])
+            return IRSlice(
+                lower=self._visit_expression(node.lower) if node.lower else None,
+                upper=self._visit_expression(node.upper) if node.upper else None,
+                step=self._visit_expression(node.step) if node.step else None,
                 line=line,
             )
 

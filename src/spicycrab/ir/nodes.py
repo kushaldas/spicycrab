@@ -212,6 +212,15 @@ class IRSubscript(IRExpression):
 
 
 @dataclass
+class IRSlice(IRExpression):
+    """Slice expression for ranges (e.g., s[0:n], s[:n], s[n:])."""
+
+    lower: IRExpression | None = None  # Start index (None means from beginning)
+    upper: IRExpression | None = None  # End index (None means to end)
+    step: IRExpression | None = None   # Step (rarely used, usually None)
+
+
+@dataclass
 class IRList(IRExpression):
     """A list literal."""
 

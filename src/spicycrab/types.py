@@ -164,6 +164,20 @@ class Result(Generic[T, E]):
         """Check if Result is Err. Transpiles to: result.is_err()"""
         ...
 
+    @staticmethod
+    def map_error(result: "Result[T, E]", wrapper: type) -> "Result[T, Any]":
+        """Convert error type using a wrapper function/type.
+
+        Transpiles to: result.map_err(|e| Wrapper(e))
+
+        Example:
+            from spicycrab_actix_web import ErrorInternalServerError
+
+            # Convert redis::RedisError to actix_web::Error
+            conn_result = Result.map_error(redis.get_connection(), ErrorInternalServerError)
+        """
+        ...
+
 
 class Ok(Generic[T]):
     """Ok variant of Result. Transpiles to: Ok(value)"""
