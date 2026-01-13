@@ -138,11 +138,48 @@ class PythonASTVisitor(ast.NodeVisitor):
     representation suitable for Rust code generation.
     """
 
-    def __init__(self, filename: str | None = None) -> None:
+    def __init__(self, filename: str | None = None, source_lines: list[str] | None = None) -> None:
         self.filename = filename
+        self.source_lines = source_lines or []
         self.type_parser = TypeParser(filename=filename)
         self.current_scope: Scope = Scope()
         self.scope_stack: list[Scope] = []
+
+    def _extract_rust_attributes(self, node_lineno: int) -> list[str]:
+        """Extract passthrough Rust attributes from comments preceding a node.
+
+        Comments starting with '# #[' are treated as Rust attribute passthrough.
+        The '# ' prefix is stripped, leaving the raw Rust attribute.
+
+        Example:
+            # #[derive(Serialize, Deserialize)]
+            # #[serde(rename_all = "camelCase")]
+            @dataclass
+            class Foo:
+                pass
+
+        Returns: ['#[derive(Serialize, Deserialize)]', '#[serde(rename_all = "camelCase")]']
+        """
+        if not self.source_lines:
+            return []
+
+        attrs: list[str] = []
+        line_idx = node_lineno - 2  # 0-indexed, look at line before the node
+
+        while line_idx >= 0:
+            line = self.source_lines[line_idx].strip()
+            if line.startswith("# #["):
+                # Strip "# " prefix, keep the #[...]
+                attrs.insert(0, line[2:])  # "# #[derive...]" -> "#[derive...]"
+                line_idx -= 1
+            elif line.startswith("#") or line == "" or line.startswith("@"):
+                # Skip regular comments, blank lines, and Python decorators
+                line_idx -= 1
+            else:
+                # Hit non-comment/non-decorator code, stop
+                break
+
+        return attrs
 
     def _push_scope(self) -> None:
         """Push a new scope onto the stack."""
@@ -225,6 +262,9 @@ class PythonASTVisitor(ast.NodeVisitor):
         """Visit a function definition."""
         self._push_scope()
 
+        # Extract passthrough Rust attributes from preceding comments
+        rust_attrs = self._extract_rust_attributes(node.lineno)
+
         # Parse parameters with type annotations
         params = self._parse_parameters(node.args, node)
 
@@ -260,11 +300,15 @@ class PythonASTVisitor(ast.NodeVisitor):
             body=body,
             docstring=docstring,
             line=node.lineno,
+            rust_attributes=rust_attrs,
         )
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> IRFunction:
         """Visit an async function definition."""
         self._push_scope()
+
+        # Extract passthrough Rust attributes from preceding comments
+        rust_attrs = self._extract_rust_attributes(node.lineno)
 
         # Parse parameters with type annotations
         params = self._parse_parameters(node.args, node)
@@ -302,6 +346,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             is_async=True,  # Mark as async
             docstring=docstring,
             line=node.lineno,
+            rust_attributes=rust_attrs,
         )
 
     def _analyze_mutability(self, body: list[IRStatement]) -> None:
@@ -502,6 +547,9 @@ class PythonASTVisitor(ast.NodeVisitor):
         """Visit a class definition."""
         self._push_scope()
 
+        # Extract passthrough Rust attributes from preceding comments
+        rust_attrs = self._extract_rust_attributes(node.lineno)
+
         # Check for dataclass decorator
         is_dataclass = any(
             (isinstance(d, ast.Name) and d.id == "dataclass")
@@ -580,6 +628,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             has_enter=has_enter,
             has_exit=has_exit,
             line=node.lineno,
+            rust_attributes=rust_attrs,
         )
 
     def _extract_fields_from_init(self, init_method: ast.FunctionDef) -> list[tuple[str, IRType]]:
@@ -1255,7 +1304,8 @@ def parse_source(source: str, filename: str | None = None) -> IRModule:
             line=e.lineno,
         ) from e
 
-    visitor = PythonASTVisitor(filename=filename)
+    source_lines = source.splitlines()
+    visitor = PythonASTVisitor(filename=filename, source_lines=source_lines)
     return visitor.visit_Module(tree)
 
 

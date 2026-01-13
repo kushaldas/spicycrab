@@ -29,6 +29,8 @@ class StubPackage:
     function_mappings: dict[str, StdlibMapping] = field(default_factory=dict)
     method_mappings: dict[str, StdlibMapping] = field(default_factory=dict)
     type_mappings: dict[str, str] = field(default_factory=dict)
+    # Enum variant mappings (e.g., "Protocol.Tlsv12" -> "native_tls::Protocol::Tlsv12")
+    enum_variant_mappings: dict[str, str] = field(default_factory=dict)
     # Features available in this crate
     available_features: list[str] = field(default_factory=list)
     # Default features (enabled by default)
@@ -144,6 +146,11 @@ def _parse_config(config: dict[str, Any]) -> StubPackage:
     for typ in mappings.get("types", []):
         type_mappings[typ["python"]] = typ["rust"]
 
+    # Parse enum variant mappings (e.g., "Protocol.Tlsv12" -> "native_tls::Protocol::Tlsv12")
+    enum_variant_mappings: dict[str, str] = {}
+    for variant in mappings.get("enum_variants", []):
+        enum_variant_mappings[variant["python"]] = variant["rust"]
+
     # Parse feature information
     cargo_config = config.get("cargo", {})
     features_config = cargo_config.get("features", {})
@@ -157,6 +164,7 @@ def _parse_config(config: dict[str, Any]) -> StubPackage:
         function_mappings=function_mappings,
         method_mappings=method_mappings,
         type_mappings=type_mappings,
+        enum_variant_mappings=enum_variant_mappings,
         available_features=features_config.get("available", []),
         default_features=features_config.get("default", []),
     )
@@ -303,6 +311,56 @@ def get_stub_type_mapping(python_type: str, crate_name: str | None = None) -> st
     return None
 
 
+def get_stub_enum_variant_mapping(enum_type: str, variant: str, crate_name: str | None = None) -> str | None:
+    """Get Rust path for an enum variant from installed stub packages.
+
+    Args:
+        enum_type: Enum type name (e.g., "Protocol")
+        variant: Variant name (e.g., "Tlsv12")
+        crate_name: Optional crate name to restrict lookup to
+
+    Returns:
+        Rust enum variant path if found (e.g., "native_tls::Protocol::Tlsv12"), None otherwise
+    """
+    cache = _get_cache()
+    key = f"{enum_type}.{variant}"
+
+    # If crate_name is specified, only look in that crate's package
+    if crate_name is not None:
+        pkg = cache.get(crate_name)
+        if pkg and key in pkg.enum_variant_mappings:
+            rust_path = pkg.enum_variant_mappings[key]
+            log_decision(
+                "stub_enum_variant_lookup",
+                key=key,
+                crate=crate_name,
+                found=True,
+                rust_path=rust_path,
+            )
+            increment("stub_enum_variant_hits")
+            return rust_path
+        log_decision("stub_enum_variant_lookup", key=key, crate=crate_name, found=False)
+        increment("stub_enum_variant_misses")
+        return None
+
+    # Search all packages
+    for pkg in cache.values():
+        if key in pkg.enum_variant_mappings:
+            rust_path = pkg.enum_variant_mappings[key]
+            log_decision(
+                "stub_enum_variant_lookup",
+                key=key,
+                crate=pkg.name,
+                found=True,
+                rust_path=rust_path,
+            )
+            increment("stub_enum_variant_hits")
+            return rust_path
+    log_decision("stub_enum_variant_lookup", key=key, found=False)
+    increment("stub_enum_variant_misses")
+    return None
+
+
 def get_stub_cargo_deps() -> dict[str, Any]:
     """Get all cargo dependencies from installed stub packages.
 
@@ -433,27 +491,31 @@ def get_stub_cargo_deps_with_features(
 
     deps: dict[str, Any] = {}
     for pkg in cache.values():
-        crate_name = pkg.rust_crate
+        # Use pkg.name for Cargo.toml (e.g., "native-tls" with hyphen)
+        # pkg.rust_crate is for Rust code (e.g., "native_tls" with underscore)
+        cargo_dep_name = pkg.name
         version = pkg.rust_version
 
         # Start with default features or empty list
         features: list[str] = []
 
-        # Check if user specified features for this crate
-        if crate_name in user_features:
-            features = user_features[crate_name]
+        # Check if user specified features for this crate (using either name format)
+        if cargo_dep_name in user_features:
+            features = user_features[cargo_dep_name]
+        elif pkg.rust_crate in user_features:
+            features = user_features[pkg.rust_crate]
         elif pkg.default_features:
             # Use default features if user didn't specify
             features = list(pkg.default_features)
 
         # Create dependency spec
         if features:
-            deps[crate_name] = {
+            deps[cargo_dep_name] = {
                 "version": version,
                 "features": features,
             }
         else:
-            deps[crate_name] = version
+            deps[cargo_dep_name] = version
 
     return deps
 

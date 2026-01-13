@@ -80,6 +80,33 @@ def python_safe_name(name: str) -> str:
     return name
 
 
+def make_unique_param_names(params: list) -> list[str]:
+    """Make parameter names unique, handling duplicate `_` parameters.
+
+    Rust allows multiple parameters named `_` (unused), but Python doesn't.
+    This function renames duplicates to `_1`, `_2`, etc.
+    """
+    seen: dict[str, int] = {}
+    result: list[str] = []
+
+    for param in params:
+        name = param.name
+        safe_name = python_safe_name(name)
+
+        if safe_name in seen:
+            # Duplicate found, add suffix
+            count = seen[safe_name]
+            seen[safe_name] = count + 1
+            unique_name = f"{safe_name}{count}"
+        else:
+            seen[safe_name] = 1
+            unique_name = safe_name
+
+        result.append(unique_name)
+
+    return result
+
+
 def camel_to_snake(name: str) -> str:
     """Convert CamelCase to snake_case."""
     import re
@@ -149,6 +176,22 @@ COMMON_PRIVATE_MODULES: set[str] = {
     "logging",
     # Block API patterns (sha2, digest crates)
     "block_api",
+    # TLS/rustls internal modules
+    "webpki",
+    "anchors",
+    "verify",
+    "server_conn",
+    "client_conn",
+    "conn",
+    "tls12",
+    "tls13",
+    "ciphersuites",
+    "suites",
+    # native-tls internal modules (platform-specific implementations)
+    "imp",
+    "schannel",
+    "security_framework",
+    "openssl",
 }
 
 
@@ -2263,11 +2306,11 @@ def generate_method_signature(method: RustMethod, type_name: str) -> str:
     if method.self_type:
         params.append("self")
 
-    for param in method.params:
+    # Make parameter names unique (handles duplicate `_` in Rust)
+    unique_names = make_unique_param_names(method.params)
+    for param, unique_name in zip(method.params, unique_names):
         py_type = rust_type_to_python(param.rust_type)
-        # Use safe name for parameters too
-        safe_param_name = python_safe_name(param.name)
-        params.append(f"{safe_param_name}: {py_type}")
+        params.append(f"{unique_name}: {py_type}")
 
     params_str = ", ".join(params)
 
@@ -2289,11 +2332,11 @@ def generate_static_method_signature(method: RustMethod, type_name: str) -> str:
     """Generate Python static method signature from Rust static method."""
     params = []
 
-    for param in method.params:
+    # Make parameter names unique (handles duplicate `_` in Rust)
+    unique_names = make_unique_param_names(method.params)
+    for param, unique_name in zip(method.params, unique_names):
         py_type = rust_type_to_python(param.rust_type)
-        # Use safe name for parameters too
-        safe_param_name = python_safe_name(param.name)
-        params.append(f"{safe_param_name}: {py_type}")
+        params.append(f"{unique_name}: {py_type}")
 
     params_str = ", ".join(params)
 
@@ -2314,10 +2357,11 @@ def generate_function_signature(func: RustFunction) -> str:
     """Generate Python function signature from Rust free-standing function."""
     params = []
 
-    for param in func.params:
+    # Make parameter names unique (handles duplicate `_` in Rust)
+    unique_names = make_unique_param_names(func.params)
+    for param, unique_name in zip(func.params, unique_names):
         py_type = rust_type_to_python(param.rust_type)
-        safe_param_name = python_safe_name(param.name)
-        params.append(f"{safe_param_name}: {py_type}")
+        params.append(f"{unique_name}: {py_type}")
 
     params_str = ", ".join(params)
 
@@ -2352,7 +2396,7 @@ def generate_result_class(alias: RustTypeAlias, crate_name: str) -> list[str]:
         f"class {alias.name}(Generic[T, E]):",
         f'    """A Result type alias for {crate_name}.',
         "",
-        f"    Maps to {crate_name}::{alias.name} which is an alias for {alias.target_type}.",
+        f"    Maps to {rust_crate_ident}::{alias.name} which is an alias for {alias.target_type}.",
         '    """',
         "",
         "    @staticmethod",
@@ -2528,12 +2572,24 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
     return "\n".join(lines)
 
 
+def crate_name_to_rust_ident(crate_name: str) -> str:
+    """Convert a crate name to a valid Rust identifier.
+
+    Cargo allows hyphens in crate names, but Rust code uses underscores.
+    For example, 'native-tls' becomes 'native_tls' in Rust code.
+    """
+    return crate_name.replace("-", "_")
+
+
 def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, python_module: str) -> str:
     """Generate _spicycrab.toml content."""
+    # Convert crate name for use in Rust code paths
+    rust_crate_ident = crate_name_to_rust_ident(crate_name)
+
     lines = [
         "[package]",
         f'name = "{crate_name}"',
-        f'rust_crate = "{crate_name}"',
+        f'rust_crate = "{rust_crate_ident}"',
         f'rust_version = "{version}"',
         f'python_module = "{python_module}"',
         "",
@@ -2701,9 +2757,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 # Use module_path if available, applying the public path heuristic
                 public_path = get_public_module_path(func.module_path, func.name)
                 if public_path:
-                    func_path = f"{crate_name}::{public_path}::{func.name}"
+                    func_path = f"{rust_crate_ident}::{public_path}::{func.name}"
                 else:
-                    func_path = f"{crate_name}::{func.name}"
+                    func_path = f"{rust_crate_ident}::{func.name}"
                 rust_code = f"{func_path}({args})"
                 rust_imports = [func_path]
 
@@ -2739,9 +2795,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         # Get the full Rust path for the struct, applying the public path heuristic
         public_path = get_public_module_path(struct.module_path, struct.name)
         if public_path:
-            struct_path = f"{crate_name}::{public_path}::{struct.name}"
+            struct_path = f"{rust_crate_ident}::{public_path}::{struct.name}"
         else:
-            struct_path = f"{crate_name}::{struct.name}"
+            struct_path = f"{rust_crate_ident}::{struct.name}"
 
         methods = type_methods.get(struct.name, [])
         for method in methods:
@@ -2762,7 +2818,7 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append("# Error.msg - use anyhow! macro for string messages")
                     lines.append("[[mappings.functions]]")
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
-                    lines.append(f'rust_code = "{crate_name}::anyhow!({args})"')
+                    lines.append(f'rust_code = "{rust_crate_ident}::anyhow!({args})"')
                     lines.append("rust_imports = []")
                     lines.append(f"needs_result = {needs_result_val}")
                     if param_types:
@@ -2859,9 +2915,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             safe_name = python_safe_name(alias.alias_name)
             # Build the Rust path: crate::module::ALIAS
             if alias.module_path:
-                rust_path = f"{crate_name}::{alias.module_path}::{alias.alias_name}"
+                rust_path = f"{rust_crate_ident}::{alias.module_path}::{alias.alias_name}"
             else:
-                rust_path = f"{crate_name}::{alias.alias_name}"
+                rust_path = f"{rust_crate_ident}::{alias.alias_name}"
 
             lines.append(f"# {safe_name} constant")
             lines.append("[[mappings.functions]]")
@@ -2890,9 +2946,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             for method in methods:
                 # Build Rust path for the constant
                 if alias.module_path:
-                    rust_const_path = f"{crate_name}::{alias.module_path}::{alias.alias_name}"
+                    rust_const_path = f"{rust_crate_ident}::{alias.module_path}::{alias.alias_name}"
                 else:
-                    rust_const_path = f"{crate_name}::{alias.alias_name}"
+                    rust_const_path = f"{rust_crate_ident}::{alias.alias_name}"
 
                 # Generate argument placeholders
                 args = ", ".join(f"{{arg{i}}}" for i in range(len(method.params)))
@@ -2920,7 +2976,7 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append("# Result type alias")
             lines.append("[[mappings.types]]")
             lines.append(f'python = "{alias.name}"')
-            lines.append(f'rust = "{crate_name}::{alias.name}"')
+            lines.append(f'rust = "{rust_crate_ident}::{alias.name}"')
             lines.append("")
 
     # Generate type mappings for standard library types
@@ -2949,9 +3005,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         # Use module_path if available, applying the public path heuristic
         public_path = get_public_module_path(struct.module_path, struct.name)
         if public_path:
-            rust_path = f"{crate_name}::{public_path}::{struct.name}"
+            rust_path = f"{rust_crate_ident}::{public_path}::{struct.name}"
         else:
-            rust_path = f"{crate_name}::{struct.name}"
+            rust_path = f"{rust_crate_ident}::{struct.name}"
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{struct.name}"')
         lines.append(f'rust = "{rust_path}"')
@@ -2963,13 +3019,31 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         # Use module_path if available, applying the public path heuristic
         public_path = get_public_module_path(enum.module_path, enum.name)
         if public_path:
-            rust_path = f"{crate_name}::{public_path}::{enum.name}"
+            rust_path = f"{rust_crate_ident}::{public_path}::{enum.name}"
         else:
-            rust_path = f"{crate_name}::{enum.name}"
+            rust_path = f"{rust_crate_ident}::{enum.name}"
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{enum.name}"')
         lines.append(f'rust = "{rust_path}"')
         lines.append("")
+
+    # Generate enum variant mappings for direct variant access (e.g., Protocol.Tlsv12)
+    lines.append("# Enum variant access mappings")
+    for enum in crate.enums:
+        if enum.name in std_type_names:
+            continue
+        # Use module_path if available, applying the public path heuristic
+        public_path = get_public_module_path(enum.module_path, enum.name)
+        if public_path:
+            rust_enum_path = f"{rust_crate_ident}::{public_path}::{enum.name}"
+        else:
+            rust_enum_path = f"{rust_crate_ident}::{enum.name}"
+        for variant in enum.variants:
+            safe_variant_name = python_safe_name(variant.name)
+            lines.append("[[mappings.enum_variants]]")
+            lines.append(f'python = "{enum.name}.{safe_variant_name}"')
+            lines.append(f'rust = "{rust_enum_path}::{variant.name}"')
+            lines.append("")
 
     return "\n".join(lines)
 

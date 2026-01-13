@@ -457,6 +457,7 @@ class IRFunction(IRNode):
     modifies_self: bool = False  # True if method assigns to self.* (needs &mut self)
     docstring: str | None = None
     line: int | None = None
+    rust_attributes: list[str] = field(default_factory=list)  # Passthrough # #[...] comments
 
     def accept(self, visitor: IRVisitor) -> Any:
         return None
@@ -473,6 +474,7 @@ class IRClass(IRNode):
     is_dataclass: bool = False
     docstring: str | None = None
     line: int | None = None
+    rust_attributes: list[str] = field(default_factory=list)  # Passthrough # #[...] comments
 
     # Context manager methods if present
     has_enter: bool = False

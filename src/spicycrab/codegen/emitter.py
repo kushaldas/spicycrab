@@ -445,19 +445,24 @@ class RustEmitter:
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for Rust attributes
+        # Check for Rust attributes from @rust() decorator
         rust_attrs = getattr(cls, "__rust_attrs__", None)
         if rust_attrs:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
+
+        # Emit passthrough Rust attributes from # #[...] comments
+        for attr in cls.rust_attributes:
+            lines.append(f"{indent}{attr}")
 
         # Docstring
         if cls.docstring:
             lines.append(f"{indent}/// {cls.docstring.split(chr(10))[0]}")
 
         # Struct definition
-        # Add default derives if no rust_attrs
-        if not rust_attrs:
+        # Add default derives if no rust_attrs and no passthrough derive
+        has_derive = rust_attrs or any("#[derive(" in attr for attr in cls.rust_attributes)
+        if not has_derive:
             lines.append(f"{indent}#[derive(Debug, Clone)]")
 
         lines.append(f"{indent}pub struct {cls.name} {{")
@@ -546,11 +551,15 @@ class RustEmitter:
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for Rust attributes
+        # Check for Rust attributes from @rust() decorator
         rust_attrs = getattr(method, "__rust_attrs__", None)
         if rust_attrs:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
+
+        # Emit passthrough Rust attributes from # #[...] comments
+        for attr in method.rust_attributes:
+            lines.append(f"{indent}{attr}")
 
         # Docstring
         if method.docstring:
@@ -682,15 +691,23 @@ class RustEmitter:
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for Rust attributes
+        # Check for Rust attributes from @rust() decorator
         rust_attrs = getattr(func, "__rust_attrs__", None)
         if rust_attrs:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
 
-        # Add async runtime attribute for async main function
+        # Emit passthrough Rust attributes from # #[...] comments
+        for attr in func.rust_attributes:
+            lines.append(f"{indent}{attr}")
+
+        # Add async runtime attribute for async main function (if not already provided via passthrough)
         # Use #[actix_web::main] if actix-web is imported, otherwise #[tokio::main]
-        if func.is_async and func.name == "main":
+        has_async_main_attr = any(
+            "::main]" in attr or attr == "#[main]"
+            for attr in func.rust_attributes
+        )
+        if func.is_async and func.name == "main" and not has_async_main_attr:
             stub_crates = set(self.ctx.stub_imports.values())
             if "actix-web" in stub_crates:
                 lines.append(f"{indent}#[actix_web::main]")
@@ -1279,11 +1296,25 @@ class RustEmitter:
                             self.ctx.stdlib_imports.add(imp)
                         return rust_code
 
-                # Check for stub type enum variant access (e.g., ArgAction.SetTrue)
-                # Convert Python enum syntax to Rust path syntax: Type.Variant -> crate::Type::Variant
+                # Check for stub type enum variant access (e.g., ArgAction.SetTrue, Protocol.Tlsv12)
+                # Use enum variant mapping if available, otherwise fall back to path construction
                 if module in self.ctx.stub_imports:
                     crate_name = self.ctx.stub_imports[module]
-                    return f"{crate_name}::{module}::{expr.attr}"
+                    # Try to get enum variant mapping from stub package
+                    from spicycrab.codegen.stub_discovery import get_stub_enum_variant_mapping
+                    variant_rust_path = get_stub_enum_variant_mapping(module, expr.attr, crate_name)
+                    if variant_rust_path:
+                        return variant_rust_path
+                    # Fall back to path construction using rust_crate from package
+                    from spicycrab.codegen.stub_discovery import get_all_stub_packages
+                    pkgs = get_all_stub_packages()
+                    pkg = pkgs.get(crate_name)
+                    if pkg:
+                        rust_crate_ident = pkg.rust_crate
+                        return f"{rust_crate_ident}::{module}::{expr.attr}"
+                    # Last resort: convert hyphen to underscore
+                    rust_crate_ident = crate_name.replace("-", "_")
+                    return f"{rust_crate_ident}::{module}::{expr.attr}"
 
             obj = self.emit_expression(expr.obj)
             return f"{obj}.{expr.attr}"
