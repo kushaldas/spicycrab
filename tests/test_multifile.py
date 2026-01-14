@@ -1,16 +1,16 @@
 """Tests for multi-file module transpilation and import resolution."""
 
+import shutil
 import subprocess
 import tempfile
-import shutil
 from pathlib import Path
 
 import pytest
 
-from spicycrab.parser import parse_file
 from spicycrab.analyzer.type_resolver import resolve_types
-from spicycrab.codegen.emitter import RustEmitter
 from spicycrab.codegen.cargo import generate_cargo_toml
+from spicycrab.codegen.emitter import RustEmitter
+from spicycrab.parser import parse_file
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +53,7 @@ def main() -> None:
             main_py.write_text(main_code)
 
             # Parse both modules
-            models_ir = parse_file(models_py)
+            _models_ir = parse_file(models_py)  # Verify models parses successfully
             main_ir = parse_file(main_py)
 
             # Set up local modules

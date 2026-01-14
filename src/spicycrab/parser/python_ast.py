@@ -603,10 +603,7 @@ class PythonASTVisitor(ast.NodeVisitor):
                 method.is_method = True
 
                 # Check for @staticmethod decorator
-                method.is_static = any(
-                    isinstance(d, ast.Name) and d.id == "staticmethod"
-                    for d in item.decorator_list
-                )
+                method.is_static = any(isinstance(d, ast.Name) and d.id == "staticmethod" for d in item.decorator_list)
 
                 # Detect if method modifies self (needs &mut self)
                 if item.name != "__init__":

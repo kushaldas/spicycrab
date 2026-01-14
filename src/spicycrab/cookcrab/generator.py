@@ -17,9 +17,9 @@ from spicycrab.debug_log import increment, log_decision
 if TYPE_CHECKING:
     from spicycrab.cookcrab._parser import (
         RustCrate,
-        RustEnumVariantAlias,
         RustFunction,
         RustMethod,
+        RustParam,
         RustTypeAlias,
     )
 
@@ -110,8 +110,9 @@ def make_unique_param_names(params: list) -> list[str]:
 def camel_to_snake(name: str) -> str:
     """Convert CamelCase to snake_case."""
     import re
-    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
 
 # Common private module names in Rust crates
@@ -142,6 +143,7 @@ COMMON_PRIVATE_MODULES: set[str] = {
     "alg",
     "algorithm",
     "algorithms",
+    "direct",  # josekit: jwe::alg::direct
     "enc",
     "encoding",
     "dec",
@@ -159,6 +161,19 @@ COMMON_PRIVATE_MODULES: set[str] = {
     "error",
     "errors",
     "result",
+    # clap internal modules
+    "command",
+    "arg",
+    # reqwest internal modules
+    "response",
+    "request",
+    "client",
+    "wasm",
+    # config crate internal modules
+    "config",  # config::config::Config -> config::Config
+    "file",
+    "value",
+    "source",
     # Date/time patterns (chrono)
     "naive",
     "datetime",
@@ -170,6 +185,7 @@ COMMON_PRIVATE_MODULES: set[str] = {
     "duration",
     "weekday",
     "month",
+    "fixed",
     # Logging patterns
     "log_impl",
     "logger",
@@ -221,10 +237,7 @@ def _is_private_module_component(component: str, snake_name: str) -> bool:
     # Snake_name ends with _component and component is substantial
     # e.g., arg_matches ends with matches, so strip "matches" module
     suffix_with_underscore = f"_{component}"
-    if (
-        snake_name.endswith(suffix_with_underscore)
-        and len(component) >= len(snake_name) * 0.5
-    ):
+    if snake_name.endswith(suffix_with_underscore) and len(component) >= len(snake_name) * 0.5:
         return True
 
     return False
@@ -2207,6 +2220,48 @@ CRATE_CONSTANT_STUBS: dict[str, list[tuple[str, str, str, list[dict]]]] = {
             ],
         ),
     ],
+    "josekit": [
+        # Dir - Direct encryption algorithm for JWE
+        (
+            "Dir",
+            "DirectJweAlgorithm",
+            "josekit::jwe::Dir",
+            [
+                {
+                    "method_name": "encrypter_from_bytes",
+                    "rust_code_template": "josekit::jwe::Dir.encrypter_from_bytes({arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "DirectJweEncrypter",
+                },
+                {
+                    "method_name": "encrypter_from_jwk",
+                    "rust_code_template": "josekit::jwe::Dir.encrypter_from_jwk(&{arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&Jwk"],
+                    "returns": "DirectJweEncrypter",
+                },
+                {
+                    "method_name": "decrypter_from_bytes",
+                    "rust_code_template": "josekit::jwe::Dir.decrypter_from_bytes({arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "DirectJweDecrypter",
+                },
+                {
+                    "method_name": "decrypter_from_jwk",
+                    "rust_code_template": "josekit::jwe::Dir.decrypter_from_jwk(&{arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&Jwk"],
+                    "returns": "DirectJweDecrypter",
+                },
+            ],
+        ),
+    ],
 }
 
 
@@ -2388,7 +2443,7 @@ class GeneratedStub:
     pyproject_toml: str
 
 
-def get_smart_param_type(param: "RustParam") -> str:
+def get_smart_param_type(param: RustParam) -> str:
     """Get appropriate Rust param_type using structured type info.
 
     This uses the new RustTypeInfo to make smarter decisions about borrowing:
@@ -2414,7 +2469,8 @@ def get_smart_param_type(param: "RustParam") -> str:
         # e.g., "AsRef<[u8]>" -> "&[u8]"
         # e.g., "AsRef<str>" -> "&str"
         import re
-        match = re.search(r'AsRef<([^>]+)>|Borrow<([^>]+)>', trait_bound)
+
+        match = re.search(r"AsRef<([^>]+)>|Borrow<([^>]+)>", trait_bound)
         if match:
             inner_type = match.group(1) or match.group(2)
             if inner_type:
@@ -2429,7 +2485,7 @@ def get_smart_param_type(param: "RustParam") -> str:
     return param.rust_type
 
 
-def get_param_types_for_function(params: list["RustParam"], crate_name: str, func_name: str) -> list[str]:
+def get_param_types_for_function(params: list[RustParam], crate_name: str, func_name: str) -> list[str]:
     """Get param_types for a function, using type_info when available.
 
     Checks for hardcoded overrides first, then falls back to smart detection.
@@ -3128,9 +3184,10 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             "uncovered_macros",
             crate=crate_name,
             detected=list(uncovered_macros),
-            message="These exported macros were detected but have no hardcoded stubs"
+            message="These exported macros were detected but have no hardcoded stubs",
         )
-        lines.append(f"# NOTE: Detected {len(uncovered_macros)} exported macros without stubs: {', '.join(sorted(uncovered_macros))}")
+        macro_list = ", ".join(sorted(uncovered_macros))
+        lines.append(f"# NOTE: Detected {len(uncovered_macros)} macros without stubs: {macro_list}")
         lines.append("# To use these macros, add signatures to CRATE_MACRO_STUBS in generator.py")
         lines.append("")
 
@@ -3139,7 +3196,7 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         for _python_stub, rust_type, func_mappings in CRATE_TYPE_STUBS[crate_name]:
             # Add function mappings for the type's static methods
             for mapping in func_mappings:
-                lines.append(f"# Hardcoded type function")
+                lines.append("# Hardcoded type function")
                 lines.append("[[mappings.functions]]")
                 lines.append(f'python = "{mapping["python"]}"')
                 lines.append(f'rust_code = "{mapping["rust_code"]}"')
@@ -3317,7 +3374,8 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 lines.append("")
 
     # Generate mappings for hardcoded method stubs
-    for (stub_crate, type_name, method_name), (rust_code, returns_self, needs_result, returns_type, param_types) in STD_METHOD_STUBS.items():
+    for (stub_crate, type_name, method_name), method_info in STD_METHOD_STUBS.items():
+        rust_code, returns_self, needs_result, returns_type, param_types = method_info
         if stub_crate == crate_name:
             lines.append(f"# {type_name}.{method_name} hardcoded method")
             lines.append("[[mappings.methods]]")
@@ -3335,7 +3393,8 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append("")
 
     # Generate mappings for static constructor functions (convenience methods)
-    for (stub_crate, python_path), (rust_code, rust_imports, needs_result, param_types) in STATIC_CONSTRUCTOR_MAPPINGS.items():
+    for (stub_crate, python_path), mapping_info in STATIC_CONSTRUCTOR_MAPPINGS.items():
+        rust_code, rust_imports, needs_result, param_types = mapping_info
         if stub_crate == crate_name:
             lines.append(f"# {python_path} static constructor")
             lines.append("[[mappings.functions]]")

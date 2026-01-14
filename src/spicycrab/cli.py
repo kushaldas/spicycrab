@@ -19,7 +19,7 @@ if False:  # TYPE_CHECKING
     from spicycrab.ir.nodes import IRModule
 
 
-def _generate_error_conversion_helpers(modules: list["IRModule"]) -> str:
+def _generate_error_conversion_helpers(modules: list[IRModule]) -> str:
     """Generate error conversion helpers for lib.rs when needed.
 
     When actix-web handlers return Result<T, anyhow::Error>, we need to convert

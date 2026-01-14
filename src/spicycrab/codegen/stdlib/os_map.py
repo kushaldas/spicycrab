@@ -11,7 +11,7 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         python_func="getcwd",
         rust_code="std::env::current_dir().unwrap().to_string_lossy().to_string()",
         rust_imports=[],  # Using full path, no import needed
-        needs_result=True,
+        needs_result=False,  # Result already handled by .unwrap() in template
     ),
     "os.chdir": StdlibMapping(
         python_module="os",
@@ -117,13 +117,13 @@ OS_MAPPINGS: dict[str, StdlibMapping] = {
         # Returns (stem, extension_with_dot) - returns tuple for indexing like Python
         # Using {arg0} instead of {args} to avoid format() escaping issues with braces
         rust_code=(
-            '({ '
-            'let __path = std::path::Path::new(&{arg0}); '
-            '('
-            '__path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), '
+            "({ "
+            "let __path = std::path::Path::new(&{arg0}); "
+            "("
+            "__path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), "
             '__path.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default()'
-            ')'
-            ' })'
+            ")"
+            " })"
         ),
         rust_imports=[],
     ),

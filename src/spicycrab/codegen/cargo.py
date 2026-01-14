@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from spicycrab.codegen.stub_discovery import get_stub_cargo_deps_with_features, get_stub_cargo_deps
+from spicycrab.codegen.stub_discovery import get_stub_cargo_deps, get_stub_cargo_deps_with_features
 
 if TYPE_CHECKING:
     from spicycrab.ir.nodes import IRModule
@@ -190,6 +190,7 @@ def generate_cargo_toml(
     # Detect passthrough Rust attributes and add required dependencies
     if modules:
         import re
+
         uses_serde_derive = False
         uses_clap_derive = False
         uses_redis_aio = False
@@ -238,7 +239,9 @@ def generate_cargo_toml(
             features = list(existing.features) if existing.features else []
             if "derive" not in features:
                 features.append("derive")
-            deps["clap"] = CargoDependency(existing.name, existing.version, features=features, optional=existing.optional)
+            deps["clap"] = CargoDependency(
+                existing.name, existing.version, features=features, optional=existing.optional
+            )
 
         # Ensure redis has aio and connection-manager features if async redis is used
         if uses_redis_aio and "redis" in deps:
@@ -247,7 +250,9 @@ def generate_cargo_toml(
             for feat in ["aio", "connection-manager", "tokio-comp"]:
                 if feat not in features:
                     features.append(feat)
-            deps["redis"] = CargoDependency(existing.name, existing.version, features=features, optional=existing.optional)
+            deps["redis"] = CargoDependency(
+                existing.name, existing.version, features=features, optional=existing.optional
+            )
 
     # Dependencies section
     if deps:

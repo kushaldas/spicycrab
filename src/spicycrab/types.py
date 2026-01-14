@@ -16,7 +16,7 @@ Usage:
         return Ok(a // b)
 """
 
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 # Type variables for generic types
 T = TypeVar("T")

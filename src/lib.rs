@@ -49,8 +49,11 @@ impl RustTypeInfo {
     fn __repr__(&self) -> String {
         format!(
             "RustTypeInfo(full='{}', ref={}, impl_trait={}, borrow={}, owned={})",
-            self.full_type, self.is_reference, self.is_impl_trait,
-            self.expects_borrow, self.expects_owned
+            self.full_type,
+            self.is_reference,
+            self.is_impl_trait,
+            self.expects_borrow,
+            self.expects_owned
         )
     }
 }
@@ -519,6 +522,7 @@ impl ItemCollector {
         }
     }
 
+    #[allow(dead_code)]
     fn with_module(module_path: &str) -> Self {
         Self {
             functions: Vec::new(),
@@ -539,7 +543,8 @@ impl ItemCollector {
 impl<'ast> Visit<'ast> for ItemCollector {
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         if is_pub(&node.vis) {
-            self.functions.push(parse_function(node, &self.current_module));
+            self.functions
+                .push(parse_function(node, &self.current_module));
         }
         syn::visit::visit_item_fn(self, node);
     }
@@ -665,7 +670,10 @@ impl<'ast> Visit<'ast> for ItemCollector {
         let is_macro_rules = node.mac.path.is_ident("macro_rules");
 
         // Check for #[macro_export] attribute
-        let is_exported = node.attrs.iter().any(|attr| attr.path().is_ident("macro_export"));
+        let is_exported = node
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("macro_export"));
 
         // Only collect exported macro_rules! definitions
         if is_macro_rules && is_exported {
@@ -698,7 +706,12 @@ fn parse_enum_variant_alias(tree: &UseTree, module_path: &str) -> Option<RustEnu
 
             // Check if this looks like a type name (starts with uppercase)
             // This heuristic helps distinguish "EnumType::Variant" from "crate::module"
-            if !first_segment.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            if !first_segment
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
+            {
                 return None;
             }
 
@@ -739,7 +752,10 @@ fn parse_enum_variant_alias(tree: &UseTree, module_path: &str) -> Option<RustEnu
                                 alias_name,
                                 enum_type: format!("{}::{}", first_segment, second_segment),
                                 variant_name: variant_name.clone(),
-                                full_path: format!("{}::{}::{}", first_segment, second_segment, variant_name),
+                                full_path: format!(
+                                    "{}::{}::{}",
+                                    first_segment, second_segment, variant_name
+                                ),
                                 is_pub: true,
                                 module_path: module_path.to_string(),
                             })
@@ -750,7 +766,10 @@ fn parse_enum_variant_alias(tree: &UseTree, module_path: &str) -> Option<RustEnu
                                 alias_name: variant_name.clone(),
                                 enum_type: format!("{}::{}", first_segment, second_segment),
                                 variant_name: variant_name.clone(),
-                                full_path: format!("{}::{}::{}", first_segment, second_segment, variant_name),
+                                full_path: format!(
+                                    "{}::{}::{}",
+                                    first_segment, second_segment, variant_name
+                                ),
                                 is_pub: true,
                                 module_path: module_path.to_string(),
                             })
@@ -849,7 +868,9 @@ fn analyze_type(ty: &Type) -> RustTypeInfo {
         Type::ImplTrait(impl_trait) => {
             is_impl_trait = true;
             // Extract the trait bounds
-            let bounds: Vec<String> = impl_trait.bounds.iter()
+            let bounds: Vec<String> = impl_trait
+                .bounds
+                .iter()
                 .map(|b| b.to_token_stream().to_string().replace(' ', ""))
                 .collect();
             let bound_str = bounds.join("+");
@@ -859,8 +880,10 @@ fn analyze_type(ty: &Type) -> RustTypeInfo {
             // AsRef, Borrow, AsMut -> expects borrow (but accepts owned too)
             // Into, TryInto -> expects ownership
             let bound_lower = bound_str.to_lowercase();
-            if bound_lower.contains("asref") || bound_lower.contains("borrow")
-                || bound_lower.contains("asmut") {
+            if bound_lower.contains("asref")
+                || bound_lower.contains("borrow")
+                || bound_lower.contains("asmut")
+            {
                 expects_borrow = true;
             }
             if bound_lower.contains("into") || bound_lower.contains("tryinto") {
@@ -880,7 +903,11 @@ fn analyze_type(ty: &Type) -> RustTypeInfo {
                     core_type = format!(
                         "{}{}",
                         last_seg.ident,
-                        last_seg.arguments.to_token_stream().to_string().replace(' ', "")
+                        last_seg
+                            .arguments
+                            .to_token_stream()
+                            .to_string()
+                            .replace(' ', "")
                     );
                 }
             }
@@ -1174,7 +1201,7 @@ fn parse_file_internal(path: &str, module_path: &str) -> PyResult<RustCrate> {
         statics: collector.statics,
         enum_variant_aliases: collector.enum_variant_aliases,
         macros: collector.macros,
-        available_features: Vec::new(),  // Single file has no Cargo.toml
+        available_features: Vec::new(), // Single file has no Cargo.toml
         default_features: Vec::new(),
     })
 }
@@ -1282,7 +1309,7 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
         let module_path = file_path
             .strip_prefix(search_path)
             .ok()
-            .and_then(|rel| {
+            .map(|rel| {
                 let mut parts: Vec<&str> = rel
                     .components()
                     .filter_map(|c| c.as_os_str().to_str())
@@ -1301,9 +1328,9 @@ fn parse_crate(path: &str) -> PyResult<RustCrate> {
                     }
                 }
                 if parts.is_empty() {
-                    Some(String::new())
+                    String::new()
                 } else {
-                    Some(parts.join("::"))
+                    parts.join("::")
                 }
             })
             .unwrap_or_default();
@@ -1383,10 +1410,7 @@ fn format_rust_code(code: &str) -> PyResult<String> {
 #[pyfunction]
 fn validate_and_format_rust(code: &str) -> PyResult<String> {
     let syntax_tree = syn::parse_file(code).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PySyntaxError, _>(format!(
-            "Invalid Rust syntax: {}",
-            e
-        ))
+        PyErr::new::<pyo3::exceptions::PySyntaxError, _>(format!("Invalid Rust syntax: {}", e))
     })?;
     Ok(prettyplease::unparse(&syntax_tree))
 }

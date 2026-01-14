@@ -601,7 +601,14 @@ def search(query: str):
     is_flag=True,
     help="Enable debug JSON logging to .spicycrab-logs/",
 )
-def generate(crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None, debug_log: bool):
+def generate(
+    crate: str,
+    output: Path,
+    crate_version: str | None,
+    local: bool,
+    output_name: str | None,
+    debug_log: bool,
+):
     """Generate stubs from a Rust crate.
 
     Parses a Rust crate and generates Python type stubs with

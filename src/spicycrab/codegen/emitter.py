@@ -623,6 +623,7 @@ class RustEmitter:
             if "#[derive(" in attr:
                 # Extract derive contents: #[derive(A, B, C)] -> "A, B, C"
                 import re
+
                 match = re.search(r"#\[derive\(([^)]+)\)", attr)
                 if match:
                     derives = [d.strip() for d in match.group(1).split(",")]
@@ -914,10 +915,7 @@ class RustEmitter:
 
         # Add async runtime attribute for async main function (if not already provided via passthrough)
         # Use #[actix_web::main] if actix-web is imported, otherwise #[tokio::main]
-        has_async_main_attr = any(
-            "::main]" in attr or attr == "#[main]"
-            for attr in func.rust_attributes
-        )
+        has_async_main_attr = any("::main]" in attr or attr == "#[main]" for attr in func.rust_attributes)
         if func.is_async and func.name == "main" and not has_async_main_attr:
             stub_crates = set(self.ctx.stub_imports.values())
             if "actix-web" in stub_crates:
@@ -993,14 +991,12 @@ class RustEmitter:
 
         This populates self.ctx.mut_vars with variable names that need `mut` declarations.
         """
-        from spicycrab.codegen.stub_discovery import get_stub_method_mapping
 
         for stmt in stmts:
             self._scan_stmt_for_mut_vars(stmt)
 
     def _scan_stmt_for_mut_vars(self, stmt: IRStatement) -> None:
         """Recursively scan a statement for &mut variable usage."""
-        from spicycrab.codegen.stub_discovery import get_stub_method_mapping
 
         if isinstance(stmt, IRAssign):
             self._scan_expr_for_mut_vars(stmt.value)
@@ -1328,10 +1324,7 @@ class RustEmitter:
             ):
                 vars_list.append(expr.left.name)
                 return True
-            elif (
-                isinstance(expr, IRBinaryOp)
-                and expr.op == BinaryOp.AND
-            ):
+            elif isinstance(expr, IRBinaryOp) and expr.op == BinaryOp.AND:
                 # Both sides must be valid
                 return extract_from_expr(expr.left) and extract_from_expr(expr.right)
             return False
@@ -1716,11 +1709,13 @@ class RustEmitter:
                     crate_name = self.ctx.stub_imports[module]
                     # Try to get enum variant mapping from stub package
                     from spicycrab.codegen.stub_discovery import get_stub_enum_variant_mapping
+
                     variant_rust_path = get_stub_enum_variant_mapping(module, expr.attr, crate_name)
                     if variant_rust_path:
                         return variant_rust_path
                     # Fall back to path construction using rust_crate from package
                     from spicycrab.codegen.stub_discovery import get_all_stub_packages
+
                     pkgs = get_all_stub_packages()
                     pkg = pkgs.get(crate_name)
                     if pkg:
@@ -2380,7 +2375,8 @@ class RustEmitter:
         # Handle &str type: "x".to_string() -> "x"
         # Also handles wrapped types containing &str
         # Also handle generic reference types like &Q, &K which expect &str for string literals
-        if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type or (rust_type.startswith("&") and len(rust_type) <= 3):
+        is_ref_type = rust_type.startswith("&") and len(rust_type) <= 3
+        if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type or is_ref_type:
             if arg.endswith(".to_string()"):
                 return arg[:-12]  # Remove .to_string()
             # If arg is a simple identifier (variable), borrow it
@@ -2415,12 +2411,14 @@ class RustEmitter:
             return arg
 
         # Handle explicit reference types like &T, &str, &[u8], &mut T, etc.
-        # If the param_type starts with & and arg is an identifier, borrow it
-        if rust_type.startswith("&") and arg.isidentifier() and not arg.startswith("&"):
+        # If the param_type starts with & and arg doesn't already start with &, borrow it
+        # This handles both identifiers (variables) and expressions (method calls)
+        if rust_type.startswith("&") and not arg.startswith("&"):
             # Distinguish between &mut and & references
             if rust_type.startswith("&mut "):
-                # Track that this variable needs to be declared with `mut`
-                self.ctx.mut_vars.add(arg)
+                # Track that this variable needs to be declared with `mut` (only for identifiers)
+                if arg.isidentifier():
+                    self.ctx.mut_vars.add(arg)
                 return f"&mut {arg}"
             return f"&{arg}"
 
@@ -2469,7 +2467,8 @@ class RustEmitter:
         # Convert hyphenated crate names to underscored Rust identifiers
         # Pattern: word-word:: -> word_word::
         import re
-        rust_code = re.sub(r'(\b\w+)-(\w+)::', r'\1_\2::', rust_code)
+
+        rust_code = re.sub(r"(\b\w+)-(\w+)::", r"\1_\2::", rust_code)
 
         # Transform args based on param_types if available
         # Use getattr since not all mapping types have param_types
