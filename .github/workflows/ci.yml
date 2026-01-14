@@ -33,7 +33,7 @@ jobs:
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
 
       - name: Cache sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/sccache
           key: sccache-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
@@ -99,7 +99,7 @@ jobs:
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
 
       - name: Cache sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/sccache
           key: sccache-rust-check-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
