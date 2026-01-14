@@ -36,6 +36,7 @@ from spicycrab.ir.nodes import (
     IRExpression,
     IRExprStmt,
     IRFor,
+    IRFormattedValue,
     IRFString,
     IRFunction,
     IRGenericType,
@@ -142,6 +143,8 @@ class EmitterContext:
     assigning_to_result_type: bool = False
     # Variables that need to be declared with `mut` (used with &mut)
     mut_vars: set[str] = field(default_factory=set)
+    # Variables with Option types (for comparison wrapping) - function-scoped
+    option_vars: set[str] = field(default_factory=set)
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -881,6 +884,14 @@ class RustEmitter:
             self.ctx.in_result_context = self._is_result_type(method.return_type)
             self.ctx.in_option_context = self._is_option_type(method.return_type)
 
+            # Clear and populate option_vars for this method (function-scoped)
+            prev_option_vars = self.ctx.option_vars
+            self.ctx.option_vars = set()
+            # Add parameters with Option types to option_vars
+            for param in method.params:
+                if self._is_option_type(param.type):
+                    self.ctx.option_vars.add(param.name)
+
             # Regular method body
             self.ctx.indent += 1
             for i, stmt in enumerate(method.body):
@@ -893,6 +904,7 @@ class RustEmitter:
             # Restore previous context
             self.ctx.in_result_context = prev_result_context
             self.ctx.in_option_context = prev_option_context
+            self.ctx.option_vars = prev_option_vars
 
         lines.append(f"{indent}}}")
 
@@ -967,6 +979,14 @@ class RustEmitter:
         for param in func.params:
             self.ctx.param_types[param.name] = param.type
 
+        # Clear and populate option_vars for this function (function-scoped)
+        prev_option_vars = self.ctx.option_vars
+        self.ctx.option_vars = set()
+        # Add parameters with Option types to option_vars
+        for param in func.params:
+            if self._is_option_type(param.type):
+                self.ctx.option_vars.add(param.name)
+
         # Body - mark last statement for expression return
         self.ctx.indent += 1
         for i, stmt in enumerate(func.body):
@@ -981,6 +1001,7 @@ class RustEmitter:
         self.ctx.in_option_context = prev_option_context
         self.ctx.param_types = prev_param_types
         self.ctx.mut_vars = prev_mut_vars
+        self.ctx.option_vars = prev_option_vars
 
         lines.append(f"{indent}}}")
 
@@ -1202,6 +1223,16 @@ class RustEmitter:
             return f"{indent}{stmt.target} = {value};"
 
         if stmt.is_declaration:
+            # Handle forward declaration (type annotation without value): alg: str
+            # Generate: let mut alg: String;
+            if stmt.value is None and stmt.type_annotation:
+                rust_type = self.resolver.resolve(stmt.type_annotation)
+                type_str = self._extract_type_string(stmt.type_annotation)
+                if type_str:
+                    self.ctx.type_env[stmt.target] = type_str
+                mut = "mut " if (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
+                return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()};"
+
             # Set target type for turbofish inference before emitting value
             if stmt.type_annotation:
                 rust_type = self.resolver.resolve(stmt.type_annotation)
@@ -1233,7 +1264,11 @@ class RustEmitter:
                 # wrap the type in Option<...>
                 if value == "None" and rust_type.name != "Option":
                     rust_type_str = f"Option<{rust_type.to_rust()}>"
+                    self.ctx.option_vars.add(stmt.target)
                     return f"{indent}let {mut}{stmt.target}: {rust_type_str} = {value};"
+                # Track Option-typed variables for comparison wrapping
+                if rust_type.name == "Option":
+                    self.ctx.option_vars.add(stmt.target)
                 # Wrap non-None values in Some() for Option types
                 # But don't wrap function/method calls that already return Option types
                 is_call = isinstance(stmt.value, (IRCall, IRMethodCall))
@@ -1421,11 +1456,26 @@ class RustEmitter:
         self.ctx.indent -= 1
 
         for elif_cond, elif_body in stmt.elif_clauses:
-            cond = self.emit_expression(elif_cond)
-            lines.append(f"{indent}}} else if {cond} {{")
+            # Check for "x is not None" patterns in elif clauses
+            elif_unwrapped = self._extract_is_not_none_vars(elif_cond)
+            if len(elif_unwrapped) == 1:
+                var_name = elif_unwrapped[0]
+                lines.append(f"{indent}}} else if let Some({var_name}) = {var_name} {{")
+            elif len(elif_unwrapped) > 1:
+                some_pattern = ", ".join(f"Some({v})" for v in elif_unwrapped)
+                var_tuple = ", ".join(elif_unwrapped)
+                lines.append(f"{indent}}} else if let ({some_pattern}) = ({var_tuple}) {{")
+            else:
+                cond = self.emit_expression(elif_cond)
+                lines.append(f"{indent}}} else if {cond} {{")
             self.ctx.indent += 1
+            # Track unwrapped variables for the elif body
+            for var in elif_unwrapped:
+                self.ctx.unwrapped_options.add(var)
             for s in elif_body:
                 lines.append(self.emit_statement(s))
+            for var in elif_unwrapped:
+                self.ctx.unwrapped_options.discard(var)
             self.ctx.indent -= 1
 
         if stmt.else_body:
@@ -1970,6 +2020,19 @@ class RustEmitter:
             if self._looks_like_string(left) or self._looks_like_string(right):
                 return f'format!("{{}}{{}}", {left}, {right})'
 
+        # Handle Option<T> == T comparisons by wrapping the non-Option side in Some()
+        # Python: if opt_var == "value" -> Rust: if opt_var == Some("value".to_string())
+        # Only applies when the Option variable is tracked in option_vars (function-scoped)
+        if expr.op in (BinaryOp.EQ, BinaryOp.NE):
+            # Check if left side is an Option variable and right is not None
+            if isinstance(expr.left, IRName) and expr.left.name in self.ctx.option_vars:
+                if right != "None" and not right.startswith("Some("):
+                    right = f"Some({right})"
+            # Check if right side is an Option variable and left is not None
+            elif isinstance(expr.right, IRName) and expr.right.name in self.ctx.option_vars:
+                if left != "None" and not left.startswith("Some("):
+                    left = f"Some({left})"
+
         op = BINOP_MAP.get(expr.op, "+")
 
         # Add parentheses around nested binary ops to preserve precedence
@@ -2301,10 +2364,12 @@ class RustEmitter:
         result = rust_code.replace(old_pattern, new_pattern)
 
         # Add .cloned() to convert Option<&T> to Option<T>
+        # Skip if .cloned() is already present (e.g., from stub mapping)
         if needs_cloned and method in ("get_one", "try_get_one"):
-            # Find the closing paren of the method call and add .cloned()
-            # Simple case: result ends with the argument and )
-            result = result + ".cloned()"
+            if ".cloned()" not in result:
+                # Find the closing paren of the method call and add .cloned()
+                # Simple case: result ends with the argument and )
+                result = result + ".cloned()"
 
         log_decision(
             "turbofish_injection",
@@ -3124,8 +3189,15 @@ class RustEmitter:
                 escaped = escaped.replace('"', '\\"')
                 escaped = escaped.replace("{", "{{").replace("}", "}}")
                 format_str += escaped
+            elif isinstance(part, IRFormattedValue):
+                # Expression with format spec: f"{value:x}" -> format!("{:x}", value)
+                if part.format_spec:
+                    format_str += "{:" + part.format_spec + "}"
+                else:
+                    format_str += "{}"
+                args.append(self.emit_expression(part.value))
             else:
-                # Expression part
+                # Expression part without format spec
                 format_str += "{}"
                 args.append(self.emit_expression(part))
 

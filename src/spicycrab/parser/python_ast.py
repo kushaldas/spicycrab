@@ -26,6 +26,7 @@ from spicycrab.ir.nodes import (
     IRExpression,
     IRExprStmt,
     IRFor,
+    IRFormattedValue,
     IRFString,
     IRFunction,
     IRIf,
@@ -850,7 +851,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             return IRAttrAssign(
                 obj=obj,
                 attr=attr_name,
-                value=value if value else IRLiteral(value=None),
+                value=value,  # None if no value (forward declaration)
                 type_annotation=type_annotation,
                 line=node.lineno,
             )
@@ -877,7 +878,7 @@ class PythonASTVisitor(ast.NodeVisitor):
 
         return IRAssign(
             target=target_name,
-            value=value if value else IRLiteral(value=None),
+            value=value,  # None if no value (forward declaration)
             type_annotation=type_annotation,
             is_declaration=True,
             is_mutable=False,  # Default to immutable
@@ -1210,8 +1211,21 @@ class PythonASTVisitor(ast.NodeVisitor):
                 # String literal part
                 parts.append(IRLiteral(value=value.value, line=node.lineno))
             elif isinstance(value, ast.FormattedValue):
-                # Expression part
-                parts.append(self._visit_expression(value.value))
+                # Expression part with optional format spec
+                expr = self._visit_expression(value.value)
+                format_spec = ""
+                if value.format_spec:
+                    # format_spec is a JoinedStr - extract the literal parts
+                    spec_parts = []
+                    for spec_val in value.format_spec.values:
+                        if isinstance(spec_val, ast.Constant):
+                            spec_parts.append(str(spec_val.value))
+                        # Complex format specs with expressions are rare, skip for now
+                    format_spec = "".join(spec_parts)
+                if format_spec:
+                    parts.append(IRFormattedValue(value=expr, format_spec=format_spec, line=node.lineno))
+                else:
+                    parts.append(expr)
             else:
                 parts.append(self._visit_expression(value))
         return IRFString(parts=parts, line=node.lineno)

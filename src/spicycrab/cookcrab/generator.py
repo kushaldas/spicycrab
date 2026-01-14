@@ -1857,7 +1857,7 @@ STD_METHOD_STUBS: dict[tuple[str, str, str], tuple[str, bool, bool, str | None, 
         None,  # param_types
     ),
     ("sha2", "Sha256", "finalize_hex"): (
-        "hex::encode({self}.finalize())",
+        'format!("{:x}", {self}.finalize())',
         False,  # returns_self
         False,  # needs_result
         "String",  # returns_type
@@ -1875,6 +1875,13 @@ STD_METHOD_STUBS: dict[tuple[str, str, str], tuple[str, bool, bool, str | None, 
         False,  # returns_self
         False,  # needs_result
         "GenericArray<u8, U64>",  # returns_type
+        None,  # param_types
+    ),
+    ("sha2", "Sha512", "finalize_hex"): (
+        'format!("{:x}", {self}.finalize())',
+        False,  # returns_self
+        False,  # needs_result
+        "String",  # returns_type
         None,  # param_types
     ),
     # serde_json Value methods that return references - need .cloned() for owned values
@@ -1905,6 +1912,57 @@ STD_METHOD_STUBS: dict[tuple[str, str, str], tuple[str, bool, bool, str | None, 
         False,  # returns_self
         False,  # needs_result
         "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    # clap_builder ArgMatches methods - need special handling for return types
+    # (clap re-exports from clap_builder, so methods are defined there)
+    ("clap_builder", "ArgMatches", "get_many"): (
+        "{self}.get_many::<String>({arg0}).map(|v| v.cloned().collect::<Vec<_>>()).unwrap_or_default()",
+        False,  # returns_self
+        False,  # needs_result
+        "Vec<String>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "get_one"): (
+        "{self}.get_one::<String>({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<String>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "subcommand_name"): (
+        "{self}.subcommand_name().map(|s| s.to_string())",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<String>",  # returns_type
+        None,  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "get_flag"): (
+        "{self}.get_flag({arg0})",
+        False,  # returns_self
+        False,  # needs_result
+        "bool",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "get_count"): (
+        "{self}.get_count({arg0})",
+        False,  # returns_self
+        False,  # needs_result
+        "u8",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "subcommand"): (
+        "{self}.subcommand().map(|(name, matches)| (name.to_string(), matches.clone()))",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<(String, ArgMatches)>",  # returns_type
+        None,  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "subcommand_matches"): (
+        "{self}.subcommand_matches({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<ArgMatches>",  # returns_type
         ["&str"],  # param_types
     ),
 }
@@ -3380,7 +3438,9 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append(f"# {type_name}.{method_name} hardcoded method")
             lines.append("[[mappings.methods]]")
             lines.append(f'python = "{type_name}.{method_name}"')
-            lines.append(f'rust_code = "{rust_code}"')
+            # Escape double quotes for TOML
+            rust_code_escaped = rust_code.replace('"', '\\"')
+            lines.append(f'rust_code = "{rust_code_escaped}"')
             lines.append("rust_imports = []")
             lines.append(f"needs_result = {'true' if needs_result else 'false'}")
             if returns_self:

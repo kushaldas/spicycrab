@@ -679,7 +679,8 @@ def generate(
         crate_name = crate_info.get("id", crate)
 
         if crate_version is None:
-            crate_version = crate_info.get("max_version", "0.1.0")
+            # Prefer stable versions over pre-release (RC, alpha, beta)
+            crate_version = crate_info.get("max_stable_version") or crate_info.get("max_version", "0.1.0")
             click.echo(f"  Latest version: {crate_version}")
         else:
             click.echo(f"  Requested version: {crate_version}")
@@ -743,7 +744,8 @@ def generate(
             click.echo(f"Generating stubs for source crate: {source_crate}...")
             try:
                 source_info = fetch_crate_info(source_crate)
-                source_version = source_info.get("max_version", "0.1.0")
+                # Prefer stable versions over pre-release
+                source_version = source_info.get("max_stable_version") or source_info.get("max_version", "0.1.0")
                 click.echo(f"  Version: {source_version}")
 
                 source_temp_dir = Path(tempfile.mkdtemp())

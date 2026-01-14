@@ -269,12 +269,24 @@ class IRListComp(IRExpression):
 
 
 @dataclass
+class IRFormattedValue(IRExpression):
+    """A formatted value in an f-string with optional format spec.
+
+    Example: f"{value:x}" has value=IRName("value"), format_spec="x"
+    """
+
+    value: IRExpression | None = None
+    format_spec: str = ""  # e.g., "x", ".2f", ">10s"
+
+
+@dataclass
 class IRFString(IRExpression):
     """An f-string (formatted string literal).
 
     Parts is a list of either:
     - IRLiteral (string parts)
-    - IRExpression (formatted values)
+    - IRFormattedValue (formatted values with optional format specs)
+    - IRExpression (formatted values without format specs)
     """
 
     parts: list[IRExpression] = field(default_factory=list)
