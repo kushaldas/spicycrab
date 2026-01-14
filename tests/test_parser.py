@@ -2,15 +2,13 @@
 
 import pytest
 
-from spicycrab.parser import parse_source
 from spicycrab.ir.nodes import (
-    IRModule,
-    IRFunction,
-    IRClass,
-    IRPrimitiveType,
     IRGenericType,
+    IRModule,
+    IRPrimitiveType,
     PrimitiveType,
 )
+from spicycrab.parser import parse_source
 from spicycrab.utils.errors import TypeAnnotationError, UnsupportedFeatureError
 
 

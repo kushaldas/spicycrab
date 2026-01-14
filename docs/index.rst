@@ -68,6 +68,7 @@ Rust output:
    error_handling
    stdlib
    async
+   actix_web
    cookcrab
    multifile
    code_quality

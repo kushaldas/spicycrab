@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from spicycrab.codegen.stub_discovery import get_stub_cargo_deps
+from spicycrab.codegen.stub_discovery import get_stub_cargo_deps, get_stub_cargo_deps_with_features
 
 if TYPE_CHECKING:
     from spicycrab.ir.nodes import IRModule
@@ -92,6 +92,7 @@ def generate_cargo_toml(
     is_library: bool = False,
     uses_serde_json: bool = False,
     has_async: bool | None = None,
+    project_dir: str | None = None,
 ) -> str:
     """Generate a Cargo.toml file.
 
@@ -104,6 +105,7 @@ def generate_cargo_toml(
         is_library: If True, generate a library crate
         uses_serde_json: If True, include serde_json dependency (for Any type)
         has_async: If True, include tokio dependency. If None, auto-detect from modules.
+        project_dir: Directory to search for user feature config (pyproject.toml/spicycrab.toml)
 
     Returns:
         Cargo.toml content as string
@@ -159,8 +161,8 @@ def generate_cargo_toml(
         for dep in extra_deps:
             deps[dep.name] = dep
 
-    # Add dependencies from installed stub packages
-    stub_deps = get_stub_cargo_deps()
+    # Add dependencies from installed stub packages (with user features applied)
+    stub_deps = get_stub_cargo_deps_with_features(project_dir=project_dir)
     for dep_name, dep_spec in stub_deps.items():
         if dep_name not in deps:
             # Handle both string version and table spec
@@ -171,6 +173,86 @@ def generate_cargo_toml(
                 features = dep_spec.get("features", [])
                 optional = dep_spec.get("optional", False)
                 deps[dep_name] = CargoDependency(dep_name, version, features=features, optional=optional)
+
+    # Add transitive dependencies from stub packages (e.g., hex from sha2)
+    transitive_deps = get_stub_cargo_deps()
+    for dep_name, dep_spec in transitive_deps.items():
+        if dep_name not in deps:
+            # Handle both string version and table spec
+            if isinstance(dep_spec, str):
+                deps[dep_name] = CargoDependency(dep_name, dep_spec)
+            elif isinstance(dep_spec, dict):
+                version = dep_spec.get("version", "")
+                features = dep_spec.get("features", [])
+                optional = dep_spec.get("optional", False)
+                deps[dep_name] = CargoDependency(dep_name, version, features=features, optional=optional)
+
+    # Detect passthrough Rust attributes and add required dependencies
+    if modules:
+        import re
+
+        uses_serde_derive = False
+        uses_clap_derive = False
+        uses_redis_aio = False
+
+        for module in modules:
+            # Check function rust_attributes
+            for func in module.functions:
+                for attr in func.rust_attributes:
+                    if "#[derive(" in attr:
+                        match = re.search(r"#\[derive\(([^)]+)\)", attr)
+                        if match:
+                            derives = [d.strip() for d in match.group(1).split(",")]
+                            if "Serialize" in derives or "Deserialize" in derives:
+                                uses_serde_derive = True
+                            if "Parser" in derives:
+                                uses_clap_derive = True
+
+            # Check class rust_attributes
+            for cls in module.classes:
+                for attr in cls.rust_attributes:
+                    if "#[derive(" in attr:
+                        match = re.search(r"#\[derive\(([^)]+)\)", attr)
+                        if match:
+                            derives = [d.strip() for d in match.group(1).split(",")]
+                            if "Serialize" in derives or "Deserialize" in derives:
+                                uses_serde_derive = True
+                            if "Parser" in derives:
+                                uses_clap_derive = True
+
+            # Check imports for redis aio usage
+            for imp in module.imports:
+                if imp.module == "spicycrab_redis":
+                    # Check if async Redis (ConnectionManager) is imported
+                    if imp.names:
+                        for name, _ in imp.names:
+                            if "ConnectionManager" in name or "aio" in name.lower():
+                                uses_redis_aio = True
+
+        # Add serde dependency with derive feature
+        if uses_serde_derive:
+            deps["serde"] = CargoDependency("serde", "1", features=["derive"])
+
+        # Ensure clap has derive feature if Parser is used
+        if uses_clap_derive and "clap" in deps:
+            existing = deps["clap"]
+            features = list(existing.features) if existing.features else []
+            if "derive" not in features:
+                features.append("derive")
+            deps["clap"] = CargoDependency(
+                existing.name, existing.version, features=features, optional=existing.optional
+            )
+
+        # Ensure redis has aio and connection-manager features if async redis is used
+        if uses_redis_aio and "redis" in deps:
+            existing = deps["redis"]
+            features = list(existing.features) if existing.features else []
+            for feat in ["aio", "connection-manager", "tokio-comp"]:
+                if feat not in features:
+                    features.append(feat)
+            deps["redis"] = CargoDependency(
+                existing.name, existing.version, features=features, optional=existing.optional
+            )
 
     # Dependencies section
     if deps:
@@ -224,11 +306,15 @@ def generate_lib_rs(module_names: list[str]) -> str:
     return "\n".join(lines)
 
 
-def generate_main_rs(entry_module: str | None = None) -> str:
+def generate_main_rs(
+    entry_module: str | None = None,
+    crate_name: str | None = None,
+) -> str:
     """Generate a main.rs file.
 
     Args:
         entry_module: Optional module containing main function
+        crate_name: Optional crate name for library projects (uses crate::module::main())
 
     Returns:
         main.rs content
@@ -236,11 +322,18 @@ def generate_main_rs(entry_module: str | None = None) -> str:
     lines: list[str] = []
 
     if entry_module:
-        lines.append(f"mod {entry_module};")
-        lines.append("")
-        lines.append("fn main() {")
-        lines.append(f"    {entry_module}::main();")
-        lines.append("}")
+        if crate_name:
+            # For library projects, call main via crate path
+            lines.append("fn main() {")
+            lines.append(f"    {crate_name}::{entry_module}::main();")
+            lines.append("}")
+        else:
+            # For single-file or direct module inclusion
+            lines.append(f"mod {entry_module};")
+            lines.append("")
+            lines.append("fn main() {")
+            lines.append(f"    {entry_module}::main();")
+            lines.append("}")
     else:
         lines.append("fn main() {")
         lines.append('    println!("Hello from spicycrab!");')

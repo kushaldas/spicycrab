@@ -150,11 +150,15 @@ class TypeParser:
     def _parse_subscript(self, node: ast.Subscript, name: str | None, line: int | None) -> IRType:
         """Parse a subscripted type like List[int] or Dict[str, int]."""
         # Get the base type name
+        module_prefix = None
         if isinstance(node.value, ast.Name):
             base_name = node.value.id
         elif isinstance(node.value, ast.Attribute):
-            # Handle typing.List, etc.
+            # Handle typing.List, web.Data[AppState], etc.
+            # Preserve the module prefix for stub type resolution
             base_name = node.value.attr
+            if isinstance(node.value.value, ast.Name):
+                module_prefix = node.value.value.id
         else:
             raise TypeAnnotationError(
                 f"Unsupported generic base: {ast.dump(node.value)}",
@@ -187,9 +191,10 @@ class TypeParser:
         if base_name in GENERIC_TYPES:
             return IRGenericType(name=base_name, type_args=type_args)
 
-        # User-defined generic class or crate type with type args (e.g., Arc[str])
-        # Return as IRGenericType to preserve type arguments
-        return IRGenericType(name=base_name, type_args=type_args)
+        # User-defined generic class or crate type with type args (e.g., Arc[str], web.Data[AppState])
+        # Include module prefix in name for stub type resolution (e.g., "web.Data")
+        full_name = f"{module_prefix}.{base_name}" if module_prefix else base_name
+        return IRGenericType(name=full_name, type_args=type_args)
 
     def _parse_type_args(self, slice_node: ast.expr, name: str | None, line: int | None) -> list[IRType]:
         """Parse type arguments from a subscript slice."""

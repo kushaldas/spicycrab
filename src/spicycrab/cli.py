@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +13,61 @@ from spicycrab.codegen.cargo import generate_cargo_toml, generate_main_rs
 from spicycrab.codegen.emitter import RustEmitter
 from spicycrab.parser import parse_file
 from spicycrab.utils.errors import CrabpyError
+
+# Type hints
+if False:  # TYPE_CHECKING
+    from spicycrab.ir.nodes import IRModule
+
+
+def _generate_error_conversion_helpers(modules: list[IRModule]) -> str:
+    """Generate error conversion helpers for lib.rs when needed.
+
+    When actix-web handlers return Result<T, anyhow::Error>, we need to convert
+    to an error type that implements ResponseError.
+
+    Due to Rust's orphan rule, we can't impl ResponseError for anyhow::Error directly.
+    Instead, we create a newtype AppError that wraps strings and impl ResponseError.
+    """
+    # Check which crates are used by looking at imports
+    uses_actix_web = False
+
+    for module in modules:
+        for imp in module.imports:
+            if "actix_web" in imp.module or "actix-web" in imp.module:
+                uses_actix_web = True
+
+    # No error conversion needed if not using actix-web
+    if not uses_actix_web:
+        return ""
+
+    # Generate a wrapper type that implements ResponseError
+    # This will be used to convert anyhow::Error at handler boundaries
+    return """
+use std::fmt;
+
+/// Wrapper type for errors to implement ResponseError for actix-web.
+/// This works around Rust's orphan rule (can't impl ResponseError for anyhow::Error).
+#[derive(Debug)]
+pub struct AppError(pub anyhow::Error);
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl actix_web::ResponseError for AppError {
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
+        AppError(err)
+    }
+}
+""".strip()
 
 
 @click.group(invoke_without_command=True)
@@ -63,6 +116,11 @@ def main(ctx: click.Context, version: bool) -> None:
     default=None,
     help="Project name (default: derived from input file/directory name).",
 )
+@click.option(
+    "--debug-log",
+    is_flag=True,
+    help="Enable debug JSON logging to .spicycrab-logs/",
+)
 def transpile(
     input_path: str,
     output: str,
@@ -70,6 +128,7 @@ def transpile(
     verbose: bool,
     format: bool,
     name: str | None,
+    debug_log: bool,
 ) -> None:
     """Transpile Python code to Rust.
 
@@ -81,9 +140,9 @@ def transpile(
 
     try:
         if path.is_file():
-            _transpile_file(path, output_dir, check, verbose, format, name)
+            _transpile_file(path, output_dir, check, verbose, format, name, debug_log)
         elif path.is_dir():
-            _transpile_directory(path, output_dir, check, verbose, format, name)
+            _transpile_directory(path, output_dir, check, verbose, format, name, debug_log)
         else:
             raise click.ClickException(f"Invalid input path: {input_path}")
     except CrabpyError as e:
@@ -97,8 +156,15 @@ def _transpile_file(
     verbose: bool,
     format_code: bool,
     project_name: str | None,
+    debug_log: bool = False,
 ) -> None:
     """Transpile a single Python file."""
+    # Enable debug logging if requested
+    if debug_log:
+        from spicycrab.debug_log import enable_logging
+
+        enable_logging("transpile", input_path.stem)
+
     if verbose:
         click.echo(f"Parsing {input_path}...")
 
@@ -131,6 +197,12 @@ def _transpile_file(
     emitter = RustEmitter(resolver)
     rust_code = emitter.emit_module(ir_module)
 
+    # Validate and format the generated Rust code
+    if format_code:
+        rust_code = _validate_and_format(rust_code, input_path, verbose)
+    else:
+        _validate_rust(rust_code, input_path, verbose)
+
     # Determine if this is a library or binary
     has_main = any(f.name == "main" for f in ir_module.functions)
 
@@ -154,20 +226,25 @@ def _transpile_file(
         if verbose:
             click.echo(f"  Wrote {main_rs}")
 
-    # Generate Cargo.toml
+    # Generate Cargo.toml (look for user feature config in input file's directory)
     cargo_toml = output_dir / "Cargo.toml"
     cargo_content = generate_cargo_toml(
         name=name,
         modules=[ir_module],
         is_library=not has_main,
+        project_dir=str(input_path.parent),
     )
     cargo_toml.write_text(cargo_content)
     if verbose:
         click.echo(f"  Wrote {cargo_toml}")
 
-    # Run rustfmt if requested
-    if format_code:
-        _run_rustfmt(output_dir, verbose)
+    # Save debug log if enabled
+    if debug_log:
+        from spicycrab.debug_log import save_log
+
+        log_path = save_log(output_dir)
+        if log_path and verbose:
+            click.echo(f"  Debug log: {log_path}")
 
     click.echo(
         click.style(
@@ -184,8 +261,15 @@ def _transpile_directory(
     verbose: bool,
     format_code: bool,
     project_name: str | None,
+    debug_log: bool = False,
 ) -> None:
     """Transpile a directory of Python files."""
+    # Enable debug logging if requested
+    if debug_log:
+        from spicycrab.debug_log import enable_logging
+
+        enable_logging("transpile", input_path.name)
+
     py_files = list(input_path.rglob("*.py"))
 
     # Filter out __pycache__ and hidden directories
@@ -263,10 +347,16 @@ def _transpile_directory(
         resolver = resolve_types(module)
         module_name = py_file.stem.replace("-", "_")
 
-        # Use crate_name for main.rs (binary imports from library)
-        crate_name = name if module_name == main_module_name else None
-        emitter = RustEmitter(resolver, local_modules=local_module_set, crate_name=crate_name)
+        # All library modules use crate:: for internal imports
+        # (main.rs uses crate_name:: and is generated separately by generate_main_rs)
+        emitter = RustEmitter(resolver, local_modules=local_module_set, crate_name=None)
         rust_code = emitter.emit_module(module)
+
+        # Validate and format the generated Rust code
+        if format_code:
+            rust_code = _validate_and_format(rust_code, py_file, verbose)
+        else:
+            _validate_rust(rust_code, py_file, verbose)
 
         if module_name == "__init__":
             # __init__.py becomes mod.rs
@@ -281,6 +371,12 @@ def _transpile_directory(
     # Generate lib.rs that exports all modules
     if module_names:
         lib_content = "\n".join(f"pub mod {name};" for name in sorted(module_names))
+
+        # Check if we need error conversion helpers (actix-web + redis/anyhow)
+        extra_lib_content = _generate_error_conversion_helpers(modules)
+        if extra_lib_content:
+            lib_content = lib_content + "\n\n" + extra_lib_content
+
         lib_rs = src_dir / "lib.rs"
         lib_rs.write_text(lib_content + "\n")
         if verbose:
@@ -288,25 +384,30 @@ def _transpile_directory(
 
     # Generate main.rs
     main_rs = src_dir / "main.rs"
-    main_content = generate_main_rs(None)
+    main_content = generate_main_rs(entry_module=main_module_name, crate_name=name)
     main_rs.write_text(main_content)
     if verbose:
         click.echo(f"  Wrote {main_rs}")
 
-    # Generate Cargo.toml
+    # Generate Cargo.toml (look for user feature config in input directory)
     cargo_toml = output_dir / "Cargo.toml"
     cargo_content = generate_cargo_toml(
         name=name,
         modules=modules,
         is_library=True,
+        project_dir=str(input_path),
     )
     cargo_toml.write_text(cargo_content)
     if verbose:
         click.echo(f"  Wrote {cargo_toml}")
 
-    # Run rustfmt if requested
-    if format_code:
-        _run_rustfmt(output_dir, verbose)
+    # Save debug log if enabled
+    if debug_log:
+        from spicycrab.debug_log import save_log
+
+        log_path = save_log(output_dir)
+        if log_path and verbose:
+            click.echo(f"  Debug log: {log_path}")
 
     click.echo(
         click.style(
@@ -316,34 +417,44 @@ def _transpile_directory(
     )
 
 
-def _run_rustfmt(output_dir: Path, verbose: bool) -> None:
-    """Run rustfmt on generated Rust files."""
-    rustfmt = shutil.which("rustfmt")
-    if not rustfmt:
+def _validate_rust(code: str, source_file: Path, verbose: bool) -> None:
+    """Validate Rust code syntax using syn (via PyO3).
+
+    Raises CrabpyError if the code has syntax errors.
+    """
+    try:
+        from spicycrab.cookcrab._parser import validate_rust_code
+
+        validate_rust_code(code)
         if verbose:
-            click.echo("  rustfmt not found, skipping formatting")
-        return
+            click.echo(f"  ✓ Validated Rust syntax for {source_file.name}")
+    except SyntaxError as e:
+        raise CrabpyError(f"Generated invalid Rust from {source_file}:\n{e}") from e
+    except ImportError:
+        # Fall back silently if Rust extension not available
+        if verbose:
+            click.echo("  (Rust validation unavailable, skipping)")
 
-    src_dir = output_dir / "src"
-    rs_files = list(src_dir.glob("*.rs"))
 
-    for rs_file in rs_files:
-        try:
-            subprocess.run(
-                [rustfmt, str(rs_file)],
-                check=True,
-                capture_output=True,
-            )
-            if verbose:
-                click.echo(f"  Formatted {rs_file}")
-        except subprocess.CalledProcessError as e:
-            if verbose:
-                click.echo(
-                    click.style(
-                        f"  Warning: rustfmt failed on {rs_file}: {e.stderr.decode()}",
-                        fg="yellow",
-                    )
-                )
+def _validate_and_format(code: str, source_file: Path, verbose: bool) -> str:
+    """Validate and format Rust code using syn + prettyplease (via PyO3).
+
+    Returns formatted code if valid, raises CrabpyError if invalid.
+    """
+    try:
+        from spicycrab.cookcrab._parser import validate_and_format_rust
+
+        formatted = validate_and_format_rust(code)
+        if verbose:
+            click.echo(f"  ✓ Validated and formatted {source_file.name}")
+        return formatted
+    except SyntaxError as e:
+        raise CrabpyError(f"Generated invalid Rust from {source_file}:\n{e}") from e
+    except ImportError:
+        # Fall back to rustfmt if Rust extension not available
+        if verbose:
+            click.echo("  (prettyplease unavailable, falling back to rustfmt)")
+        return code
 
 
 @main.command()

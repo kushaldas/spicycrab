@@ -238,3 +238,119 @@ Class with Collections
            self.items.len() == 0
        }
    }
+
+Passthrough Rust Attributes
+---------------------------
+
+spicycrab supports **passthrough Rust attributes** via special comments.
+Comments starting with ``# #[`` are recognized as Rust attributes and
+emitted verbatim in the generated code.
+
+This allows you to add Rust-specific attributes like ``#[derive(...)]``,
+``#[serde(...)]``, ``#[inline]``, or framework-specific attributes like
+``#[get(...)]`` for actix-web.
+
+Basic syntax
+^^^^^^^^^^^^
+
+.. code-block:: python
+
+   # #[derive(Serialize, Deserialize)]
+   # #[serde(rename_all = "camelCase")]
+   @dataclass
+   class EntityDetails:
+       entity_id: str
+       entity_type: str
+       has_trustmark: bool
+
+.. code-block:: rust
+
+   #[derive(Serialize, Deserialize)]
+   #[serde(rename_all = "camelCase")]
+   pub struct EntityDetails {
+       pub entity_id: String,
+       pub entity_type: String,
+       pub has_trustmark: bool,
+   }
+
+Function attributes
+^^^^^^^^^^^^^^^^^^^
+
+Attributes can also be applied to functions:
+
+.. code-block:: python
+
+   # #[inline]
+   def fast_function(x: int) -> int:
+       return x * 2
+
+   # #[get("/.well-known/openid-federation")]
+   async def openid_federation() -> str:
+       return "entity-statement-jwt"
+
+.. code-block:: rust
+
+   #[inline]
+   pub fn fast_function(x: i64) -> i64 {
+       x * 2
+   }
+
+   #[get("/.well-known/openid-federation")]
+   pub async fn openid_federation() -> String {
+       "entity-statement-jwt".to_string()
+   }
+
+Test attributes
+^^^^^^^^^^^^^^^
+
+Use passthrough attributes for test functions:
+
+.. code-block:: python
+
+   # #[tokio::test]
+   async def test_something() -> None:
+       result: int = add(1, 2)
+       assert result == 3
+
+.. code-block:: rust
+
+   #[tokio::test]
+   pub async fn test_something() {
+       let result: i64 = add(1, 2);
+       assert_eq!(result, 3);
+   }
+
+Multiple attributes
+^^^^^^^^^^^^^^^^^^^
+
+Stack multiple attributes on consecutive lines:
+
+.. code-block:: python
+
+   # #[derive(Serialize, Deserialize, Debug, Clone)]
+   # #[serde(rename_all = "camelCase")]
+   # #[serde(deny_unknown_fields)]
+   @dataclass
+   class ApiResponse:
+       status_code: int
+       message: str
+
+.. code-block:: rust
+
+   #[derive(Serialize, Deserialize, Debug, Clone)]
+   #[serde(rename_all = "camelCase")]
+   #[serde(deny_unknown_fields)]
+   pub struct ApiResponse {
+       pub status_code: i64,
+       pub message: String,
+   }
+
+Rules
+^^^^^
+
+1. Comments must start with ``# #[`` (space after ``#`` is required)
+2. Multiple attributes can be stacked on consecutive lines
+3. Attributes are extracted from lines immediately preceding the function/class
+4. Python decorators (``@dataclass``, ``@staticmethod``, etc.) are skipped when looking for attributes
+5. If a ``#[derive(...)]`` is provided via passthrough, the default ``#[derive(Debug, Clone)]`` is not added
+6. For ``async def main()``, if a ``#[...::main]`` attribute is provided, auto-generation of ``#[tokio::main]`` is skipped

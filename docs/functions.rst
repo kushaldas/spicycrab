@@ -119,6 +119,37 @@ Mutable variables
        x
    }
 
+Forward declarations
+^^^^^^^^^^^^^^^^^^^^
+
+Variables can be declared with a type annotation but no initial value.
+This creates an uninitialized variable that must be assigned before use:
+
+.. code-block:: python
+
+   def process(flag: bool) -> str:
+       result: str
+       if flag:
+           result = "yes"
+       else:
+           result = "no"
+       return result
+
+.. code-block:: rust
+
+   pub fn process(flag: bool) -> String {
+       let result: String;
+       if flag {
+           result = "yes".to_string();
+       } else {
+           result = "no".to_string();
+       }
+       result
+   }
+
+This is useful when a variable's value depends on conditional logic,
+similar to Rust's deferred initialization pattern.
+
 Return Statements
 -----------------
 
@@ -237,3 +268,138 @@ range()
        }
        total
    }
+
+F-Strings
+---------
+
+Python f-strings are transpiled to Rust's ``format!`` macro.
+
+Basic f-strings
+^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   def greet(name: str) -> str:
+       return f"Hello, {name}!"
+
+   def show_info(name: str, age: int) -> None:
+       print(f"{name} is {age} years old")
+
+.. code-block:: rust
+
+   pub fn greet(name: String) -> String {
+       format!("Hello, {}!", name)
+   }
+
+   pub fn show_info(name: String, age: i64) {
+       println!("{} is {} years old", name, age);
+   }
+
+Format Specifiers
+^^^^^^^^^^^^^^^^^
+
+Python format specifiers are preserved in the Rust output. This is useful
+for controlling how values are formatted (hex, padding, precision, etc.).
+
+**Hexadecimal formatting:**
+
+.. code-block:: python
+
+   def to_hex(value: int) -> str:
+       return f"{value:x}"
+
+   def to_hex_upper(value: int) -> str:
+       return f"{value:X}"
+
+   def to_hex_padded(value: int) -> str:
+       return f"{value:08x}"
+
+.. code-block:: rust
+
+   pub fn to_hex(value: i64) -> String {
+       format!("{:x}", value)
+   }
+
+   pub fn to_hex_upper(value: i64) -> String {
+       format!("{:X}", value)
+   }
+
+   pub fn to_hex_padded(value: i64) -> String {
+       format!("{:08x}", value)
+   }
+
+**Float precision:**
+
+.. code-block:: python
+
+   def format_price(amount: float) -> str:
+       return f"${amount:.2f}"
+
+   def format_scientific(value: float) -> str:
+       return f"{value:.4e}"
+
+.. code-block:: rust
+
+   pub fn format_price(amount: f64) -> String {
+       format!("${:.2f}", amount)
+   }
+
+   pub fn format_scientific(value: f64) -> String {
+       format!("{:.4e}", value)
+   }
+
+**Width and alignment:**
+
+.. code-block:: python
+
+   def pad_right(s: str) -> str:
+       return f"{s:<10}"
+
+   def pad_left(s: str) -> str:
+       return f"{s:>10}"
+
+   def center(s: str) -> str:
+       return f"{s:^10}"
+
+.. code-block:: rust
+
+   pub fn pad_right(s: String) -> String {
+       format!("{:<10}", s)
+   }
+
+   pub fn pad_left(s: String) -> String {
+       format!("{:>10}", s)
+   }
+
+   pub fn center(s: String) -> String {
+       format!("{:^10}", s)
+   }
+
+**Common format specifiers:**
+
++-------------------+---------------------+----------------------------------+
+| Specifier         | Example             | Description                      |
++===================+=====================+==================================+
+| ``:x``            | ``f"{255:x}"``      | Lowercase hexadecimal            |
++-------------------+---------------------+----------------------------------+
+| ``:X``            | ``f"{255:X}"``      | Uppercase hexadecimal            |
++-------------------+---------------------+----------------------------------+
+| ``:08x``          | ``f"{255:08x}"``    | Hex padded to 8 chars with zeros |
++-------------------+---------------------+----------------------------------+
+| ``:.2f``          | ``f"{3.14159:.2f}"``| Float with 2 decimal places      |
++-------------------+---------------------+----------------------------------+
+| ``:>10``          | ``f"{s:>10}"``      | Right-align in 10 chars          |
++-------------------+---------------------+----------------------------------+
+| ``:<10``          | ``f"{s:<10}"``      | Left-align in 10 chars           |
++-------------------+---------------------+----------------------------------+
+| ``:^10``          | ``f"{s:^10}"``      | Center in 10 chars               |
++-------------------+---------------------+----------------------------------+
+| ``:b``            | ``f"{10:b}"``       | Binary format                    |
++-------------------+---------------------+----------------------------------+
+| ``:o``            | ``f"{64:o}"``       | Octal format                     |
++-------------------+---------------------+----------------------------------+
+
+.. note::
+
+   Format specifiers in Rust's ``format!`` macro are similar but not identical
+   to Python's. Most common specifiers work the same way.

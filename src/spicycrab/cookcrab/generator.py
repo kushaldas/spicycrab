@@ -12,11 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from spicycrab.debug_log import increment, log_decision
+
 if TYPE_CHECKING:
     from spicycrab.cookcrab._parser import (
         RustCrate,
         RustFunction,
         RustMethod,
+        RustParam,
         RustTypeAlias,
     )
 
@@ -75,6 +78,230 @@ def python_safe_name(name: str) -> str:
     if name in PYTHON_RESERVED_KEYWORDS:
         return f"{name}_"
     return name
+
+
+def make_unique_param_names(params: list) -> list[str]:
+    """Make parameter names unique, handling duplicate `_` parameters.
+
+    Rust allows multiple parameters named `_` (unused), but Python doesn't.
+    This function renames duplicates to `_1`, `_2`, etc.
+    """
+    seen: dict[str, int] = {}
+    result: list[str] = []
+
+    for param in params:
+        name = param.name
+        safe_name = python_safe_name(name)
+
+        if safe_name in seen:
+            # Duplicate found, add suffix
+            count = seen[safe_name]
+            seen[safe_name] = count + 1
+            unique_name = f"{safe_name}{count}"
+        else:
+            seen[safe_name] = 1
+            unique_name = safe_name
+
+        result.append(unique_name)
+
+    return result
+
+
+def camel_to_snake(name: str) -> str:
+    """Convert CamelCase to snake_case."""
+    import re
+
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
+# Common private module names in Rust crates
+# These modules typically contain implementation details and types are re-exported at parent level
+COMMON_PRIVATE_MODULES: set[str] = {
+    # Organization patterns
+    "builder",
+    "builders",
+    "parser",
+    "parsers",
+    "matches",
+    "matcher",
+    "internal",
+    "private",
+    "detail",
+    "details",
+    "impl",
+    "impls",
+    "core",
+    "util",
+    "utils",
+    "helper",
+    "helpers",
+    "common",
+    "types",
+    "primitives",
+    # Specific patterns
+    "alg",
+    "algorithm",
+    "algorithms",
+    "direct",  # josekit: jwe::alg::direct
+    "enc",
+    "encoding",
+    "dec",
+    "decoding",
+    "ser",
+    "de",
+    "fmt",
+    "format",
+    "io",
+    "net",
+    "sync",
+    "async_impl",
+    "blocking",
+    "runtime",
+    "error",
+    "errors",
+    "result",
+    # clap internal modules
+    "command",
+    "arg",
+    # reqwest internal modules
+    "response",
+    "request",
+    "client",
+    "wasm",
+    # config crate internal modules
+    "config",  # config::config::Config -> config::Config
+    "file",
+    "value",
+    "source",
+    # Date/time patterns (chrono)
+    "naive",
+    "datetime",
+    "date",
+    "time",
+    "local",
+    "utc",
+    "offset",
+    "duration",
+    "weekday",
+    "month",
+    "fixed",
+    # Logging patterns
+    "log_impl",
+    "logger",
+    "logging",
+    # Block API patterns (sha2, digest crates)
+    "block_api",
+    # TLS/rustls internal modules
+    "webpki",
+    "anchors",
+    "verify",
+    "server_conn",
+    "client_conn",
+    "conn",
+    "tls12",
+    "tls13",
+    "ciphersuites",
+    "suites",
+    # native-tls internal modules (platform-specific implementations)
+    "imp",
+    "schannel",
+    "security_framework",
+    "openssl",
+}
+
+
+def _is_private_module_component(component: str, snake_name: str) -> bool:
+    """Check if a module component looks like a private submodule for a type.
+
+    Private submodules are detected by:
+    1. Component is in the common private modules list
+    2. Exact match with snake_case type name ONLY if it's a compound name (has underscores)
+    3. Snake_name ends with component (e.g., arg_matches ends with matches)
+       but component must be substantial (>= 50% of snake_name length)
+
+    We are conservative to avoid stripping public submodule names like:
+    - jws in jws_header (jws is a real public module)
+    - jwt in jwt_payload (jwt is a real public module)
+    - jwk in Jwk (jwk is the public module where Jwk lives)
+    """
+    # Check against common private module names
+    if component in COMMON_PRIVATE_MODULES:
+        return True
+
+    # Exact match with compound names only (e.g., jws_header for JwsHeader)
+    # For simple names like Jwk in jwk, the module is likely public, not private
+    if component == snake_name and "_" in snake_name:
+        return True
+
+    # Snake_name ends with _component and component is substantial
+    # e.g., arg_matches ends with matches, so strip "matches" module
+    suffix_with_underscore = f"_{component}"
+    if snake_name.endswith(suffix_with_underscore) and len(component) >= len(snake_name) * 0.5:
+        return True
+
+    return False
+
+
+def get_public_module_path(module_path: str, type_name: str) -> str:
+    """Get the public module path for a type.
+
+    Many Rust crates define types in private submodules and re-export them
+    at the parent level. For example:
+    - JwsHeader is defined in jws::jws_header but re-exported as jws::JwsHeader
+    - ArgMatches is defined in parser::matches but re-exported as clap::ArgMatches
+    - Command is defined in builder::command but re-exported as clap::Command
+    - Jwk is defined in jwk::jwk but re-exported as jwk::Jwk
+
+    This function recursively strips private module components until we reach
+    a public-looking path. It uses heuristics to detect private submodules:
+    1. Component is a common private module name (builder, parser, internal, etc.)
+    2. Component matches the snake_case type name exactly (only for compound names)
+    3. Snake_case type name contains the component
+    4. Repeated module name (e.g., jwk::jwk -> jwk)
+
+    Returns empty string if the type appears to be exported at the crate root.
+    """
+    if not module_path:
+        return ""
+
+    parts = module_path.split("::")
+    if not parts:
+        return module_path
+
+    # Get the snake_case version of the type name
+    snake_name = camel_to_snake(type_name)
+
+    # First, strip repeated module components (e.g., jwk::jwk -> jwk)
+    # This handles cases like josekit::jwk::jwk::Jwk -> josekit::jwk::Jwk
+    original_parts_count = len(parts)
+    while len(parts) >= 2 and parts[-1] == parts[-2]:
+        parts.pop()
+
+    # Then recursively strip private-looking module components from the end
+    while parts and _is_private_module_component(parts[-1], snake_name):
+        parts.pop()
+
+    result = "::".join(parts)
+    if len(parts) != original_parts_count:
+        log_decision(
+            "module_path_stripped",
+            original=module_path,
+            result=result,
+            type_name=type_name,
+        )
+        increment("module_paths_stripped")
+    return result
+
+
+def escape_docstring(doc: str) -> str:
+    """Escape a string for use in a Python docstring.
+
+    Escapes backslashes to prevent Python from interpreting them as
+    escape sequences (e.g., \\u{1f600} in Rust code examples).
+    """
+    # Escape backslashes so \u doesn't become a unicode escape
+    return doc.replace("\\", "\\\\")
 
 
 # Rust to Python type mapping
@@ -223,7 +450,13 @@ def extract_return_type_name(return_type: str | None, self_type: str) -> str | N
     if rt.startswith("impl "):
         return None
 
-    # Skip primitive types - no need to track these
+    # Skip unit type and booleans - no need to track these for chaining
+    skip_types = {"()", "bool"}
+    if rt in skip_types:
+        return None
+
+    # Return primitive types as-is - needed for type coercion (.into())
+    # The caller can use this to add type conversions
     primitive_types = {
         "i8",
         "i16",
@@ -235,16 +468,14 @@ def extract_return_type_name(return_type: str | None, self_type: str) -> str | N
         "u64",
         "f32",
         "f64",
-        "bool",
         "char",
         "str",
         "String",
-        "()",
         "usize",
         "isize",
     }
     if rt in primitive_types:
-        return None
+        return rt  # Return the primitive type for type conversion info
 
     # Skip if result is empty or just punctuation
     if not rt or rt in ("()", "(,)", ""):
@@ -674,6 +905,608 @@ class RwLockWriteGuard(Generic[T]):
             ("RwLock.new", "tokio::sync::RwLock::new({arg0})"),
         ],
     ),
+    # =========================================================================
+    # actix-web types
+    # =========================================================================
+    ("actix-web", "HttpResponse"): (
+        # Class stub for HttpResponse and HttpResponseBuilder
+        '''
+class HttpResponse:
+    """HTTP response type.
+
+    Use the static methods to create responses with specific status codes,
+    then chain builder methods to set body, headers, etc.
+
+    Maps to actix_web::HttpResponse in Rust.
+
+    Example:
+        return HttpResponse.Ok().body("Hello World!")
+        return HttpResponse.Ok().json({"key": "value"})
+        return HttpResponse.NotFound().body("Not found")
+    """
+
+    @staticmethod
+    def Ok() -> "HttpResponseBuilder":
+        """Creates a 200 OK response builder."""
+        ...
+
+    @staticmethod
+    def Created() -> "HttpResponseBuilder":
+        """Creates a 201 Created response builder."""
+        ...
+
+    @staticmethod
+    def Accepted() -> "HttpResponseBuilder":
+        """Creates a 202 Accepted response builder."""
+        ...
+
+    @staticmethod
+    def NoContent() -> "HttpResponseBuilder":
+        """Creates a 204 No Content response builder."""
+        ...
+
+    @staticmethod
+    def BadRequest() -> "HttpResponseBuilder":
+        """Creates a 400 Bad Request response builder."""
+        ...
+
+    @staticmethod
+    def Unauthorized() -> "HttpResponseBuilder":
+        """Creates a 401 Unauthorized response builder."""
+        ...
+
+    @staticmethod
+    def Forbidden() -> "HttpResponseBuilder":
+        """Creates a 403 Forbidden response builder."""
+        ...
+
+    @staticmethod
+    def NotFound() -> "HttpResponseBuilder":
+        """Creates a 404 Not Found response builder."""
+        ...
+
+    @staticmethod
+    def InternalServerError() -> "HttpResponseBuilder":
+        """Creates a 500 Internal Server Error response builder."""
+        ...
+
+
+class HttpResponseBuilder:
+    """Builder for constructing HTTP responses.
+
+    Returned by HttpResponse status methods. Chain methods to configure
+    the response body, headers, and content type.
+    """
+
+    def body(self, data: str) -> "HttpResponse":
+        """Set the response body as a string."""
+        ...
+
+    def json(self, data: object) -> "HttpResponse":
+        """Set the response body as JSON."""
+        ...
+
+    def content_type(self, ct: str) -> "HttpResponseBuilder":
+        """Set the Content-Type header."""
+        ...
+
+    def insert_header(self, header: tuple[str, str]) -> "HttpResponseBuilder":
+        """Insert a custom header."""
+        ...
+
+    def finish(self) -> "HttpResponse":
+        """Finish building and return the response."""
+        ...
+''',
+        # Type mapping
+        "actix_web::HttpResponse",
+        # Function mappings for static constructors
+        [
+            ("HttpResponse.Ok", "actix_web::HttpResponse::Ok()"),
+            ("HttpResponse.Created", "actix_web::HttpResponse::Created()"),
+            ("HttpResponse.Accepted", "actix_web::HttpResponse::Accepted()"),
+            ("HttpResponse.NoContent", "actix_web::HttpResponse::NoContent()"),
+            ("HttpResponse.BadRequest", "actix_web::HttpResponse::BadRequest()"),
+            ("HttpResponse.Unauthorized", "actix_web::HttpResponse::Unauthorized()"),
+            ("HttpResponse.Forbidden", "actix_web::HttpResponse::Forbidden()"),
+            ("HttpResponse.NotFound", "actix_web::HttpResponse::NotFound()"),
+            ("HttpResponse.InternalServerError", "actix_web::HttpResponse::InternalServerError()"),
+        ],
+    ),
+    ("actix-web", "App"): (
+        # Class stub for App builder
+        '''
+class App:
+    """Application builder for configuring actix-web services.
+
+    Create with App.new(), then chain methods to add routes, middleware,
+    and application data.
+
+    Maps to actix_web::App in Rust.
+
+    Example:
+        app = App.new().app_data(Data.new(state)).service(handler)
+    """
+
+    @staticmethod
+    def new() -> "App":
+        """Create a new application builder."""
+        ...
+
+    def app_data(self, data: object) -> "App":
+        """Set application-wide shared data.
+
+        Data is wrapped in web::Data<T> and can be extracted in handlers.
+        """
+        ...
+
+    def service(self, handler: object) -> "App":
+        """Register an HTTP service (handler function)."""
+        ...
+
+    def route(self, path: str, route: object) -> "App":
+        """Configure a route for a specific path and method."""
+        ...
+
+    def wrap(self, middleware: object) -> "App":
+        """Wrap the application with middleware."""
+        ...
+
+    def configure(self, f: object) -> "App":
+        """Run external configuration as part of application building."""
+        ...
+''',
+        # Type mapping
+        "actix_web::App",
+        # Function mappings
+        [
+            ("App.new", "actix_web::App::new()"),
+        ],
+    ),
+    ("actix-web", "HttpServer"): (
+        # Class stub for HttpServer
+        '''
+class HttpServer:
+    """HTTP server that manages worker threads and connections.
+
+    Create with HttpServer.new() passing an App factory, then configure
+    bindings and run the server.
+
+    Maps to actix_web::HttpServer in Rust.
+
+    Example:
+        HttpServer.new(lambda: App.new().service(index))
+            .bind("127.0.0.1:8080")
+            .run()
+    """
+
+    @staticmethod
+    def new(factory: object) -> "HttpServer":
+        """Create a new HTTP server with an application factory.
+
+        The factory is called for each worker thread to create the App.
+        """
+        ...
+
+    def bind(self, addr: str) -> "HttpServer":
+        """Bind to a socket address (e.g., "127.0.0.1:8080")."""
+        ...
+
+    def bind_rustls(self, addr: str, config: object) -> "HttpServer":
+        """Bind with TLS using rustls."""
+        ...
+
+    def workers(self, num: int) -> "HttpServer":
+        """Set the number of worker threads (default: number of CPUs)."""
+        ...
+
+    async def run(self) -> None:
+        """Start the server and wait for it to finish."""
+        ...
+''',
+        # Type mapping
+        "actix_web::HttpServer",
+        # Function mappings (static constructors only, methods go in STD_METHOD_STUBS)
+        [
+            ("HttpServer.new", "actix_web::HttpServer::new(move || {arg0})"),
+        ],
+    ),
+    ("actix-web", "Data"): (
+        # Class stub for web::Data (shared application state)
+        '''
+class Data(Generic[T]):
+    """Shared application state extractor.
+
+    Wraps data in Arc for thread-safe sharing between handlers.
+    Register with App.app_data() and extract in handler parameters.
+
+    Maps to actix_web::web::Data<T> in Rust.
+
+    Example:
+        # In main:
+        state = Data.new(AppState())
+        app = App.new().app_data(state)
+
+        # In handler:
+        async def index(data: Data[AppState]) -> HttpResponse:
+            return HttpResponse.Ok().body(data.app_name)
+    """
+
+    @staticmethod
+    def new(value: T) -> "Data[T]":
+        """Create new shared application data."""
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Data",
+        # Function mappings
+        [
+            ("Data.new", "actix_web::web::Data::new({arg0})"),
+        ],
+    ),
+    ("actix-web", "Query"): (
+        # Class stub for web::Query (query string extractor)
+        '''
+class Query(Generic[T]):
+    """Query string parameter extractor.
+
+    Extracts typed data from the URL query string.
+    The type T must implement serde::Deserialize.
+
+    Maps to actix_web::web::Query<T> in Rust.
+
+    Example:
+        @dataclass
+        class Params:
+            name: str
+            page: int
+
+        async def search(params: Query[Params]) -> HttpResponse:
+            return HttpResponse.Ok().body(f"Searching for {params.name}")
+    """
+    pass
+''',
+        # Type mapping
+        "actix_web::web::Query",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Json"): (
+        # Class stub for web::Json (JSON extractor/responder)
+        '''
+class Json(Generic[T]):
+    """JSON extractor and responder.
+
+    As extractor: Deserializes JSON request body into type T.
+    As responder: Serializes type T to JSON response.
+
+    Maps to actix_web::web::Json<T> in Rust.
+
+    Example:
+        @dataclass
+        class User:
+            name: str
+            email: str
+
+        async def create_user(user: Json[User]) -> Json[User]:
+            # user.name, user.email are accessible
+            return Json(user)
+    """
+
+    def __init__(self, value: T) -> None:
+        """Create a JSON response from a value."""
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Json",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Form"): (
+        # Class stub for web::Form (form data extractor)
+        '''
+class Form(Generic[T]):
+    """URL-encoded form data extractor.
+
+    Extracts typed data from application/x-www-form-urlencoded request body.
+    The type T must implement serde::Deserialize.
+
+    Maps to actix_web::web::Form<T> in Rust.
+
+    Example:
+        @dataclass
+        class LoginForm:
+            username: str
+            password: str
+
+        async def login(form: Form[LoginForm]) -> HttpResponse:
+            # form.username, form.password are accessible
+            return HttpResponse.Ok().body("Logged in")
+    """
+    pass
+''',
+        # Type mapping
+        "actix_web::web::Form",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Path"): (
+        # Class stub for web::Path (path parameter extractor)
+        '''
+class Path(Generic[T]):
+    """Path parameter extractor.
+
+    Extracts typed data from URL path segments.
+    The type T must implement serde::Deserialize.
+
+    Maps to actix_web::web::Path<T> in Rust.
+
+    Example:
+        # Route: /users/{user_id}
+        async def get_user(path: Path[int]) -> HttpResponse:
+            user_id = path.into_inner()
+            return HttpResponse.Ok().body(f"User {user_id}")
+
+        # Multiple params: /users/{user_id}/posts/{post_id}
+        @dataclass
+        class PathParams:
+            user_id: int
+            post_id: int
+
+        async def get_post(path: Path[PathParams]) -> HttpResponse:
+            return HttpResponse.Ok().body(f"Post {path.post_id}")
+    """
+
+    def into_inner(self) -> T:
+        """Extract the inner value."""
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Path",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "HttpRequest"): (
+        # Class stub for HttpRequest
+        '''
+class HttpRequest:
+    """HTTP request type.
+
+    Contains request metadata like method, URI, headers, etc.
+    Can be extracted in handlers when you need low-level access.
+
+    Maps to actix_web::HttpRequest in Rust.
+
+    Example:
+        async def handler(req: HttpRequest) -> HttpResponse:
+            method = req.method()
+            path = req.path()
+            return HttpResponse.Ok().body(f"{method} {path}")
+    """
+
+    def method(self) -> str:
+        """Get the HTTP method."""
+        ...
+
+    def uri(self) -> str:
+        """Get the request URI."""
+        ...
+
+    def path(self) -> str:
+        """Get the URL path."""
+        ...
+
+    def query_string(self) -> str:
+        """Get the raw query string."""
+        ...
+
+    def headers(self) -> object:
+        """Get request headers."""
+        ...
+''',
+        # Type mapping
+        "actix_web::HttpRequest",
+        # No static constructors
+        [],
+    ),
+    ("actix-web", "Route"): (
+        # Class stub for web::Route (route configuration)
+        '''
+class Route:
+    """Route configuration for HTTP method handlers.
+
+    Created by web::get(), web::post(), etc. functions.
+    Use .to() to attach a handler function.
+
+    Maps to actix_web::web::Route in Rust.
+
+    Example:
+        # Register a GET route
+        app = App.new().route("/", get().to(index))
+
+        # Register a POST route
+        app = App.new().route("/submit", post().to(submit_handler))
+    """
+
+    def to(self, handler: object) -> "Route":
+        """Attach a handler function to this route.
+
+        The handler must be an async function that returns an HttpResponse
+        or impl Responder.
+        """
+        ...
+''',
+        # Type mapping
+        "actix_web::web::Route",
+        # No static constructors (instance method to() is in STD_METHOD_STUBS)
+        [],
+    ),
+    # =========================================================================
+    # clap/clap_builder types
+    # =========================================================================
+    ("clap_builder", "ArgAction"): (
+        # Class stub for ArgAction enum
+        '''
+class ArgAction:
+    """Behavior of arguments when they are encountered while parsing.
+
+    Maps to clap::builder::ArgAction in Rust.
+
+    Common variants:
+    - SetTrue: Flag that sets to true when present
+    - SetFalse: Flag that sets to false when present
+    - Set: Store a single value (default)
+    - Append: Collect multiple values
+    - Count: Count occurrences
+
+    Example:
+        cmd.arg(Arg.new("verbose").short("v").action(ArgAction.SetTrue()))
+    """
+
+    @staticmethod
+    def SetTrue() -> "ArgAction":
+        """Flag that sets to true when present."""
+        ...
+
+    @staticmethod
+    def SetFalse() -> "ArgAction":
+        """Flag that sets to false when present."""
+        ...
+
+    @staticmethod
+    def Set() -> "ArgAction":
+        """Store a single value (default behavior)."""
+        ...
+
+    @staticmethod
+    def Append() -> "ArgAction":
+        """Collect multiple occurrences into a Vec."""
+        ...
+
+    @staticmethod
+    def Count() -> "ArgAction":
+        """Count the number of occurrences."""
+        ...
+
+    @staticmethod
+    def Help() -> "ArgAction":
+        """Print help and exit."""
+        ...
+
+    @staticmethod
+    def Version() -> "ArgAction":
+        """Print version and exit."""
+        ...
+''',
+        # Type mapping
+        "clap_builder::ArgAction",
+        # Function mappings for enum variant constructors
+        [
+            ("ArgAction.SetTrue", "clap_builder::ArgAction::SetTrue"),
+            ("ArgAction.SetFalse", "clap_builder::ArgAction::SetFalse"),
+            ("ArgAction.Set", "clap_builder::ArgAction::Set"),
+            ("ArgAction.Append", "clap_builder::ArgAction::Append"),
+            ("ArgAction.Count", "clap_builder::ArgAction::Count"),
+            ("ArgAction.Help", "clap_builder::ArgAction::Help"),
+            ("ArgAction.Version", "clap_builder::ArgAction::Version"),
+        ],
+    ),
+    ("clap_builder", "ValueHint"): (
+        # Class stub for ValueHint enum
+        '''
+class ValueHint:
+    """Provide shell completion hints for argument values.
+
+    Maps to clap::builder::ValueHint in Rust.
+
+    Example:
+        cmd.arg(Arg.new("file").value_hint(ValueHint.FilePath()))
+    """
+
+    @staticmethod
+    def Unknown() -> "ValueHint":
+        """Unknown hint (default)."""
+        ...
+
+    @staticmethod
+    def Other() -> "ValueHint":
+        """Other type."""
+        ...
+
+    @staticmethod
+    def AnyPath() -> "ValueHint":
+        """Any path (file or directory)."""
+        ...
+
+    @staticmethod
+    def FilePath() -> "ValueHint":
+        """Path to a file."""
+        ...
+
+    @staticmethod
+    def DirPath() -> "ValueHint":
+        """Path to a directory."""
+        ...
+
+    @staticmethod
+    def ExecutablePath() -> "ValueHint":
+        """Path to an executable."""
+        ...
+
+    @staticmethod
+    def CommandName() -> "ValueHint":
+        """Command name."""
+        ...
+
+    @staticmethod
+    def CommandString() -> "ValueHint":
+        """Command string."""
+        ...
+
+    @staticmethod
+    def CommandWithArguments() -> "ValueHint":
+        """Command with arguments."""
+        ...
+
+    @staticmethod
+    def Username() -> "ValueHint":
+        """Username."""
+        ...
+
+    @staticmethod
+    def Hostname() -> "ValueHint":
+        """Hostname."""
+        ...
+
+    @staticmethod
+    def Url() -> "ValueHint":
+        """URL."""
+        ...
+
+    @staticmethod
+    def EmailAddress() -> "ValueHint":
+        """Email address."""
+        ...
+''',
+        # Type mapping
+        "clap_builder::ValueHint",
+        # Function mappings for enum variant constructors
+        [
+            ("ValueHint.Unknown", "clap_builder::ValueHint::Unknown"),
+            ("ValueHint.Other", "clap_builder::ValueHint::Other"),
+            ("ValueHint.AnyPath", "clap_builder::ValueHint::AnyPath"),
+            ("ValueHint.FilePath", "clap_builder::ValueHint::FilePath"),
+            ("ValueHint.DirPath", "clap_builder::ValueHint::DirPath"),
+            ("ValueHint.ExecutablePath", "clap_builder::ValueHint::ExecutablePath"),
+            ("ValueHint.CommandName", "clap_builder::ValueHint::CommandName"),
+            ("ValueHint.CommandString", "clap_builder::ValueHint::CommandString"),
+            ("ValueHint.CommandWithArguments", "clap_builder::ValueHint::CommandWithArguments"),
+            ("ValueHint.Username", "clap_builder::ValueHint::Username"),
+            ("ValueHint.Hostname", "clap_builder::ValueHint::Hostname"),
+            ("ValueHint.Url", "clap_builder::ValueHint::Url"),
+            ("ValueHint.EmailAddress", "clap_builder::ValueHint::EmailAddress"),
+        ],
+    ),
 }
 
 
@@ -736,8 +1569,859 @@ def mpsc_unbounded_channel() -> tuple:
         ["tokio::sync::mpsc"],
         False,
     ),
+    # =========================================================================
+    # actix-web error functions
+    # =========================================================================
+    ("actix-web", "ErrorBadRequest"): (
+        '''
+def ErrorBadRequest(msg: str) -> object:
+    """Create a 400 Bad Request error.
+
+    Use in handlers to return an error response.
+
+    Example:
+        if not valid:
+            return Err(ErrorBadRequest("Invalid input"))
+    """
+    ...
+''',
+        "actix_web::error::ErrorBadRequest({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorUnauthorized"): (
+        '''
+def ErrorUnauthorized(msg: str) -> object:
+    """Create a 401 Unauthorized error."""
+    ...
+''',
+        "actix_web::error::ErrorUnauthorized({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorForbidden"): (
+        '''
+def ErrorForbidden(msg: str) -> object:
+    """Create a 403 Forbidden error."""
+    ...
+''',
+        "actix_web::error::ErrorForbidden({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorNotFound"): (
+        '''
+def ErrorNotFound(msg: str) -> object:
+    """Create a 404 Not Found error."""
+    ...
+''',
+        "actix_web::error::ErrorNotFound({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "ErrorInternalServerError"): (
+        '''
+def ErrorInternalServerError(msg: str) -> object:
+    """Create a 500 Internal Server Error."""
+    ...
+''',
+        "actix_web::error::ErrorInternalServerError({arg0})",
+        ["actix_web::error"],
+        False,
+    ),
+    ("actix-web", "get"): (
+        '''
+def get() -> object:
+    """Create a GET route configuration.
+
+    Use with App.route() to configure a GET endpoint.
+
+    Example:
+        App.new().route("/", get().to(handler))
+    """
+    ...
+''',
+        "actix_web::web::get()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "post"): (
+        '''
+def post() -> object:
+    """Create a POST route configuration."""
+    ...
+''',
+        "actix_web::web::post()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "put"): (
+        '''
+def put() -> object:
+    """Create a PUT route configuration."""
+    ...
+''',
+        "actix_web::web::put()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "delete"): (
+        '''
+def delete() -> object:
+    """Create a DELETE route configuration."""
+    ...
+''',
+        "actix_web::web::delete()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
+    ("actix-web", "patch"): (
+        '''
+def patch() -> object:
+    """Create a PATCH route configuration."""
+    ...
+''',
+        "actix_web::web::patch()",
+        [],  # No import needed - using fully-qualified path
+        False,
+    ),
 }
 
+
+# Hardcoded method stubs for specific method behaviors not captured by parser
+# Format: (crate_name, type_name, method_name) -> (rust_code, returns_self, needs_result, returns_type, param_types)
+# rust_code uses {self} for receiver and {arg0}, {arg1} etc for arguments
+# param_types: list of Rust type strings for each parameter (used to transform args, e.g., &str prevents .to_string())
+STD_METHOD_STUBS: dict[tuple[str, str, str], tuple[str, bool, bool, str | None, list[str] | None]] = {
+    # actix-web HttpServer methods
+    ("actix-web", "HttpServer", "bind"): (
+        "{self}.bind({arg0}).unwrap()",  # bind returns Result, unwrap it
+        True,  # returns_self
+        False,  # needs_result (we already unwrap)
+        None,  # returns_type
+        ["&str"],  # param_types: bind takes &str address
+    ),
+    ("actix-web", "HttpServer", "run"): (
+        "{self}.run().await",  # run() returns Server, need .await
+        False,  # returns_self
+        False,  # needs_result
+        None,  # returns_type
+        None,  # param_types
+    ),
+    # actix-web App methods
+    ("actix-web", "App", "route"): (
+        "{self}.route({arg0}, {arg1})",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        ["&str"],  # param_types: route takes &str path, then Route
+    ),
+    # actix-web Route methods
+    ("actix-web", "Route", "to"): (
+        "{self}.to({arg0})",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        None,  # param_types
+    ),
+    # redis Cmd async methods - convenience wrappers that include .await
+    ("redis", "Cmd", "query_async_await"): (
+        "{self}.query_async({arg0}).await",
+        False,  # returns_self
+        True,  # needs_result - adds ? after .await
+        None,  # returns_type
+        ["&mut ConnectionManager"],  # param_types
+    ),
+    # redis Client async methods
+    ("redis", "Client", "get_connection_manager_await"): (
+        "{self}.get_connection_manager().await",
+        False,  # returns_self
+        True,  # needs_result - adds ?
+        "ConnectionManager",  # returns_type
+        None,  # param_types
+    ),
+    # base64 Engine trait method
+    ("base64", "URL_SAFE_NO_PAD", "decode"): (
+        "base64::engine::general_purpose::URL_SAFE_NO_PAD.decode({arg0})",
+        False,  # returns_self
+        True,  # needs_result - decode returns Result
+        "Vec<u8>",  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("base64", "STANDARD", "decode"): (
+        "base64::engine::general_purpose::STANDARD.decode({arg0})",
+        False,  # returns_self
+        True,  # needs_result
+        "Vec<u8>",  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("base64", "STANDARD_NO_PAD", "decode"): (
+        "base64::engine::general_purpose::STANDARD_NO_PAD.decode({arg0})",
+        False,  # returns_self
+        True,  # needs_result
+        "Vec<u8>",  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("base64", "URL_SAFE", "decode"): (
+        "base64::engine::general_purpose::URL_SAFE.decode({arg0})",
+        False,  # returns_self
+        True,  # needs_result
+        "Vec<u8>",  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("base64", "URL_SAFE_NO_PAD", "encode"): (
+        "base64::engine::general_purpose::URL_SAFE_NO_PAD.encode({arg0})",
+        False,  # returns_self
+        False,  # needs_result - encode returns String
+        "String",  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("base64", "STANDARD", "encode"): (
+        "base64::engine::general_purpose::STANDARD.encode({arg0})",
+        False,  # returns_self
+        False,  # needs_result
+        "String",  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    # josekit JwtPayload convenience methods
+    ("josekit", "JwtPayload", "set_issued_at_now"): (
+        "{self}.set_issued_at(&std::time::SystemTime::now())",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        None,  # param_types
+    ),
+    ("josekit", "JwtPayload", "set_expires_at_hours"): (
+        "{self}.set_expires_at(&(std::time::SystemTime::now() + std::time::Duration::from_secs({arg0} * 3600)))",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        ["u64"],  # param_types - hours as integer
+    ),
+    # josekit .claim() methods return Option<&Value>, need .cloned() to get owned value
+    ("josekit", "JwtPayload", "claim"): (
+        "{self}.claim({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("josekit", "JwsHeader", "claim"): (
+        "{self}.claim({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("josekit", "JweHeader", "claim"): (
+        "{self}.claim({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("josekit", "JwsHeaderSet", "claim"): (
+        "{self}.claim({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("josekit", "JweHeaderSet", "claim"): (
+        "{self}.claim({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("josekit", "JwtPayloadValidator", "claim"): (
+        "{self}.claim({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    # sha2 Sha256 instance methods
+    ("sha2", "Sha256", "update"): (
+        "{self}.update({arg0})",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("sha2", "Sha256", "finalize"): (
+        "{self}.finalize()",
+        False,  # returns_self
+        False,  # needs_result
+        "GenericArray<u8, U32>",  # returns_type (digest output)
+        None,  # param_types
+    ),
+    ("sha2", "Sha256", "finalize_hex"): (
+        'format!("{:x}", {self}.finalize())',
+        False,  # returns_self
+        False,  # needs_result
+        "String",  # returns_type
+        None,  # param_types
+    ),
+    ("sha2", "Sha512", "update"): (
+        "{self}.update({arg0})",
+        True,  # returns_self for chaining
+        False,  # needs_result
+        None,  # returns_type
+        ["&[u8]"],  # param_types
+    ),
+    ("sha2", "Sha512", "finalize"): (
+        "{self}.finalize()",
+        False,  # returns_self
+        False,  # needs_result
+        "GenericArray<u8, U64>",  # returns_type
+        None,  # param_types
+    ),
+    ("sha2", "Sha512", "finalize_hex"): (
+        'format!("{:x}", {self}.finalize())',
+        False,  # returns_self
+        False,  # needs_result
+        "String",  # returns_type
+        None,  # param_types
+    ),
+    # serde_json Value methods that return references - need .cloned() for owned values
+    ("serde_json", "Value", "as_object"): (
+        "{self}.as_object().cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Map<String, Value>>",  # returns_type
+        None,  # param_types
+    ),
+    ("serde_json", "Value", "as_array"): (
+        "{self}.as_array().cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Vec<Value>>",  # returns_type
+        None,  # param_types
+    ),
+    ("serde_json", "Value", "as_str"): (
+        "{self}.as_str().map(|s| s.to_string())",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<String>",  # returns_type
+        None,  # param_types
+    ),
+    # serde_json Map.get returns Option<&Value>, override with .cloned()
+    ("serde_json", "Map", "get"): (
+        "{self}.get({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<Value>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    # clap_builder ArgMatches methods - need special handling for return types
+    # (clap re-exports from clap_builder, so methods are defined there)
+    ("clap_builder", "ArgMatches", "get_many"): (
+        "{self}.get_many::<String>({arg0}).map(|v| v.cloned().collect::<Vec<_>>()).unwrap_or_default()",
+        False,  # returns_self
+        False,  # needs_result
+        "Vec<String>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "get_one"): (
+        "{self}.get_one::<String>({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<String>",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "subcommand_name"): (
+        "{self}.subcommand_name().map(|s| s.to_string())",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<String>",  # returns_type
+        None,  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "get_flag"): (
+        "{self}.get_flag({arg0})",
+        False,  # returns_self
+        False,  # needs_result
+        "bool",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "get_count"): (
+        "{self}.get_count({arg0})",
+        False,  # returns_self
+        False,  # needs_result
+        "u8",  # returns_type
+        ["&str"],  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "subcommand"): (
+        "{self}.subcommand().map(|(name, matches)| (name.to_string(), matches.clone()))",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<(String, ArgMatches)>",  # returns_type
+        None,  # param_types
+    ),
+    ("clap_builder", "ArgMatches", "subcommand_matches"): (
+        "{self}.subcommand_matches({arg0}).cloned()",
+        False,  # returns_self
+        False,  # needs_result
+        "Option<ArgMatches>",  # returns_type
+        ["&str"],  # param_types
+    ),
+}
+
+
+# Hardcoded macro stubs for crates that export macros (macros can't be auto-detected by parsing)
+# Format: crate_name -> list of (python_stub, toml_mapping)
+# python_stub: Python function stub code
+# toml_mapping: dict with keys (python, rust_code, rust_imports, needs_result, param_types)
+CRATE_MACRO_STUBS: dict[str, list[tuple[str, dict]]] = {
+    "serde_json": [
+        (
+            '''
+def json(value: Any) -> "Value":
+    """Convert a Python value to a serde_json::Value.
+
+    Uses the serde_json::json! macro.
+    """
+    ...
+''',
+            {
+                "python": "serde_json.json",
+                "rust_code": "serde_json::json!({arg0})",
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["impl Serialize"],
+            },
+        ),
+    ],
+    "log": [
+        (
+            '''
+def trace(message: str) -> None:
+    """Logs a message at the trace level."""
+    ...
+''',
+            {
+                "python": "log.trace",
+                "rust_code": 'log::trace!("{}", {arg0})',
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["&str"],
+            },
+        ),
+        (
+            '''
+def debug(message: str) -> None:
+    """Logs a message at the debug level."""
+    ...
+''',
+            {
+                "python": "log.debug",
+                "rust_code": 'log::debug!("{}", {arg0})',
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["&str"],
+            },
+        ),
+        (
+            '''
+def info(message: str) -> None:
+    """Logs a message at the info level."""
+    ...
+''',
+            {
+                "python": "log.info",
+                "rust_code": 'log::info!("{}", {arg0})',
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["&str"],
+            },
+        ),
+        (
+            '''
+def warn(message: str) -> None:
+    """Logs a message at the warn level."""
+    ...
+''',
+            {
+                "python": "log.warn",
+                "rust_code": 'log::warn!("{}", {arg0})',
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["&str"],
+            },
+        ),
+        (
+            '''
+def error(message: str) -> None:
+    """Logs a message at the error level."""
+    ...
+''',
+            {
+                "python": "log.error",
+                "rust_code": 'log::error!("{}", {arg0})',
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["&str"],
+            },
+        ),
+        (
+            '''
+def eprintln(message: str) -> None:
+    """Print to stderr."""
+    ...
+''',
+            {
+                "python": "log.eprintln",
+                "rust_code": 'eprintln!("{}", {arg0})',
+                "rust_imports": [],
+                "needs_result": False,
+                "param_types": ["&str"],
+            },
+        ),
+    ],
+}
+
+# Hardcoded type stubs for types that aren't properly detected (e.g., type aliases, internal types)
+# Format: crate_name -> list of (python_stub, type_mapping, function_mappings)
+# function_mappings is list of dicts with keys (python, rust_code, rust_imports, needs_result, param_types)
+CRATE_TYPE_STUBS: dict[str, list[tuple[str, str, list[dict]]]] = {
+    "sha2": [
+        (
+            '''
+class Sha256:
+    """SHA-256 hasher.
+
+    Maps to sha2::Sha256 in Rust (type alias for CoreWrapper<Sha256VarCore>).
+    """
+
+    @staticmethod
+    def digest(data: bytes) -> bytes:
+        """Compute SHA-256 hash of data in one shot.
+
+        Args:
+            data: Bytes to hash
+
+        Returns:
+            32-byte hash digest
+        """
+        ...
+
+    @staticmethod
+    def new() -> "Sha256":
+        """Create a new SHA-256 hasher."""
+        ...
+
+    def update(self, data: bytes) -> None:
+        """Update the hasher with data."""
+        ...
+
+    def finalize(self) -> bytes:
+        """Finalize and return the hash."""
+        ...
+''',
+            "sha2::Sha256",
+            [
+                {
+                    "python": "sha2.Sha256.digest",
+                    "rust_code": "sha2::Sha256::digest({arg0})",
+                    "rust_imports": ["sha2::Sha256", "sha2::Digest"],
+                    "needs_result": False,
+                    "param_types": ["&[u8]"],
+                },
+                {
+                    "python": "sha2.Sha256.new",
+                    "rust_code": "sha2::Sha256::new()",
+                    "rust_imports": ["sha2::Sha256", "sha2::Digest"],
+                    "needs_result": False,
+                    "param_types": [],
+                },
+            ],
+        ),
+        (
+            '''
+class Sha512:
+    """SHA-512 hasher.
+
+    Maps to sha2::Sha512 in Rust.
+    """
+
+    @staticmethod
+    def digest(data: bytes) -> bytes:
+        """Compute SHA-512 hash of data in one shot."""
+        ...
+
+    @staticmethod
+    def new() -> "Sha512":
+        """Create a new SHA-512 hasher."""
+        ...
+''',
+            "sha2::Sha512",
+            [
+                {
+                    "python": "sha2.Sha512.digest",
+                    "rust_code": "sha2::Sha512::digest({arg0})",
+                    "rust_imports": ["sha2::Sha512", "sha2::Digest"],
+                    "needs_result": False,
+                    "param_types": ["&[u8]"],
+                },
+                {
+                    "python": "sha2.Sha512.new",
+                    "rust_code": "sha2::Sha512::new()",
+                    "rust_imports": ["sha2::Sha512", "sha2::Digest"],
+                    "needs_result": False,
+                    "param_types": [],
+                },
+            ],
+        ),
+    ],
+}
+
+# Hardcoded constant stubs for module-level constants (e.g., base64 engines)
+# Format: crate_name -> list of (const_name, python_type, rust_path, method_mappings)
+# method_mappings is list of dicts with keys (method_name, rust_code_template, needs_result, param_types, returns)
+# rust_code_template uses {self} for the constant and {argN} for arguments
+CRATE_CONSTANT_STUBS: dict[str, list[tuple[str, str, str, list[dict]]]] = {
+    "base64": [
+        # URL_SAFE_NO_PAD engine constant
+        (
+            "URL_SAFE_NO_PAD",
+            "GeneralPurpose",
+            "base64::engine::general_purpose::URL_SAFE_NO_PAD",
+            [
+                {
+                    "method_name": "decode",
+                    "rust_code_template": "base64::engine::general_purpose::URL_SAFE_NO_PAD.decode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "Vec<u8>",
+                },
+                {
+                    "method_name": "encode",
+                    "rust_code_template": "base64::engine::general_purpose::URL_SAFE_NO_PAD.encode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": False,
+                    "param_types": ["&[u8]"],
+                    "returns": "String",
+                },
+            ],
+        ),
+        # STANDARD engine constant
+        (
+            "STANDARD",
+            "GeneralPurpose",
+            "base64::engine::general_purpose::STANDARD",
+            [
+                {
+                    "method_name": "decode",
+                    "rust_code_template": "base64::engine::general_purpose::STANDARD.decode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "Vec<u8>",
+                },
+                {
+                    "method_name": "encode",
+                    "rust_code_template": "base64::engine::general_purpose::STANDARD.encode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": False,
+                    "param_types": ["&[u8]"],
+                    "returns": "String",
+                },
+            ],
+        ),
+        # STANDARD_NO_PAD engine constant
+        (
+            "STANDARD_NO_PAD",
+            "GeneralPurpose",
+            "base64::engine::general_purpose::STANDARD_NO_PAD",
+            [
+                {
+                    "method_name": "decode",
+                    "rust_code_template": "base64::engine::general_purpose::STANDARD_NO_PAD.decode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "Vec<u8>",
+                },
+                {
+                    "method_name": "encode",
+                    "rust_code_template": "base64::engine::general_purpose::STANDARD_NO_PAD.encode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": False,
+                    "param_types": ["&[u8]"],
+                    "returns": "String",
+                },
+            ],
+        ),
+        # URL_SAFE engine constant
+        (
+            "URL_SAFE",
+            "GeneralPurpose",
+            "base64::engine::general_purpose::URL_SAFE",
+            [
+                {
+                    "method_name": "decode",
+                    "rust_code_template": "base64::engine::general_purpose::URL_SAFE.decode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "Vec<u8>",
+                },
+                {
+                    "method_name": "encode",
+                    "rust_code_template": "base64::engine::general_purpose::URL_SAFE.encode({arg0})",
+                    "rust_imports": ["base64::Engine"],
+                    "needs_result": False,
+                    "param_types": ["&[u8]"],
+                    "returns": "String",
+                },
+            ],
+        ),
+    ],
+    "josekit": [
+        # Dir - Direct encryption algorithm for JWE
+        (
+            "Dir",
+            "DirectJweAlgorithm",
+            "josekit::jwe::Dir",
+            [
+                {
+                    "method_name": "encrypter_from_bytes",
+                    "rust_code_template": "josekit::jwe::Dir.encrypter_from_bytes({arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "DirectJweEncrypter",
+                },
+                {
+                    "method_name": "encrypter_from_jwk",
+                    "rust_code_template": "josekit::jwe::Dir.encrypter_from_jwk(&{arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&Jwk"],
+                    "returns": "DirectJweEncrypter",
+                },
+                {
+                    "method_name": "decrypter_from_bytes",
+                    "rust_code_template": "josekit::jwe::Dir.decrypter_from_bytes({arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&[u8]"],
+                    "returns": "DirectJweDecrypter",
+                },
+                {
+                    "method_name": "decrypter_from_jwk",
+                    "rust_code_template": "josekit::jwe::Dir.decrypter_from_jwk(&{arg0})",
+                    "rust_imports": ["josekit::jwe::Dir"],
+                    "needs_result": True,
+                    "param_types": ["&Jwk"],
+                    "returns": "DirectJweDecrypter",
+                },
+            ],
+        ),
+    ],
+}
+
+
+# Hardcoded param_types overrides for functions that need explicit reference types
+# This fixes cases where generic types like "T" would cause ownership transfer
+# when the API actually expects borrowing (impl AsRef<T>)
+# Format: crate_name -> {function_python_name -> list of param_types}
+CRATE_FUNCTION_PARAM_OVERRIDES: dict[str, dict[str, list[str]]] = {
+    "base64": {
+        # base64::encode and decode take impl AsRef<[u8]>, so they borrow
+        "base64.encode": ["&[u8]"],
+        "base64.decode": ["&[u8]"],
+        "base64.encode_engine": ["&[u8]", "&E"],
+        "base64.decode_engine": ["&[u8]", "&E"],
+        "base64.decode_engine_vec": ["&[u8]", "&mut Vec<u8>", "&E"],
+        "base64.decode_engine_slice": ["&[u8]", "&mut [u8]", "&E"],
+    },
+}
+
+# Hardcoded type path overrides for types that are re-exported from internal modules
+# Maps (crate_name, type_name) -> public_rust_path
+# Use this when cookcrab generates internal module paths (e.g. redis::cmd::Cmd)
+# but the public API uses a re-export (e.g. redis::Cmd)
+CRATE_TYPE_PATH_OVERRIDES: dict[tuple[str, str], str] = {
+    # redis types - re-exported from internal modules
+    ("redis", "Client"): "redis::Client",
+    ("redis", "Cmd"): "redis::Cmd",
+    ("redis", "Connection"): "redis::Connection",
+    ("redis", "ConnectionManager"): "redis::aio::ConnectionManager",
+    ("redis", "Pipeline"): "redis::Pipeline",
+    ("redis", "RedisError"): "redis::RedisError",
+    ("redis", "RedisResult"): "redis::RedisResult",
+    ("redis", "Value"): "redis::Value",
+    ("redis", "InfoDict"): "redis::InfoDict",
+}
+
+# Static constructor function mappings - convenience functions disguised as static methods
+# These generate TOML function mappings only (no Python stubs - those come from the class definition)
+# Format: (crate_name, python_path) -> (rust_code, rust_imports, needs_result, param_types)
+STATIC_CONSTRUCTOR_MAPPINGS: dict[tuple[str, str], tuple[str, list[str], bool, list[str] | None]] = {
+    # redis Cmd convenience constructors - Cmd.get(key) -> redis::cmd("GET").arg(key)
+    ("redis", "redis.Cmd.get"): (
+        'redis::cmd("GET").arg({arg0})',
+        [],
+        False,
+        ["&str"],
+    ),
+    ("redis", "redis.Cmd.set"): (
+        'redis::cmd("SET").arg({arg0}).arg({arg1})',
+        [],
+        False,
+        ["&str", "&str"],
+    ),
+    ("redis", "redis.Cmd.hget"): (
+        'redis::cmd("HGET").arg({arg0}).arg({arg1})',
+        [],
+        False,
+        ["&str", "&str"],
+    ),
+    ("redis", "redis.Cmd.hset"): (
+        'redis::cmd("HSET").arg({arg0}).arg({arg1}).arg({arg2})',
+        [],
+        False,
+        ["&str", "&str", "&str"],
+    ),
+    ("redis", "redis.Cmd.hgetall"): (
+        'redis::cmd("HGETALL").arg({arg0})',
+        [],
+        False,
+        ["&str"],
+    ),
+    ("redis", "redis.Cmd.smembers"): (
+        'redis::cmd("SMEMBERS").arg({arg0})',
+        [],
+        False,
+        ["&str"],
+    ),
+    ("redis", "redis.Cmd.sismember"): (
+        'redis::cmd("SISMEMBER").arg({arg0}).arg({arg1})',
+        [],
+        False,
+        ["&str", "&str"],
+    ),
+    ("redis", "redis.Cmd.sadd"): (
+        'redis::cmd("SADD").arg({arg0}).arg({arg1})',
+        [],
+        False,
+        ["&str", "&str"],
+    ),
+    ("redis", "redis.Cmd.del_"): (
+        'redis::cmd("DEL").arg({arg0})',
+        [],
+        False,
+        ["&str"],
+    ),
+    ("redis", "redis.Cmd.exists"): (
+        'redis::cmd("EXISTS").arg({arg0})',
+        [],
+        False,
+        ["&str"],
+    ),
+}
 
 # Mapping of methods that require trait imports
 # Format: crate_name -> {method_name -> trait_import}
@@ -815,6 +2499,70 @@ class GeneratedStub:
     init_py: str
     spicycrab_toml: str
     pyproject_toml: str
+
+
+def get_smart_param_type(param: RustParam) -> str:
+    """Get appropriate Rust param_type using structured type info.
+
+    This uses the new RustTypeInfo to make smarter decisions about borrowing:
+    - If type_info.expects_borrow is True (impl AsRef<T>), suggest &T form
+    - If type_info.is_reference is True, keep the reference
+    - Otherwise fall back to the raw rust_type
+
+    This reduces the need for hardcoded CRATE_FUNCTION_PARAM_OVERRIDES.
+    """
+    type_info = param.type_info
+    if type_info is None:
+        # No structured info available, fall back to raw type
+        return param.rust_type
+
+    # If the type is already a reference, use it as-is
+    if type_info.is_reference:
+        return param.rust_type
+
+    # If the type is impl AsRef<X>, suggest &X (borrow form)
+    if type_info.is_impl_trait and type_info.expects_borrow:
+        trait_bound = type_info.trait_bound or ""
+        # Extract inner type from AsRef<X>, Borrow<X>, etc.
+        # e.g., "AsRef<[u8]>" -> "&[u8]"
+        # e.g., "AsRef<str>" -> "&str"
+        import re
+
+        match = re.search(r"AsRef<([^>]+)>|Borrow<([^>]+)>", trait_bound)
+        if match:
+            inner_type = match.group(1) or match.group(2)
+            if inner_type:
+                return f"&{inner_type}"
+
+    # For Into<T> or TryInto<T>, the type takes ownership - use T or the raw type
+    if type_info.is_impl_trait and type_info.expects_owned:
+        # Don't add & for Into bounds
+        return param.rust_type
+
+    # Default: use raw rust_type
+    return param.rust_type
+
+
+def get_param_types_for_function(params: list[RustParam], crate_name: str, func_name: str) -> list[str]:
+    """Get param_types for a function, using type_info when available.
+
+    Checks for hardcoded overrides first, then falls back to smart detection.
+    """
+    # First check for explicit overrides (for backwards compat / special cases)
+    full_func_name = f"{crate_name}.{func_name}"
+    if crate_name in CRATE_FUNCTION_PARAM_OVERRIDES:
+        override_map = CRATE_FUNCTION_PARAM_OVERRIDES[crate_name]
+        if full_func_name in override_map:
+            log_decision(
+                "param_types_override",
+                crate=crate_name,
+                function=func_name,
+                param_types=override_map[full_func_name],
+            )
+            return override_map[full_func_name]
+
+    # Use smart type detection based on type_info
+    return [get_smart_param_type(p) for p in params]
 
 
 def sanitize_rust_type(rust_type: str) -> str:
@@ -1085,11 +2833,11 @@ def generate_method_signature(method: RustMethod, type_name: str) -> str:
     if method.self_type:
         params.append("self")
 
-    for param in method.params:
+    # Make parameter names unique (handles duplicate `_` in Rust)
+    unique_names = make_unique_param_names(method.params)
+    for param, unique_name in zip(method.params, unique_names):
         py_type = rust_type_to_python(param.rust_type)
-        # Use safe name for parameters too
-        safe_param_name = python_safe_name(param.name)
-        params.append(f"{safe_param_name}: {py_type}")
+        params.append(f"{unique_name}: {py_type}")
 
     params_str = ", ".join(params)
 
@@ -1111,11 +2859,11 @@ def generate_static_method_signature(method: RustMethod, type_name: str) -> str:
     """Generate Python static method signature from Rust static method."""
     params = []
 
-    for param in method.params:
+    # Make parameter names unique (handles duplicate `_` in Rust)
+    unique_names = make_unique_param_names(method.params)
+    for param, unique_name in zip(method.params, unique_names):
         py_type = rust_type_to_python(param.rust_type)
-        # Use safe name for parameters too
-        safe_param_name = python_safe_name(param.name)
-        params.append(f"{safe_param_name}: {py_type}")
+        params.append(f"{unique_name}: {py_type}")
 
     params_str = ", ".join(params)
 
@@ -1136,10 +2884,11 @@ def generate_function_signature(func: RustFunction) -> str:
     """Generate Python function signature from Rust free-standing function."""
     params = []
 
-    for param in func.params:
+    # Make parameter names unique (handles duplicate `_` in Rust)
+    unique_names = make_unique_param_names(func.params)
+    for param, unique_name in zip(func.params, unique_names):
         py_type = rust_type_to_python(param.rust_type)
-        safe_param_name = python_safe_name(param.name)
-        params.append(f"{safe_param_name}: {py_type}")
+        params.append(f"{unique_name}: {py_type}")
 
     params_str = ", ".join(params)
 
@@ -1165,6 +2914,7 @@ def is_result_type_alias(alias: RustTypeAlias) -> bool:
 
 def generate_result_class(alias: RustTypeAlias, crate_name: str) -> list[str]:
     """Generate a Result class for a Result type alias."""
+    rust_crate_ident = crate_name_to_rust_ident(crate_name)
     lines = [
         "",
         "T = TypeVar('T')",
@@ -1174,7 +2924,7 @@ def generate_result_class(alias: RustTypeAlias, crate_name: str) -> list[str]:
         f"class {alias.name}(Generic[T, E]):",
         f'    """A Result type alias for {crate_name}.',
         "",
-        f"    Maps to {crate_name}::{alias.name} which is an alias for {alias.target_type}.",
+        f"    Maps to {rust_crate_ident}::{alias.name} which is an alias for {alias.target_type}.",
         '    """',
         "",
         "    @staticmethod",
@@ -1229,6 +2979,30 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
             lines.append(stub_code)
             manual_functions_added.append(func_name)
 
+    # Add macro stubs (e.g., log macros)
+    macro_functions_added = []
+    if crate_name in CRATE_MACRO_STUBS:
+        for python_stub, _toml_mapping in CRATE_MACRO_STUBS[crate_name]:
+            lines.append(python_stub)
+            # Extract function name from stub (first line after def)
+            for line in python_stub.strip().split("\n"):
+                if line.startswith("def "):
+                    func_name = line.split("(")[0].replace("def ", "")
+                    macro_functions_added.append(func_name)
+                    break
+
+    # Add hardcoded type stubs (e.g., sha2::Sha256)
+    hardcoded_types_added = []
+    if crate_name in CRATE_TYPE_STUBS:
+        for python_stub, _rust_type, _func_mappings in CRATE_TYPE_STUBS[crate_name]:
+            lines.append(python_stub)
+            # Extract type name from stub (first class line)
+            for line in python_stub.strip().split("\n"):
+                if line.startswith("class "):
+                    type_name = line.split("(")[0].split(":")[0].replace("class ", "")
+                    hardcoded_types_added.append(type_name)
+                    break
+
     # Collect all types and their methods
     type_methods: dict[str, list[RustMethod]] = {}
     for impl in crate.impls:
@@ -1243,7 +3017,7 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
         lines.append("")
         if struct.doc:
             lines.append(f"class {struct.name}:")
-            lines.append(f'    """{struct.doc}"""')
+            lines.append(f'    """{escape_docstring(struct.doc)}"""')
         else:
             lines.append(f"class {struct.name}:")
 
@@ -1266,7 +3040,7 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
         lines.append("")
         if enum.doc:
             lines.append(f"class {enum.name}:")
-            lines.append(f'    """{enum.doc}"""')
+            lines.append(f'    """{escape_docstring(enum.doc)}"""')
         else:
             lines.append(f"class {enum.name}:")
 
@@ -1294,18 +3068,42 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
             all_functions.append(safe_name)
             lines.append("")
             if func.doc:
-                lines.append(f'"""{func.doc}"""')
+                lines.append(f'"""{escape_docstring(func.doc)}"""')
             sig = generate_function_signature(func)
             lines.append(sig)
+
+    # Generate enum variant alias constants (e.g., HS256: HmacJwsAlgorithm)
+    all_constants = []
+    if crate.enum_variant_aliases:
+        lines.append("")
+        lines.append("# ====================================================")
+        lines.append("# Algorithm/Variant Constants - convenient top-level exports")
+        lines.append("# ====================================================")
+        lines.append("")
+        for alias in crate.enum_variant_aliases:
+            safe_name = python_safe_name(alias.alias_name)
+            all_constants.append(safe_name)
+            lines.append(f"{safe_name}: {alias.enum_type}")
+
+    # Generate hardcoded constant stubs (e.g., base64 engine constants)
+    if crate_name in CRATE_CONSTANT_STUBS:
+        lines.append("")
+        lines.append("# ====================================================")
+        lines.append("# Module-level Constants")
+        lines.append("# ====================================================")
+        lines.append("")
+        for const_name, python_type, _rust_path, _methods in CRATE_CONSTANT_STUBS[crate_name]:
+            all_constants.append(const_name)
+            lines.append(f"{const_name}: {python_type} = ...")
 
     # Add Result type aliases to all_types
     for alias in crate.type_aliases:
         if is_result_type_alias(alias):
             all_types.insert(0, alias.name)  # Put Result first
 
-    # Add __all__ - order: functions, manual stubs, std types, crate types
+    # Add __all__ - order: functions, manual stubs, std types, crate types, constants
     lines.append("")
-    all_items = all_functions + manual_functions_added + std_types_added + all_types
+    all_items = all_functions + manual_functions_added + std_types_added + all_types + all_constants
     all_str = ", ".join(f'"{t}"' for t in all_items)
     lines.append(f"__all__: list[str] = [{all_str}]")
     lines.append("")
@@ -1313,12 +3111,24 @@ def generate_init_py(crate: RustCrate, crate_name: str) -> str:
     return "\n".join(lines)
 
 
+def crate_name_to_rust_ident(crate_name: str) -> str:
+    """Convert a crate name to a valid Rust identifier.
+
+    Cargo allows hyphens in crate names, but Rust code uses underscores.
+    For example, 'native-tls' becomes 'native_tls' in Rust code.
+    """
+    return crate_name.replace("-", "_")
+
+
 def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, python_module: str) -> str:
     """Generate _spicycrab.toml content."""
+    # Convert crate name for use in Rust code paths
+    rust_crate_ident = crate_name_to_rust_ident(crate_name)
+
     lines = [
         "[package]",
         f'name = "{crate_name}"',
-        f'rust_crate = "{crate_name}"',
+        f'rust_crate = "{rust_crate_ident}"',
         f'rust_version = "{version}"',
         f'python_module = "{python_module}"',
         "",
@@ -1326,6 +3136,20 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
         f'{crate_name} = "{version}"',
         "",
     ]
+
+    # Add features section if available
+    if crate.available_features:
+        lines.append("[cargo.features]")
+        # Format available features as TOML array
+        features_str = ", ".join(f'"{f}"' for f in crate.available_features)
+        lines.append(f"available = [{features_str}]")
+        # Format default features as TOML array
+        if crate.default_features:
+            defaults_str = ", ".join(f'"{f}"' for f in crate.default_features)
+            lines.append(f"default = [{defaults_str}]")
+        else:
+            lines.append("default = []")
+        lines.append("")
 
     # Collect type names that are handled by STD_TYPE_STUBS to avoid duplicates
     std_type_names: set[str] = {
@@ -1382,13 +3206,79 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 lines.append("is_async = true")
             lines.append("")
 
+    # Generate mappings for macro stubs (e.g., log macros)
+    # Note: Macros are detected via #[macro_export], but signatures can't be auto-extracted
+    detected_macro_names = {m.name for m in crate.macros if m.is_exported}
+    hardcoded_macro_names: set[str] = set()
+
+    if crate_name in CRATE_MACRO_STUBS:
+        lines.append("# Macro mappings (signatures from hardcoded stubs)")
+        for _python_stub, toml_mapping in CRATE_MACRO_STUBS[crate_name]:
+            # Extract macro name from python path (e.g., "log.trace" -> "trace")
+            macro_name = toml_mapping["python"].split(".")[-1]
+            hardcoded_macro_names.add(macro_name)
+
+            lines.append("[[mappings.functions]]")
+            lines.append(f'python = "{toml_mapping["python"]}"')
+            # Escape double quotes for TOML
+            rust_code = toml_mapping["rust_code"].replace('"', '\\"')
+            lines.append(f'rust_code = "{rust_code}"')
+            if toml_mapping.get("rust_imports"):
+                imports_str = ", ".join(f'"{i}"' for i in toml_mapping["rust_imports"])
+                lines.append(f"rust_imports = [{imports_str}]")
+            else:
+                lines.append("rust_imports = []")
+            needs_result = "true" if toml_mapping.get("needs_result") else "false"
+            lines.append(f"needs_result = {needs_result}")
+            if toml_mapping.get("param_types"):
+                param_types_str = ", ".join(f'"{t}"' for t in toml_mapping["param_types"])
+                lines.append(f"param_types = [{param_types_str}]")
+            lines.append("")
+
+    # Log discovered macros that don't have hardcoded stubs
+    uncovered_macros = detected_macro_names - hardcoded_macro_names
+    if uncovered_macros:
+        log_decision(
+            "uncovered_macros",
+            crate=crate_name,
+            detected=list(uncovered_macros),
+            message="These exported macros were detected but have no hardcoded stubs",
+        )
+        macro_list = ", ".join(sorted(uncovered_macros))
+        lines.append(f"# NOTE: Detected {len(uncovered_macros)} macros without stubs: {macro_list}")
+        lines.append("# To use these macros, add signatures to CRATE_MACRO_STUBS in generator.py")
+        lines.append("")
+
+    # Generate mappings for hardcoded type stubs (e.g., sha2::Sha256)
+    if crate_name in CRATE_TYPE_STUBS:
+        for _python_stub, rust_type, func_mappings in CRATE_TYPE_STUBS[crate_name]:
+            # Add function mappings for the type's static methods
+            for mapping in func_mappings:
+                lines.append("# Hardcoded type function")
+                lines.append("[[mappings.functions]]")
+                lines.append(f'python = "{mapping["python"]}"')
+                lines.append(f'rust_code = "{mapping["rust_code"]}"')
+                if mapping.get("rust_imports"):
+                    imports_str = ", ".join(f'"{i}"' for i in mapping["rust_imports"])
+                    lines.append(f"rust_imports = [{imports_str}]")
+                else:
+                    lines.append("rust_imports = []")
+                needs_result = "true" if mapping.get("needs_result") else "false"
+                lines.append(f"needs_result = {needs_result}")
+                if mapping.get("param_types"):
+                    param_types_str = ", ".join(f'"{t}"' for t in mapping["param_types"])
+                    lines.append(f"param_types = [{param_types_str}]")
+                lines.append("")
+
     # Generate mappings for free-standing functions
     for func in crate.functions:
         if func.is_pub:
             # Generate argument placeholders
             args = ", ".join(f"{{arg{i}}}" for i in range(len(func.params)))
             py_func_name = python_safe_name(func.name)
-            param_types = [p.rust_type for p in func.params]
+
+            # Get param_types using smart detection (checks overrides + type_info)
+            param_types = get_param_types_for_function(func.params, crate_name, py_func_name)
             param_types_str = ", ".join(f'"{t}"' for t in param_types)
 
             # Check for path overrides (e.g., tokio::sleep -> tokio::time::sleep)
@@ -1396,9 +3286,22 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             if override_key in FUNCTION_PATH_OVERRIDES:
                 rust_code_template, rust_imports = FUNCTION_PATH_OVERRIDES[override_key]
                 rust_code = rust_code_template
+                log_decision(
+                    "function_path_override",
+                    crate=crate_name,
+                    function=func.name,
+                    rust_code=rust_code,
+                )
+                increment("function_path_overrides")
             else:
-                rust_code = f"{crate_name}::{func.name}({args})"
-                rust_imports = [f"{crate_name}::{func.name}"]
+                # Use module_path if available, applying the public path heuristic
+                public_path = get_public_module_path(func.module_path, func.name)
+                if public_path:
+                    func_path = f"{rust_crate_ident}::{public_path}::{func.name}"
+                else:
+                    func_path = f"{rust_crate_ident}::{func.name}"
+                rust_code = f"{func_path}({args})"
+                rust_imports = [func_path]
 
             lines.append("[[mappings.functions]]")
             lines.append(f'python = "{crate_name}.{py_func_name}"')
@@ -1429,6 +3332,18 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
     for struct in crate.structs:
         if struct.name in std_type_names:
             continue
+        # Check for explicit type path override first
+        override_key = (crate_name, struct.name)
+        if override_key in CRATE_TYPE_PATH_OVERRIDES:
+            struct_path = CRATE_TYPE_PATH_OVERRIDES[override_key]
+        else:
+            # Get the full Rust path for the struct, applying the public path heuristic
+            public_path = get_public_module_path(struct.module_path, struct.name)
+            if public_path:
+                struct_path = f"{rust_crate_ident}::{public_path}::{struct.name}"
+            else:
+                struct_path = f"{rust_crate_ident}::{struct.name}"
+
         methods = type_methods.get(struct.name, [])
         for method in methods:
             if method.is_static:
@@ -1448,7 +3363,7 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append("# Error.msg - use anyhow! macro for string messages")
                     lines.append("[[mappings.functions]]")
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
-                    lines.append(f'rust_code = "{crate_name}::anyhow!({args})"')
+                    lines.append(f'rust_code = "{rust_crate_ident}::anyhow!({args})"')
                     lines.append("rust_imports = []")
                     lines.append(f"needs_result = {needs_result_val}")
                     if param_types:
@@ -1457,8 +3372,8 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                 else:
                     lines.append("[[mappings.functions]]")
                     lines.append(f'python = "{crate_name}.{struct.name}.{py_method_name}"')
-                    lines.append(f'rust_code = "{crate_name}::{struct.name}::{method.name}({args})"')
-                    lines.append(f'rust_imports = ["{crate_name}::{struct.name}"]')
+                    lines.append(f'rust_code = "{struct_path}::{method.name}({args})"')
+                    lines.append(f'rust_imports = ["{struct_path}"]')
                     lines.append(f"needs_result = {needs_result_val}")
                     if param_types:
                         lines.append(f"param_types = [{param_types_str}]")
@@ -1516,13 +3431,155 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
                     lines.append(f"param_types = [{param_types_str}]")
                 lines.append("")
 
+    # Generate mappings for hardcoded method stubs
+    for (stub_crate, type_name, method_name), method_info in STD_METHOD_STUBS.items():
+        rust_code, returns_self, needs_result, returns_type, param_types = method_info
+        if stub_crate == crate_name:
+            lines.append(f"# {type_name}.{method_name} hardcoded method")
+            lines.append("[[mappings.methods]]")
+            lines.append(f'python = "{type_name}.{method_name}"')
+            # Escape double quotes for TOML
+            rust_code_escaped = rust_code.replace('"', '\\"')
+            lines.append(f'rust_code = "{rust_code_escaped}"')
+            lines.append("rust_imports = []")
+            lines.append(f"needs_result = {'true' if needs_result else 'false'}")
+            if returns_self:
+                lines.append("returns_self = true")
+            if returns_type:
+                lines.append(f'returns = "{returns_type}"')
+            if param_types:
+                param_types_str = ", ".join(f'"{t}"' for t in param_types)
+                lines.append(f"param_types = [{param_types_str}]")
+            lines.append("")
+
+    # Generate mappings for static constructor functions (convenience methods)
+    for (stub_crate, python_path), mapping_info in STATIC_CONSTRUCTOR_MAPPINGS.items():
+        rust_code, rust_imports, needs_result, param_types = mapping_info
+        if stub_crate == crate_name:
+            lines.append(f"# {python_path} static constructor")
+            lines.append("[[mappings.functions]]")
+            lines.append(f'python = "{python_path}"')
+            # Use single quotes if rust_code contains double quotes
+            if '"' in rust_code:
+                lines.append(f"rust_code = '{rust_code}'")
+            else:
+                lines.append(f'rust_code = "{rust_code}"')
+            if rust_imports:
+                imports_str = ", ".join(f'"{i}"' for i in rust_imports)
+                lines.append(f"rust_imports = [{imports_str}]")
+            else:
+                lines.append("rust_imports = []")
+            lines.append(f"needs_result = {'true' if needs_result else 'false'}")
+            if param_types:
+                param_types_str = ", ".join(f'"{t}"' for t in param_types)
+                lines.append(f"param_types = [{param_types_str}]")
+            lines.append("")
+
+    # Generate mappings for hardcoded constant stubs (e.g., base64 engine constants)
+    if crate_name in CRATE_CONSTANT_STUBS:
+        lines.append("# =====================================================")
+        lines.append("# Module-level Constant Method Mappings")
+        lines.append("# =====================================================")
+        lines.append("")
+        for const_name, _python_type, rust_path, method_mappings in CRATE_CONSTANT_STUBS[crate_name]:
+            for method_info in method_mappings:
+                method_name = method_info["method_name"]
+                rust_code = method_info["rust_code_template"]
+                rust_imports = method_info.get("rust_imports", [])
+                needs_result = method_info.get("needs_result", False)
+                param_types = method_info.get("param_types", [])
+                returns = method_info.get("returns")
+
+                lines.append(f"# {const_name}.{method_name} hardcoded method")
+                lines.append("[[mappings.methods]]")
+                lines.append(f'python = "{const_name}.{method_name}"')
+                lines.append(f'rust_code = "{rust_code}"')
+                if rust_imports:
+                    imports_str = ", ".join(f'"{i}"' for i in rust_imports)
+                    lines.append(f"rust_imports = [{imports_str}]")
+                else:
+                    lines.append("rust_imports = []")
+                lines.append(f"needs_result = {'true' if needs_result else 'false'}")
+                if returns:
+                    lines.append(f'returns = "{returns}"')
+                if param_types:
+                    param_types_str = ", ".join(f'"{t}"' for t in param_types)
+                    lines.append(f"param_types = [{param_types_str}]")
+                lines.append("")
+
+    # Generate mappings for enum variant aliases (e.g., HS256, RS256, etc.)
+    # These are top-level constants that alias enum variants
+    if crate.enum_variant_aliases:
+        lines.append("# =====================================================")
+        lines.append("# Enum Variant Alias Constants")
+        lines.append("# =====================================================")
+        lines.append("")
+        for alias in crate.enum_variant_aliases:
+            safe_name = python_safe_name(alias.alias_name)
+            # Build the Rust path: crate::module::ALIAS
+            if alias.module_path:
+                rust_path = f"{rust_crate_ident}::{alias.module_path}::{alias.alias_name}"
+            else:
+                rust_path = f"{rust_crate_ident}::{alias.alias_name}"
+
+            lines.append(f"# {safe_name} constant")
+            lines.append("[[mappings.functions]]")
+            lines.append(f'python = "{crate_name}.{safe_name}"')
+            lines.append(f'rust_code = "{rust_path}"')
+            lines.append(f'rust_imports = ["{rust_path}"]')
+            lines.append("needs_result = false")
+            lines.append("")
+
+        # Generate method call mappings for enum variant aliases
+        # First, build a map of enum types to their methods
+        enum_methods: dict[str, list] = {}
+        for impl in crate.impls:
+            if impl.type_name not in enum_methods:
+                enum_methods[impl.type_name] = []
+            enum_methods[impl.type_name].extend(impl.methods)
+
+        lines.append("# =====================================================")
+        lines.append("# Enum Variant Alias Method Mappings")
+        lines.append("# =====================================================")
+        lines.append("")
+        for alias in crate.enum_variant_aliases:
+            safe_name = python_safe_name(alias.alias_name)
+            # Get methods for the enum type
+            methods = enum_methods.get(alias.enum_type, [])
+            for method in methods:
+                # Build Rust path for the constant
+                if alias.module_path:
+                    rust_const_path = f"{rust_crate_ident}::{alias.module_path}::{alias.alias_name}"
+                else:
+                    rust_const_path = f"{rust_crate_ident}::{alias.alias_name}"
+
+                # Generate argument placeholders
+                args = ", ".join(f"{{arg{i}}}" for i in range(len(method.params)))
+                py_method_name = python_safe_name(method.name)
+
+                # Collect param types
+                param_types = [p.rust_type for p in method.params]
+                param_types_str = ", ".join(f'"{t}"' for t in param_types)
+
+                # Check if method returns a Result type
+                needs_result_val = "true" if returns_result(method.return_type) else "false"
+
+                lines.append("[[mappings.functions]]")
+                lines.append(f'python = "{crate_name}.{safe_name}.{py_method_name}"')
+                lines.append(f'rust_code = "{rust_const_path}.{method.name}({args})"')
+                lines.append(f'rust_imports = ["{rust_const_path}"]')
+                lines.append(f"needs_result = {needs_result_val}")
+                if param_types:
+                    lines.append(f"param_types = [{param_types_str}]")
+                lines.append("")
+
     # Generate type mappings for Result type aliases
     for alias in crate.type_aliases:
         if is_result_type_alias(alias):
             lines.append("# Result type alias")
             lines.append("[[mappings.types]]")
             lines.append(f'python = "{alias.name}"')
-            lines.append(f'rust = "{crate_name}::{alias.name}"')
+            lines.append(f'rust = "{rust_crate_ident}::{alias.name}"')
             lines.append("")
 
     # Generate type mappings for standard library types
@@ -1534,22 +3591,72 @@ def generate_spicycrab_toml(crate: RustCrate, crate_name: str, version: str, pyt
             lines.append(f'rust = "{rust_type}"')
             lines.append("")
 
+    # Generate type mappings for hardcoded types (e.g., sha2::Sha256)
+    if crate_name in CRATE_TYPE_STUBS:
+        for _python_stub, rust_type, _func_mappings in CRATE_TYPE_STUBS[crate_name]:
+            # Extract type name from rust_type (last component)
+            type_name = rust_type.split("::")[-1]
+            lines.append("[[mappings.types]]")
+            lines.append(f'python = "{type_name}"')
+            lines.append(f'rust = "{rust_type}"')
+            lines.append("")
+
     # Generate type mappings for structs (skip those handled by STD_TYPE_STUBS)
     for struct in crate.structs:
         if struct.name in std_type_names:
             continue
+        # Check for explicit type path override first
+        override_key = (crate_name, struct.name)
+        if override_key in CRATE_TYPE_PATH_OVERRIDES:
+            rust_path = CRATE_TYPE_PATH_OVERRIDES[override_key]
+        else:
+            # Use module_path if available, applying the public path heuristic
+            public_path = get_public_module_path(struct.module_path, struct.name)
+            if public_path:
+                rust_path = f"{rust_crate_ident}::{public_path}::{struct.name}"
+            else:
+                rust_path = f"{rust_crate_ident}::{struct.name}"
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{struct.name}"')
-        lines.append(f'rust = "{crate_name}::{struct.name}"')
+        lines.append(f'rust = "{rust_path}"')
         lines.append("")
 
     for enum in crate.enums:
         if enum.name in std_type_names:
             continue
+        # Check for explicit type path override first
+        override_key = (crate_name, enum.name)
+        if override_key in CRATE_TYPE_PATH_OVERRIDES:
+            rust_path = CRATE_TYPE_PATH_OVERRIDES[override_key]
+        else:
+            # Use module_path if available, applying the public path heuristic
+            public_path = get_public_module_path(enum.module_path, enum.name)
+            if public_path:
+                rust_path = f"{rust_crate_ident}::{public_path}::{enum.name}"
+            else:
+                rust_path = f"{rust_crate_ident}::{enum.name}"
         lines.append("[[mappings.types]]")
         lines.append(f'python = "{enum.name}"')
-        lines.append(f'rust = "{crate_name}::{enum.name}"')
+        lines.append(f'rust = "{rust_path}"')
         lines.append("")
+
+    # Generate enum variant mappings for direct variant access (e.g., Protocol.Tlsv12)
+    lines.append("# Enum variant access mappings")
+    for enum in crate.enums:
+        if enum.name in std_type_names:
+            continue
+        # Use module_path if available, applying the public path heuristic
+        public_path = get_public_module_path(enum.module_path, enum.name)
+        if public_path:
+            rust_enum_path = f"{rust_crate_ident}::{public_path}::{enum.name}"
+        else:
+            rust_enum_path = f"{rust_crate_ident}::{enum.name}"
+        for variant in enum.variants:
+            safe_variant_name = python_safe_name(variant.name)
+            lines.append("[[mappings.enum_variants]]")
+            lines.append(f'python = "{enum.name}.{safe_variant_name}"')
+            lines.append(f'rust = "{rust_enum_path}::{variant.name}"')
+            lines.append("")
 
     return "\n".join(lines)
 

@@ -212,6 +212,15 @@ class IRSubscript(IRExpression):
 
 
 @dataclass
+class IRSlice(IRExpression):
+    """Slice expression for ranges (e.g., s[0:n], s[:n], s[n:])."""
+
+    lower: IRExpression | None = None  # Start index (None means from beginning)
+    upper: IRExpression | None = None  # End index (None means to end)
+    step: IRExpression | None = None  # Step (rarely used, usually None)
+
+
+@dataclass
 class IRList(IRExpression):
     """A list literal."""
 
@@ -260,12 +269,24 @@ class IRListComp(IRExpression):
 
 
 @dataclass
+class IRFormattedValue(IRExpression):
+    """A formatted value in an f-string with optional format spec.
+
+    Example: f"{value:x}" has value=IRName("value"), format_spec="x"
+    """
+
+    value: IRExpression | None = None
+    format_spec: str = ""  # e.g., "x", ".2f", ">10s"
+
+
+@dataclass
 class IRFString(IRExpression):
     """An f-string (formatted string literal).
 
     Parts is a list of either:
     - IRLiteral (string parts)
-    - IRExpression (formatted values)
+    - IRFormattedValue (formatted values with optional format specs)
+    - IRExpression (formatted values without format specs)
     """
 
     parts: list[IRExpression] = field(default_factory=list)
@@ -457,6 +478,7 @@ class IRFunction(IRNode):
     modifies_self: bool = False  # True if method assigns to self.* (needs &mut self)
     docstring: str | None = None
     line: int | None = None
+    rust_attributes: list[str] = field(default_factory=list)  # Passthrough # #[...] comments
 
     def accept(self, visitor: IRVisitor) -> Any:
         return None
@@ -473,6 +495,7 @@ class IRClass(IRNode):
     is_dataclass: bool = False
     docstring: str | None = None
     line: int | None = None
+    rust_attributes: list[str] = field(default_factory=list)  # Passthrough # #[...] comments
 
     # Context manager methods if present
     has_enter: bool = False

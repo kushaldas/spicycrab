@@ -26,6 +26,7 @@ from spicycrab.ir.nodes import (
     IRExpression,
     IRExprStmt,
     IRFor,
+    IRFormattedValue,
     IRFString,
     IRFunction,
     IRIf,
@@ -43,6 +44,7 @@ from spicycrab.ir.nodes import (
     IRRaise,
     IRReturn,
     IRSet,
+    IRSlice,
     IRStatement,
     IRSubscript,
     IRTry,
@@ -138,11 +140,48 @@ class PythonASTVisitor(ast.NodeVisitor):
     representation suitable for Rust code generation.
     """
 
-    def __init__(self, filename: str | None = None) -> None:
+    def __init__(self, filename: str | None = None, source_lines: list[str] | None = None) -> None:
         self.filename = filename
+        self.source_lines = source_lines or []
         self.type_parser = TypeParser(filename=filename)
         self.current_scope: Scope = Scope()
         self.scope_stack: list[Scope] = []
+
+    def _extract_rust_attributes(self, node_lineno: int) -> list[str]:
+        """Extract passthrough Rust attributes from comments preceding a node.
+
+        Comments starting with '# #[' are treated as Rust attribute passthrough.
+        The '# ' prefix is stripped, leaving the raw Rust attribute.
+
+        Example:
+            # #[derive(Serialize, Deserialize)]
+            # #[serde(rename_all = "camelCase")]
+            @dataclass
+            class Foo:
+                pass
+
+        Returns: ['#[derive(Serialize, Deserialize)]', '#[serde(rename_all = "camelCase")]']
+        """
+        if not self.source_lines:
+            return []
+
+        attrs: list[str] = []
+        line_idx = node_lineno - 2  # 0-indexed, look at line before the node
+
+        while line_idx >= 0:
+            line = self.source_lines[line_idx].strip()
+            if line.startswith("# #["):
+                # Strip "# " prefix, keep the #[...]
+                attrs.insert(0, line[2:])  # "# #[derive...]" -> "#[derive...]"
+                line_idx -= 1
+            elif line.startswith("#") or line == "" or line.startswith("@"):
+                # Skip regular comments, blank lines, and Python decorators
+                line_idx -= 1
+            else:
+                # Hit non-comment/non-decorator code, stop
+                break
+
+        return attrs
 
     def _push_scope(self) -> None:
         """Push a new scope onto the stack."""
@@ -225,6 +264,9 @@ class PythonASTVisitor(ast.NodeVisitor):
         """Visit a function definition."""
         self._push_scope()
 
+        # Extract passthrough Rust attributes from preceding comments
+        rust_attrs = self._extract_rust_attributes(node.lineno)
+
         # Parse parameters with type annotations
         params = self._parse_parameters(node.args, node)
 
@@ -260,11 +302,15 @@ class PythonASTVisitor(ast.NodeVisitor):
             body=body,
             docstring=docstring,
             line=node.lineno,
+            rust_attributes=rust_attrs,
         )
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> IRFunction:
         """Visit an async function definition."""
         self._push_scope()
+
+        # Extract passthrough Rust attributes from preceding comments
+        rust_attrs = self._extract_rust_attributes(node.lineno)
 
         # Parse parameters with type annotations
         params = self._parse_parameters(node.args, node)
@@ -302,6 +348,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             is_async=True,  # Mark as async
             docstring=docstring,
             line=node.lineno,
+            rust_attributes=rust_attrs,
         )
 
     def _analyze_mutability(self, body: list[IRStatement]) -> None:
@@ -333,6 +380,8 @@ class PythonASTVisitor(ast.NodeVisitor):
             "recv_many",
             "try_recv",
         }
+        # Methods starting with these prefixes are also considered mutating
+        mutating_prefixes = ("set_", "remove_", "add_")
 
         def scan_statements(stmts: list[IRStatement]) -> None:
             for stmt in stmts:
@@ -344,7 +393,7 @@ class PythonASTVisitor(ast.NodeVisitor):
                         reassigned.add(stmt.target)
                     # Also check for mutating calls in the assignment value
                     if stmt.value:
-                        self._check_mutating_call(stmt.value, reassigned, mutating_methods)
+                        self._check_mutating_call(stmt.value, reassigned, mutating_methods, mutating_prefixes)
                 elif isinstance(stmt, IRTupleUnpack):
                     # Track tuple unpacking declarations
                     for i, target in enumerate(stmt.targets):
@@ -353,7 +402,7 @@ class PythonASTVisitor(ast.NodeVisitor):
 
                 # Check for method calls that mutate their receiver
                 if isinstance(stmt, IRExprStmt):
-                    self._check_mutating_call(stmt.expr, reassigned, mutating_methods)
+                    self._check_mutating_call(stmt.expr, reassigned, mutating_methods, mutating_prefixes)
 
                 # Recurse into nested blocks
                 if isinstance(stmt, IRIf):
@@ -386,21 +435,31 @@ class PythonASTVisitor(ast.NodeVisitor):
                     stmt.is_mutable.append(False)
                 stmt.is_mutable[idx] = True
 
-    def _check_mutating_call(self, expr: IRExpression, reassigned: set[str], mutating_methods: set[str]) -> None:
+    def _check_mutating_call(
+        self,
+        expr: IRExpression,
+        reassigned: set[str],
+        mutating_methods: set[str],
+        mutating_prefixes: tuple[str, ...] = ("set_", "remove_", "add_"),
+    ) -> None:
         """Check if expression contains a mutating method call and mark the target as reassigned."""
         if isinstance(expr, IRMethodCall):
-            if expr.method in mutating_methods:
+            # Check for exact method name match or prefix match
+            is_mutating = expr.method in mutating_methods or any(
+                expr.method.startswith(prefix) for prefix in mutating_prefixes
+            )
+            if is_mutating:
                 # Get the receiver name
                 if isinstance(expr.obj, IRName):
                     reassigned.add(expr.obj.name)
         elif isinstance(expr, IRCall):
             # Check args for nested method calls
             for arg in expr.args:
-                self._check_mutating_call(arg, reassigned, mutating_methods)
+                self._check_mutating_call(arg, reassigned, mutating_methods, mutating_prefixes)
         elif isinstance(expr, IRAwait):
             # Check the awaited expression (e.g., await rx.recv())
             if expr.value:
-                self._check_mutating_call(expr.value, reassigned, mutating_methods)
+                self._check_mutating_call(expr.value, reassigned, mutating_methods, mutating_prefixes)
 
     def _parse_parameters(self, args: ast.arguments, func_node: ast.FunctionDef) -> list[IRParameter]:
         """Parse function parameters with their type annotations."""
@@ -490,6 +549,9 @@ class PythonASTVisitor(ast.NodeVisitor):
         """Visit a class definition."""
         self._push_scope()
 
+        # Extract passthrough Rust attributes from preceding comments
+        rust_attrs = self._extract_rust_attributes(node.lineno)
+
         # Check for dataclass decorator
         is_dataclass = any(
             (isinstance(d, ast.Name) and d.id == "dataclass")
@@ -541,6 +603,9 @@ class PythonASTVisitor(ast.NodeVisitor):
                 method = self.visit_FunctionDef(item)
                 method.is_method = True
 
+                # Check for @staticmethod decorator
+                method.is_static = any(isinstance(d, ast.Name) and d.id == "staticmethod" for d in item.decorator_list)
+
                 # Detect if method modifies self (needs &mut self)
                 if item.name != "__init__":
                     method.modifies_self = self._method_modifies_self(item)
@@ -568,6 +633,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             has_enter=has_enter,
             has_exit=has_exit,
             line=node.lineno,
+            rust_attributes=rust_attrs,
         )
 
     def _extract_fields_from_init(self, init_method: ast.FunctionDef) -> list[tuple[str, IRType]]:
@@ -785,7 +851,7 @@ class PythonASTVisitor(ast.NodeVisitor):
             return IRAttrAssign(
                 obj=obj,
                 attr=attr_name,
-                value=value if value else IRLiteral(value=None),
+                value=value,  # None if no value (forward declaration)
                 type_annotation=type_annotation,
                 line=node.lineno,
             )
@@ -812,7 +878,7 @@ class PythonASTVisitor(ast.NodeVisitor):
 
         return IRAssign(
             target=target_name,
-            value=value if value else IRLiteral(value=None),
+            value=value,  # None if no value (forward declaration)
             type_annotation=type_annotation,
             is_declaration=True,
             is_mutable=False,  # Default to immutable
@@ -1125,6 +1191,15 @@ class PythonASTVisitor(ast.NodeVisitor):
                 line=line,
             )
 
+        elif isinstance(node, ast.Slice):
+            # Slice expression (e.g., [0:n], [:n], [n:])
+            return IRSlice(
+                lower=self._visit_expression(node.lower) if node.lower else None,
+                upper=self._visit_expression(node.upper) if node.upper else None,
+                step=self._visit_expression(node.step) if node.step else None,
+                line=line,
+            )
+
         else:
             raise self._unsupported(f"expression type {type(node).__name__}", node)
 
@@ -1136,8 +1211,21 @@ class PythonASTVisitor(ast.NodeVisitor):
                 # String literal part
                 parts.append(IRLiteral(value=value.value, line=node.lineno))
             elif isinstance(value, ast.FormattedValue):
-                # Expression part
-                parts.append(self._visit_expression(value.value))
+                # Expression part with optional format spec
+                expr = self._visit_expression(value.value)
+                format_spec = ""
+                if value.format_spec:
+                    # format_spec is a JoinedStr - extract the literal parts
+                    spec_parts = []
+                    for spec_val in value.format_spec.values:
+                        if isinstance(spec_val, ast.Constant):
+                            spec_parts.append(str(spec_val.value))
+                        # Complex format specs with expressions are rare, skip for now
+                    format_spec = "".join(spec_parts)
+                if format_spec:
+                    parts.append(IRFormattedValue(value=expr, format_spec=format_spec, line=node.lineno))
+                else:
+                    parts.append(expr)
             else:
                 parts.append(self._visit_expression(value))
         return IRFString(parts=parts, line=node.lineno)
@@ -1243,7 +1331,8 @@ def parse_source(source: str, filename: str | None = None) -> IRModule:
             line=e.lineno,
         ) from e
 
-    visitor = PythonASTVisitor(filename=filename)
+    source_lines = source.splitlines()
+    visitor = PythonASTVisitor(filename=filename, source_lines=source_lines)
     return visitor.visit_Module(tree)
 
 

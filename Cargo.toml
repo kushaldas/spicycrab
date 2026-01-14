@@ -16,6 +16,8 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
 syn = { version = "2.0", features = ["full", "parsing", "visit"] }
+prettyplease = "0.2"
 quote = "1.0"
 proc-macro2 = "1.0"
 walkdir = "2.5"
+toml = "0.8"

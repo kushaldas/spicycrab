@@ -596,7 +596,19 @@ def search(query: str):
     default=None,
     help="Output crate name (default: same as input crate). Use for re-exports like clap_builder -> clap",
 )
-def generate(crate: str, output: Path, crate_version: str | None, local: bool, output_name: str | None):
+@click.option(
+    "--debug-log",
+    is_flag=True,
+    help="Enable debug JSON logging to .spicycrab-logs/",
+)
+def generate(
+    crate: str,
+    output: Path,
+    crate_version: str | None,
+    local: bool,
+    output_name: str | None,
+    debug_log: bool,
+):
     """Generate stubs from a Rust crate.
 
     Parses a Rust crate and generates Python type stubs with
@@ -636,6 +648,12 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
 
     from spicycrab.cookcrab.generator import generate_stub_package
 
+    # Enable debug logging if requested
+    if debug_log:
+        from spicycrab.debug_log import enable_logging
+
+        enable_logging("stubs", crate)
+
     temp_dir = None
     crate_name = crate
 
@@ -661,7 +679,8 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
         crate_name = crate_info.get("id", crate)
 
         if crate_version is None:
-            crate_version = crate_info.get("max_version", "0.1.0")
+            # Prefer stable versions over pre-release (RC, alpha, beta)
+            crate_version = crate_info.get("max_stable_version") or crate_info.get("max_version", "0.1.0")
             click.echo(f"  Latest version: {crate_version}")
         else:
             click.echo(f"  Requested version: {crate_version}")
@@ -725,7 +744,8 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
             click.echo(f"Generating stubs for source crate: {source_crate}...")
             try:
                 source_info = fetch_crate_info(source_crate)
-                source_version = source_info.get("max_version", "0.1.0")
+                # Prefer stable versions over pre-release
+                source_version = source_info.get("max_stable_version") or source_info.get("max_version", "0.1.0")
                 click.echo(f"  Version: {source_version}")
 
                 source_temp_dir = Path(tempfile.mkdtemp())
@@ -781,6 +801,14 @@ def generate(crate: str, output: Path, crate_version: str | None, local: bool, o
     # Cleanup temp directory
     if temp_dir:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Save debug log if enabled
+    if debug_log:
+        from spicycrab.debug_log import save_log
+
+        log_path = save_log(output)
+        if log_path:
+            click.echo(f"  Debug log: {log_path}")
 
     click.echo("")
     click.echo(click.style("Stub package generated successfully!", fg="green"))

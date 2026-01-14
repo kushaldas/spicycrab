@@ -19,6 +19,7 @@ from spicycrab.codegen.stdlib import (
     get_stub_mapping,
     get_stub_method_mapping,
 )
+from spicycrab.debug_log import increment, log_decision
 from spicycrab.ir.nodes import (
     BinaryOp,
     IRAssign,
@@ -35,6 +36,7 @@ from spicycrab.ir.nodes import (
     IRExpression,
     IRExprStmt,
     IRFor,
+    IRFormattedValue,
     IRFString,
     IRFunction,
     IRGenericType,
@@ -52,6 +54,7 @@ from spicycrab.ir.nodes import (
     IRRaise,
     IRReturn,
     IRSet,
+    IRSlice,
     IRStatement,
     IRSubscript,
     IRTry,
@@ -120,12 +123,28 @@ class EmitterContext:
     in_option_context: bool = False  # True when inside an Option-returning function
     # Type tracking for instance method resolution
     type_env: dict[str, str] = field(default_factory=dict)  # var_name -> type string (e.g., "datetime.datetime")
+    # Parameter types: param_name -> IRType (for generic type unwrapping in method calls)
+    param_types: dict = field(default_factory=dict)  # var_name -> IRType object
     # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
     stub_imports: dict[str, str] = field(default_factory=dict)
+    # Import aliases: alias -> original name (e.g., "reqwest_get" -> "get")
+    import_aliases: dict[str, str] = field(default_factory=dict)
     # Assignment target type for turbofish inference (e.g., "String" for get_one::<String>)
     assignment_target_type: str | None = None
     # Variables that have been unwrapped via "if let Some(x) = x" pattern
     unwrapped_options: set[str] = field(default_factory=set)
+    # Extra imports needed by transpiled code (e.g., std::io::Read for file reading)
+    extra_imports: set[str] = field(default_factory=set)
+    # True when we're returning a Result directly (don't add ? to the expression)
+    in_direct_return: bool = False
+    # Variables hoisted from if/elif/else chains (to avoid duplicate let declarations)
+    hoisted_vars: set[str] = field(default_factory=set)
+    # True when assigning to a Result-typed variable (don't add ? to expression)
+    assigning_to_result_type: bool = False
+    # Variables that need to be declared with `mut` (used with &mut)
+    mut_vars: set[str] = field(default_factory=set)
+    # Variables with Option types (for comparison wrapping) - function-scoped
+    option_vars: set[str] = field(default_factory=set)
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -189,6 +208,34 @@ class RustEmitter:
             return ir_type.name
         return None
 
+    def _is_tuple_expression(self, expr: IRExpression) -> bool:
+        """Check if an expression is known to return a tuple."""
+        # IRTuple is definitely a tuple
+        if isinstance(expr, IRTuple):
+            return True
+        # Check if variable has a tuple type annotation
+        if isinstance(expr, IRName):
+            var_name = expr.name
+            if var_name in self.ctx.type_env:
+                var_type = self.ctx.type_env[var_name]
+                # Check for tuple type annotation: "tuple", "tuple[...]" or starts with "("
+                if var_type == "tuple" or var_type.startswith("tuple[") or var_type.startswith("("):
+                    return True
+        # Method calls that return tuples (e.g., os.path.splitext)
+        if isinstance(expr, IRMethodCall):
+            # os.path.splitext returns (stem, ext) tuple
+            if expr.method == "splitext":
+                return True
+        # Function calls that return tuples
+        if isinstance(expr, IRCall):
+            func = expr.func
+            # splitext() always returns a tuple
+            if isinstance(func, IRAttribute) and func.attr == "splitext":
+                return True
+            if isinstance(func, IRName) and func.name == "splitext":
+                return True
+        return False
+
     def emit_module(self, module: IRModule) -> str:
         """Emit a complete Rust module."""
         header_lines: list[str] = []
@@ -230,16 +277,27 @@ class RustEmitter:
             body_lines.append(self.emit_function(func))
             body_lines.append("")
 
-        # Emit top-level statements in main() if any
+        # Emit module-level constants (UPPER_CASE assignments with literal values)
+        const_statements = []
+        other_statements = []
+        for stmt in module.statements:
+            if self._is_module_constant(stmt):
+                const_statements.append(stmt)
+            elif not self._is_name_main_check(stmt) and not self._is_asyncio_run(stmt):
+                other_statements.append(stmt)
+
+        # Emit constants as pub const
+        for stmt in const_statements:
+            body_lines.append(self._emit_module_constant(stmt))
+            body_lines.append("")
+
+        # Emit remaining top-level statements in main() if any
         # Filter out `if __name__ == "__main__"` patterns as they don't apply in Rust
         # Filter out `asyncio.run(main())` as #[tokio::main] handles this
-        filtered_statements = [
-            stmt for stmt in module.statements if not self._is_name_main_check(stmt) and not self._is_asyncio_run(stmt)
-        ]
-        if filtered_statements:
+        if other_statements:
             body_lines.append("fn main() {")
             self.ctx.indent = 1
-            for stmt in filtered_statements:
+            for stmt in other_statements:
                 body_lines.append(self.emit_statement(stmt))
             self.ctx.indent = 0
             body_lines.append("}")
@@ -289,6 +347,53 @@ class RustEmitter:
                             return True
         return False
 
+    def _is_module_constant(self, stmt: IRStatement) -> bool:
+        """Check if statement is a module-level constant (UPPER_CASE = literal).
+
+        Constants are identified by:
+        1. Being an assignment (IRAssign)
+        2. Target name is UPPER_CASE (convention for constants)
+        3. Value is a literal (string, number, bool)
+        """
+        if isinstance(stmt, IRAssign):
+            target = stmt.target
+            # Check if name is UPPER_CASE (constant convention)
+            if target.isupper() or (target.replace("_", "").isupper() and "_" in target):
+                # Check if value is a literal
+                if isinstance(stmt.value, IRLiteral):
+                    return True
+        return False
+
+    def _emit_module_constant(self, stmt: IRAssign) -> str:
+        """Emit a module-level constant as pub const."""
+        name = stmt.target
+        value = stmt.value
+
+        # Determine the Rust type and value representation
+        if isinstance(value, IRLiteral):
+            if isinstance(value.value, str):
+                rust_type = "&str"
+                rust_value = f'"{value.value}"'
+            elif isinstance(value.value, bool):
+                rust_type = "bool"
+                rust_value = "true" if value.value else "false"
+            elif isinstance(value.value, int):
+                rust_type = "i64"
+                rust_value = str(value.value)
+            elif isinstance(value.value, float):
+                rust_type = "f64"
+                rust_value = str(value.value)
+            else:
+                # Fallback
+                rust_type = "/* unknown */"
+                rust_value = self.emit_expression(value)
+        else:
+            # For non-literals, use lazy_static or just emit as is
+            rust_type = "/* unknown */"
+            rust_value = self.emit_expression(value)
+
+        return f"pub const {name}: {rust_type} = {rust_value};"
+
     def _process_imports(self, imports: list[IRImport]) -> None:
         """Process Python imports and categorize them."""
         for imp in imports:
@@ -299,9 +404,20 @@ class RustEmitter:
             if crate_name:
                 # Track which names came from which crate
                 if imp.names:
+                    imported_names = [name for name, _ in imp.names]
+                    log_decision(
+                        "stub_import_discovered",
+                        module=module_name,
+                        crate=crate_name,
+                        names=imported_names,
+                    )
+                    increment("stub_imports")
                     for name, alias in imp.names:
                         effective_name = alias if alias else name
                         self.ctx.stub_imports[effective_name] = crate_name
+                        # Track alias -> original name for lookup
+                        if alias:
+                            self.ctx.import_aliases[alias] = name
                         # Track uppercase names as class names for constructor detection
                         if name[0].isupper():
                             self.ctx.class_names.add(effective_name)
@@ -333,6 +449,9 @@ class RustEmitter:
         if needed_collections:
             imports.add(f"use std::collections::{{{', '.join(sorted(needed_collections))}}};")
 
+        # Add imports for passthrough Rust attributes
+        imports.update(self._collect_passthrough_imports(module))
+
         # Add resolver-detected imports
         imports.update(self.resolver.get_imports())
 
@@ -343,6 +462,10 @@ class RustEmitter:
                 imports.add(f"use {imp};")
             else:
                 imports.add(f"use {imp};")
+
+        # Add extra imports collected during emission (e.g., std::io::Read)
+        for imp in self.ctx.extra_imports:
+            imports.add(f"use {imp};")
 
         # Add stub package imports (external crate imports)
         # Get unique crate names from stub_imports
@@ -356,13 +479,18 @@ class RustEmitter:
         # Filter out redundant imports for stub crates
         # If we have "use clap;", we don't need "use clap::Arg;" since we use full paths
         # But keep trait imports (like chrono::Datelike, chrono::Timelike) as they're needed
-        known_traits = {"Datelike", "Timelike", "SubsecRound", "DurationRound"}
+        # Also keep prelude/glob imports (e.g., use base64::prelude::*;) as they bring traits into scope
+        # Also keep derive macros (Parser, Serialize, Deserialize) which must be imported for #[derive(...)]
+        known_traits = {"Datelike", "Timelike", "SubsecRound", "DurationRound", "Digest", "Engine"}
+        derive_macros = {"Parser", "Serialize", "Deserialize"}
+        keep_items = known_traits | derive_macros
         for crate_name in stub_crates:
             imports = {
                 imp
                 for imp in imports
                 if not imp.startswith(f"use {crate_name}::")
-                or any(imp.endswith(f"::{trait};") for trait in known_traits)
+                or any(imp.endswith(f"::{item};") for item in keep_items)
+                or imp.endswith("::*;")  # Keep glob imports for preludes
             }
 
         # Add local module imports
@@ -382,18 +510,57 @@ class RustEmitter:
         """Return set of collection types needed (HashMap, HashSet)."""
         needed: set[str] = set()
         for func in module.functions:
+            # Check function parameter types
+            for param in func.params:
+                needed.update(self._type_collections(param.type))
+            # Check return type
+            if func.return_type:
+                needed.update(self._type_collections(func.return_type))
+            # Check statements
             for stmt in func.body:
                 needed.update(self._stmt_collections(stmt))
         for cls in module.classes:
+            # Check class field types
+            for _field_name, field_type in cls.fields:
+                needed.update(self._type_collections(field_type))
             for method in cls.methods:
+                # Check method parameter types
+                for param in method.params:
+                    needed.update(self._type_collections(param.type))
+                # Check return type
+                if method.return_type:
+                    needed.update(self._type_collections(method.return_type))
                 for stmt in method.body:
                     needed.update(self._stmt_collections(stmt))
         return needed
 
+    def _type_collections(self, ir_type: IRType | None) -> set[str]:
+        """Return set of collection types used in a type annotation."""
+        if ir_type is None:
+            return set()
+        if isinstance(ir_type, IRGenericType):
+            result: set[str] = set()
+            # Check if this is a Dict or Set type (handle both cases)
+            name_lower = ir_type.name.lower()
+            if name_lower == "dict":
+                result.add("HashMap")
+            elif name_lower == "set":
+                result.add("HashSet")
+            # Recursively check type arguments
+            for type_arg in ir_type.type_args:
+                result.update(self._type_collections(type_arg))
+            return result
+        return set()
+
     def _stmt_collections(self, stmt: IRStatement) -> set[str]:
         """Return set of collection types used by statement."""
-        if isinstance(stmt, IRAssign) and stmt.value:
-            return self._expr_collections(stmt.value)
+        if isinstance(stmt, IRAssign):
+            result: set[str] = set()
+            if stmt.type_annotation:
+                result.update(self._type_collections(stmt.type_annotation))
+            if stmt.value:
+                result.update(self._expr_collections(stmt.value))
+            return result
         if isinstance(stmt, IRExprStmt):
             return self._expr_collections(stmt.expr)
         if isinstance(stmt, IRReturn) and stmt.value:
@@ -429,24 +596,88 @@ class RustEmitter:
             return result
         return set()
 
+    def _collect_passthrough_imports(self, module: IRModule) -> set[str]:
+        """Collect imports needed for passthrough Rust attributes."""
+        imports: set[str] = set()
+        all_attrs: list[str] = []
+
+        # Collect all rust_attributes from functions and classes
+        for func in module.functions:
+            all_attrs.extend(func.rust_attributes)
+        for cls in module.classes:
+            all_attrs.extend(cls.rust_attributes)
+            for method in cls.methods:
+                all_attrs.extend(method.rust_attributes)
+
+        # Mapping of attribute patterns to required imports
+        # HTTP method attributes from actix-web
+        actix_http_methods = {"get", "post", "put", "delete", "patch", "head", "options"}
+        actix_attrs_used: set[str] = set()
+
+        serde_derives_used: set[str] = set()
+
+        for attr in all_attrs:
+            # Check for actix-web HTTP method attributes: #[get(...)]
+            for method in actix_http_methods:
+                if attr.startswith(f"#[{method}("):
+                    actix_attrs_used.add(method)
+
+            # Check for #[derive(...)] macros
+            if "#[derive(" in attr:
+                # Extract derive contents: #[derive(A, B, C)] -> "A, B, C"
+                import re
+
+                match = re.search(r"#\[derive\(([^)]+)\)", attr)
+                if match:
+                    derives = [d.strip() for d in match.group(1).split(",")]
+                    for derive in derives:
+                        if derive == "Parser":
+                            imports.add("use clap::Parser;")
+                        elif derive == "Serialize":
+                            serde_derives_used.add("Serialize")
+                        elif derive == "Deserialize":
+                            serde_derives_used.add("Deserialize")
+
+        # Add serde imports if any Serialize/Deserialize derives were used
+        if serde_derives_used:
+            if len(serde_derives_used) == 1:
+                imports.add(f"use serde::{list(serde_derives_used)[0]};")
+            else:
+                imports.add(f"use serde::{{{', '.join(sorted(serde_derives_used))}}};")
+
+        # Add actix-web imports if any HTTP method attributes were used
+        if actix_attrs_used:
+            # Import all used HTTP method macros
+            if len(actix_attrs_used) == 1:
+                imports.add(f"use actix_web::{list(actix_attrs_used)[0]};")
+            else:
+                imports.add(f"use actix_web::{{{', '.join(sorted(actix_attrs_used))}}};")
+
+        return imports
+
     def emit_class(self, cls: IRClass) -> str:
         """Emit a class as a Rust struct + impl block."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for Rust attributes
+        # Check for Rust attributes from @rust() decorator
         rust_attrs = getattr(cls, "__rust_attrs__", None)
         if rust_attrs:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
+
+        # Emit passthrough Rust attributes from # #[...] comments
+        for attr in cls.rust_attributes:
+            lines.append(f"{indent}{attr}")
 
         # Docstring
         if cls.docstring:
             lines.append(f"{indent}/// {cls.docstring.split(chr(10))[0]}")
 
         # Struct definition
-        # Add default derives if no rust_attrs
-        if not rust_attrs:
+        # Add default derives if no rust_attrs and no passthrough derive
+        has_derive = rust_attrs or any("#[derive(" in attr for attr in cls.rust_attributes)
+        if not has_derive:
             lines.append(f"{indent}#[derive(Debug, Clone)]")
 
         lines.append(f"{indent}pub struct {cls.name} {{")
@@ -535,11 +766,15 @@ class RustEmitter:
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for Rust attributes
+        # Check for Rust attributes from @rust() decorator
         rust_attrs = getattr(method, "__rust_attrs__", None)
         if rust_attrs:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
+
+        # Emit passthrough Rust attributes from # #[...] comments
+        for attr in method.rust_attributes:
+            lines.append(f"{indent}{attr}")
 
         # Docstring
         if method.docstring:
@@ -596,7 +831,7 @@ class RustEmitter:
         params: list[str] = []
         is_constructor = method.name == "__init__"
 
-        if not is_constructor and method.is_method:
+        if not is_constructor and method.is_method and not method.is_static:
             # Add self parameter - use &mut self if method modifies self
             if method.modifies_self:
                 params.append("&mut self")
@@ -649,6 +884,14 @@ class RustEmitter:
             self.ctx.in_result_context = self._is_result_type(method.return_type)
             self.ctx.in_option_context = self._is_option_type(method.return_type)
 
+            # Clear and populate option_vars for this method (function-scoped)
+            prev_option_vars = self.ctx.option_vars
+            self.ctx.option_vars = set()
+            # Add parameters with Option types to option_vars
+            for param in method.params:
+                if self._is_option_type(param.type):
+                    self.ctx.option_vars.add(param.name)
+
             # Regular method body
             self.ctx.indent += 1
             for i, stmt in enumerate(method.body):
@@ -661,6 +904,7 @@ class RustEmitter:
             # Restore previous context
             self.ctx.in_result_context = prev_result_context
             self.ctx.in_option_context = prev_option_context
+            self.ctx.option_vars = prev_option_vars
 
         lines.append(f"{indent}}}")
 
@@ -671,15 +915,25 @@ class RustEmitter:
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for Rust attributes
+        # Check for Rust attributes from @rust() decorator
         rust_attrs = getattr(func, "__rust_attrs__", None)
         if rust_attrs:
             for attr in rust_attrs.to_rust_attributes():
                 lines.append(f"{indent}{attr}")
 
-        # Add #[tokio::main] for async main function
-        if func.is_async and func.name == "main":
-            lines.append(f"{indent}#[tokio::main]")
+        # Emit passthrough Rust attributes from # #[...] comments
+        for attr in func.rust_attributes:
+            lines.append(f"{indent}{attr}")
+
+        # Add async runtime attribute for async main function (if not already provided via passthrough)
+        # Use #[actix_web::main] if actix-web is imported, otherwise #[tokio::main]
+        has_async_main_attr = any("::main]" in attr or attr == "#[main]" for attr in func.rust_attributes)
+        if func.is_async and func.name == "main" and not has_async_main_attr:
+            stub_crates = set(self.ctx.stub_imports.values())
+            if "actix-web" in stub_crates:
+                lines.append(f"{indent}#[actix_web::main]")
+            else:
+                lines.append(f"{indent}#[tokio::main]")
 
         # Docstring
         if func.docstring:
@@ -707,11 +961,31 @@ class RustEmitter:
         async_kw = "async " if func.is_async else ""
         lines.append(f"{indent}pub {async_kw}fn {func.name}({params_str}){ret_str} {{")
 
+        # Pre-scan function body to find variables that will be used with &mut
+        # This needs to happen before emission so declarations can include `mut`
+        prev_mut_vars = self.ctx.mut_vars
+        self.ctx.mut_vars = set()
+        self._collect_mut_vars(func.body)
+
         # Track if we're in a Result-returning or Option-returning function
         prev_result_context = self.ctx.in_result_context
         prev_option_context = self.ctx.in_option_context
         self.ctx.in_result_context = self._is_result_type(func.return_type)
         self.ctx.in_option_context = self._is_option_type(func.return_type)
+
+        # Populate param_types for generic type unwrapping in method calls
+        prev_param_types = self.ctx.param_types
+        self.ctx.param_types = {}
+        for param in func.params:
+            self.ctx.param_types[param.name] = param.type
+
+        # Clear and populate option_vars for this function (function-scoped)
+        prev_option_vars = self.ctx.option_vars
+        self.ctx.option_vars = set()
+        # Add parameters with Option types to option_vars
+        for param in func.params:
+            if self._is_option_type(param.type):
+                self.ctx.option_vars.add(param.name)
 
         # Body - mark last statement for expression return
         self.ctx.indent += 1
@@ -725,10 +999,124 @@ class RustEmitter:
         # Restore previous context
         self.ctx.in_result_context = prev_result_context
         self.ctx.in_option_context = prev_option_context
+        self.ctx.param_types = prev_param_types
+        self.ctx.mut_vars = prev_mut_vars
+        self.ctx.option_vars = prev_option_vars
 
         lines.append(f"{indent}}}")
 
         return "\n".join(lines)
+
+    def _collect_mut_vars(self, stmts: list[IRStatement]) -> None:
+        """Pre-scan statements to find variables that will be used with &mut.
+
+        This populates self.ctx.mut_vars with variable names that need `mut` declarations.
+        """
+
+        for stmt in stmts:
+            self._scan_stmt_for_mut_vars(stmt)
+
+    def _scan_stmt_for_mut_vars(self, stmt: IRStatement) -> None:
+        """Recursively scan a statement for &mut variable usage."""
+
+        if isinstance(stmt, IRAssign):
+            self._scan_expr_for_mut_vars(stmt.value)
+        elif isinstance(stmt, IRExprStmt):
+            self._scan_expr_for_mut_vars(stmt.expr)
+        elif isinstance(stmt, IRReturn):
+            if stmt.value:
+                self._scan_expr_for_mut_vars(stmt.value)
+        elif isinstance(stmt, IRIf):
+            self._scan_expr_for_mut_vars(stmt.condition)
+            for s in stmt.then_body:
+                self._scan_stmt_for_mut_vars(s)
+            for s in stmt.else_body:
+                self._scan_stmt_for_mut_vars(s)
+        elif isinstance(stmt, IRFor):
+            self._scan_expr_for_mut_vars(stmt.iter)
+            for s in stmt.body:
+                self._scan_stmt_for_mut_vars(s)
+        elif isinstance(stmt, IRWhile):
+            self._scan_expr_for_mut_vars(stmt.condition)
+            for s in stmt.body:
+                self._scan_stmt_for_mut_vars(s)
+        elif isinstance(stmt, IRWith):
+            self._scan_expr_for_mut_vars(stmt.context)
+            for s in stmt.body:
+                self._scan_stmt_for_mut_vars(s)
+        elif isinstance(stmt, IRTry):
+            for s in stmt.body:
+                self._scan_stmt_for_mut_vars(s)
+            for handler in stmt.handlers:
+                for s in handler.body:
+                    self._scan_stmt_for_mut_vars(s)
+
+    def _scan_expr_for_mut_vars(self, expr: IRExpression | None) -> None:
+        """Scan an expression for method calls with &mut parameter types."""
+        from spicycrab.codegen.stub_discovery import get_stub_method_mapping
+
+        if expr is None:
+            return
+
+        if isinstance(expr, IRMethodCall):
+            # Check stub method mappings for &mut param types
+            if isinstance(expr.obj, IRMethodCall):
+                # Chained method call - check the method mapping
+                method = expr.method
+                # Get the receiver type from the chain
+                receiver_type = self._infer_stub_type_for_scan(expr.obj)
+                if receiver_type:
+                    mapping = get_stub_method_mapping(receiver_type, method)
+                    if mapping and mapping.param_types:
+                        for i, param_type in enumerate(mapping.param_types):
+                            if param_type and param_type.startswith("&mut ") and i < len(expr.args):
+                                arg = expr.args[i]
+                                if isinstance(arg, IRName):
+                                    self.ctx.mut_vars.add(arg.name)
+            # Scan arguments
+            for arg in expr.args:
+                self._scan_expr_for_mut_vars(arg)
+            self._scan_expr_for_mut_vars(expr.obj)
+        elif isinstance(expr, IRCall):
+            for arg in expr.args:
+                self._scan_expr_for_mut_vars(arg)
+            self._scan_expr_for_mut_vars(expr.func)
+        elif isinstance(expr, IRBinaryOp):
+            self._scan_expr_for_mut_vars(expr.left)
+            self._scan_expr_for_mut_vars(expr.right)
+        elif isinstance(expr, IRUnaryOp):
+            self._scan_expr_for_mut_vars(expr.operand)
+        elif isinstance(expr, IRAttribute):
+            self._scan_expr_for_mut_vars(expr.obj)
+        elif isinstance(expr, IRSubscript):
+            self._scan_expr_for_mut_vars(expr.obj)
+            self._scan_expr_for_mut_vars(expr.index)
+        elif isinstance(expr, IRAwait):
+            self._scan_expr_for_mut_vars(expr.value)
+        elif isinstance(expr, IRList):
+            for e in expr.elements:
+                self._scan_expr_for_mut_vars(e)
+        elif isinstance(expr, IRDict):
+            for k, v in zip(expr.keys, expr.values):
+                self._scan_expr_for_mut_vars(k)
+                self._scan_expr_for_mut_vars(v)
+        elif isinstance(expr, IRTuple):
+            for e in expr.elements:
+                self._scan_expr_for_mut_vars(e)
+
+    def _infer_stub_type_for_scan(self, expr: IRExpression) -> str | None:
+        """Simplified type inference for pre-scan phase."""
+        if isinstance(expr, IRMethodCall):
+            # For chained calls like Cmd.get(...), infer the type
+            if isinstance(expr.obj, IRName) and expr.obj.name in self.ctx.stub_imports:
+                return expr.obj.name
+            if isinstance(expr.obj, IRMethodCall):
+                return self._infer_stub_type_for_scan(expr.obj)
+        if isinstance(expr, IRCall):
+            if isinstance(expr.func, IRAttribute):
+                if isinstance(expr.func.obj, IRName) and expr.func.obj.name in self.ctx.stub_imports:
+                    return expr.func.obj.name
+        return None
 
     def emit_statement(self, stmt: IRStatement) -> str:
         """Emit a statement."""
@@ -766,7 +1154,10 @@ class RustEmitter:
 
         if isinstance(stmt, IRReturn):
             if stmt.value:
+                # Set flag to avoid adding ? when returning Result directly
+                self.ctx.in_direct_return = True
                 expr = self.emit_expression(stmt.value)
+                self.ctx.in_direct_return = False
                 # Wrap non-None values in Some() for Option-returning functions
                 if self.ctx.in_option_context and expr != "None":
                     expr = f"Some({expr})"
@@ -825,27 +1216,59 @@ class RustEmitter:
         """Emit an assignment statement."""
         indent = self.ctx.indent_str()
 
+        # Check if this variable was hoisted (declared before an if/elif/else chain)
+        # If so, treat as reassignment even if parser marked it as declaration
+        if stmt.target in self.ctx.hoisted_vars and stmt.is_declaration:
+            value = self.emit_expression(stmt.value)
+            return f"{indent}{stmt.target} = {value};"
+
         if stmt.is_declaration:
+            # Handle forward declaration (type annotation without value): alg: str
+            # Generate: let mut alg: String;
+            if stmt.value is None and stmt.type_annotation:
+                rust_type = self.resolver.resolve(stmt.type_annotation)
+                type_str = self._extract_type_string(stmt.type_annotation)
+                if type_str:
+                    self.ctx.type_env[stmt.target] = type_str
+                mut = "mut " if (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
+                return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()};"
+
             # Set target type for turbofish inference before emitting value
             if stmt.type_annotation:
                 rust_type = self.resolver.resolve(stmt.type_annotation)
                 self.ctx.assignment_target_type = rust_type.to_rust()
+                # If assigning to a Result-typed variable, don't add ? to the expression
+                # This allows storing Result values to be checked with Result.is_err() etc.
+                self.ctx.assigning_to_result_type = self._is_result_type(stmt.type_annotation)
             else:
                 self.ctx.assignment_target_type = None
+                # No type annotation - assume the programmer wants to store the Result
+                # if the function returns Result (they can unwrap manually with Result.unwrap)
+                self.ctx.assigning_to_result_type = True
 
             value = self.emit_expression(stmt.value)
 
             # Clear target type after emission
             self.ctx.assignment_target_type = None
+            self.ctx.assigning_to_result_type = False
 
-            # Only add mut if explicitly marked mutable (reassigned later)
-            mut = "mut " if stmt.is_mutable else ""
+            # Add mut if explicitly marked mutable (reassigned later) OR used with &mut
+            mut = "mut " if (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
             if stmt.type_annotation:
                 rust_type = self.resolver.resolve(stmt.type_annotation)
                 # Track the type for instance method resolution
                 type_str = self._extract_type_string(stmt.type_annotation)
                 if type_str:
                     self.ctx.type_env[stmt.target] = type_str
+                # Handle None initialization: if value is None but type is not Option,
+                # wrap the type in Option<...>
+                if value == "None" and rust_type.name != "Option":
+                    rust_type_str = f"Option<{rust_type.to_rust()}>"
+                    self.ctx.option_vars.add(stmt.target)
+                    return f"{indent}let {mut}{stmt.target}: {rust_type_str} = {value};"
+                # Track Option-typed variables for comparison wrapping
+                if rust_type.name == "Option":
+                    self.ctx.option_vars.add(stmt.target)
                 # Wrap non-None values in Some() for Option types
                 # But don't wrap function/method calls that already return Option types
                 is_call = isinstance(stmt.value, (IRCall, IRMethodCall))
@@ -913,43 +1336,146 @@ class RustEmitter:
         # No type annotations - let Rust infer the types
         return f"{indent}let ({targets_str}) = {value};"
 
+    def _extract_is_not_none_vars(self, condition: IRExpression) -> list[str]:
+        """Extract variable names from compound 'x is not None' conditions.
+
+        Handles both single checks and compound AND conditions:
+        - x is not None -> ["x"]
+        - x is not None and y is not None -> ["x", "y"]
+        - x is not None and y is not None and z is not None -> ["x", "y", "z"]
+
+        Returns empty list if any part of the condition is not a simple 'is not None' check.
+        """
+        vars_list: list[str] = []
+
+        def extract_from_expr(expr: IRExpression) -> bool:
+            """Returns True if expr is a valid 'is not None' or compound of them."""
+            if (
+                isinstance(expr, IRBinaryOp)
+                and expr.op == BinaryOp.IS_NOT
+                and isinstance(expr.left, IRName)
+                and isinstance(expr.right, IRLiteral)
+                and expr.right.value is None
+            ):
+                vars_list.append(expr.left.name)
+                return True
+            elif isinstance(expr, IRBinaryOp) and expr.op == BinaryOp.AND:
+                # Both sides must be valid
+                return extract_from_expr(expr.left) and extract_from_expr(expr.right)
+            return False
+
+        if extract_from_expr(condition):
+            return vars_list
+        return []
+
+    def _collect_assigned_vars(self, stmts: list) -> set[str]:
+        """Collect variable names that are assigned in a list of statements."""
+        assigned = set()
+        for s in stmts:
+            if isinstance(s, IRAssign) and s.target:
+                assigned.add(s.target)
+        return assigned
+
+    def _find_hoistable_vars(self, stmt: IRIf) -> dict[str, str]:
+        """Find variables that need to be hoisted from if/elif/else branches.
+
+        Returns a dict of var_name -> type_hint for variables that are:
+        1. First assigned (with let) in the then branch
+        2. Also assigned in at least one elif/else branch
+        """
+        hoistable = {}
+        then_vars = self._collect_assigned_vars(stmt.then_body)
+
+        # Collect vars assigned in any elif/else branch
+        elif_else_vars: set[str] = set()
+        for _, elif_body in stmt.elif_clauses:
+            elif_else_vars.update(self._collect_assigned_vars(elif_body))
+        if stmt.else_body:
+            elif_else_vars.update(self._collect_assigned_vars(stmt.else_body))
+
+        # Variables in both then and elif/else need potential hoisting
+        shared_vars = then_vars & elif_else_vars
+
+        # Check if these are new declarations (not already in scope)
+        for var_name in shared_vars:
+            # Find the assignment in then_body to get the type
+            for s in stmt.then_body:
+                if isinstance(s, IRAssign) and s.target == var_name:
+                    # Check if this would be a new let (not reassignment of existing var)
+                    if var_name not in self.ctx.type_env:
+                        # Get type annotation if available
+                        type_hint = ""
+                        if s.type_annotation:
+                            type_hint = self.resolver.resolve(s.type_annotation).to_rust()
+                        hoistable[var_name] = type_hint
+                    break
+
+        return hoistable
+
     def _emit_if(self, stmt: IRIf) -> str:
         """Emit an if statement."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check for "x is not None" pattern -> use "if let Some(x) = x"
-        unwrapped_var: str | None = None
-        if (
-            isinstance(stmt.condition, IRBinaryOp)
-            and stmt.condition.op == BinaryOp.IS_NOT
-            and isinstance(stmt.condition.left, IRName)
-            and isinstance(stmt.condition.right, IRLiteral)
-            and stmt.condition.right.value is None
-        ):
-            var_name = stmt.condition.left.name
-            unwrapped_var = var_name
+        # Find variables that need hoisting (assigned in multiple branches)
+        hoistable = self._find_hoistable_vars(stmt)
+        for var_name, type_hint in hoistable.items():
+            # Emit uninitialized declaration before the if
+            if type_hint:
+                lines.append(f"{indent}let mut {var_name}: {type_hint};")
+            else:
+                lines.append(f"{indent}let mut {var_name};")
+            # Mark as hoisted so _emit_assign skips 'let'
+            self.ctx.hoisted_vars.add(var_name)
+
+        # Check for compound "x is not None and y is not None" patterns
+        # Generate "if let (Some(x), Some(y)) = (x, y) { ... }" for idiomatic Rust
+        unwrapped_vars: list[str] = self._extract_is_not_none_vars(stmt.condition)
+
+        if len(unwrapped_vars) == 1:
+            # Single variable: if let Some(x) = x { ... }
+            var_name = unwrapped_vars[0]
             lines.append(f"{indent}if let Some({var_name}) = {var_name} {{")
+        elif len(unwrapped_vars) > 1:
+            # Multiple variables: if let (Some(x), Some(y)) = (x, y) { ... }
+            some_pattern = ", ".join(f"Some({v})" for v in unwrapped_vars)
+            var_tuple = ", ".join(unwrapped_vars)
+            lines.append(f"{indent}if let ({some_pattern}) = ({var_tuple}) {{")
         else:
             cond = self.emit_expression(stmt.condition)
             lines.append(f"{indent}if {cond} {{")
 
         self.ctx.indent += 1
-        # If we unwrapped a variable, track it so method calls don't use Option
-        if unwrapped_var:
-            self.ctx.unwrapped_options.add(unwrapped_var)
+        # If we unwrapped variables, track them so they're used without Option
+        for var in unwrapped_vars:
+            self.ctx.unwrapped_options.add(var)
         for s in stmt.then_body:
             lines.append(self.emit_statement(s))
-        if unwrapped_var:
-            self.ctx.unwrapped_options.discard(unwrapped_var)
+        for var in unwrapped_vars:
+            self.ctx.unwrapped_options.discard(var)
         self.ctx.indent -= 1
 
         for elif_cond, elif_body in stmt.elif_clauses:
-            cond = self.emit_expression(elif_cond)
-            lines.append(f"{indent}}} else if {cond} {{")
+            # Check for "x is not None" patterns in elif clauses
+            elif_unwrapped = self._extract_is_not_none_vars(elif_cond)
+            if len(elif_unwrapped) == 1:
+                var_name = elif_unwrapped[0]
+                lines.append(f"{indent}}} else if let Some({var_name}) = {var_name} {{")
+            elif len(elif_unwrapped) > 1:
+                some_pattern = ", ".join(f"Some({v})" for v in elif_unwrapped)
+                var_tuple = ", ".join(elif_unwrapped)
+                lines.append(f"{indent}}} else if let ({some_pattern}) = ({var_tuple}) {{")
+            else:
+                cond = self.emit_expression(elif_cond)
+                lines.append(f"{indent}}} else if {cond} {{")
             self.ctx.indent += 1
+            # Track unwrapped variables for the elif body
+            for var in elif_unwrapped:
+                self.ctx.unwrapped_options.add(var)
             for s in elif_body:
                 lines.append(self.emit_statement(s))
+            for var in elif_unwrapped:
+                self.ctx.unwrapped_options.discard(var)
             self.ctx.indent -= 1
 
         if stmt.else_body:
@@ -1227,18 +1753,60 @@ class RustEmitter:
                             self.ctx.stdlib_imports.add(imp)
                         return rust_code
 
-                # Check for stub type enum variant access (e.g., ArgAction.SetTrue)
-                # Convert Python enum syntax to Rust path syntax: Type.Variant -> crate::Type::Variant
+                # Check for stub type enum variant access (e.g., ArgAction.SetTrue, Protocol.Tlsv12)
+                # Use enum variant mapping if available, otherwise fall back to path construction
                 if module in self.ctx.stub_imports:
                     crate_name = self.ctx.stub_imports[module]
-                    return f"{crate_name}::{module}::{expr.attr}"
+                    # Try to get enum variant mapping from stub package
+                    from spicycrab.codegen.stub_discovery import get_stub_enum_variant_mapping
+
+                    variant_rust_path = get_stub_enum_variant_mapping(module, expr.attr, crate_name)
+                    if variant_rust_path:
+                        return variant_rust_path
+                    # Fall back to path construction using rust_crate from package
+                    from spicycrab.codegen.stub_discovery import get_all_stub_packages
+
+                    pkgs = get_all_stub_packages()
+                    pkg = pkgs.get(crate_name)
+                    if pkg:
+                        # Convert hyphens to underscores for valid Rust identifier
+                        rust_crate_ident = pkg.rust_crate.replace("-", "_")
+                        return f"{rust_crate_ident}::{module}::{expr.attr}"
+                    # Last resort: convert hyphen to underscore
+                    rust_crate_ident = crate_name.replace("-", "_")
+                    return f"{rust_crate_ident}::{module}::{expr.attr}"
 
             obj = self.emit_expression(expr.obj)
             return f"{obj}.{expr.attr}"
 
         if isinstance(expr, IRSubscript):
             obj = self.emit_expression(expr.obj)
+            # Check if this is a slice operation (e.g., s[0:n])
+            if isinstance(expr.index, IRSlice):
+                slice_expr = expr.index
+                lower = self.emit_expression(slice_expr.lower) if slice_expr.lower else ""
+                upper = self.emit_expression(slice_expr.upper) if slice_expr.upper else ""
+                # Cast to usize if needed
+                if lower and isinstance(slice_expr.lower, (IRLiteral, IRName)):
+                    lower_cast = f"{lower} as usize" if not lower.isdigit() else lower
+                else:
+                    lower_cast = lower
+                if upper and isinstance(slice_expr.upper, (IRLiteral, IRName)):
+                    upper_cast = f"{upper} as usize" if not upper.isdigit() else upper
+                else:
+                    upper_cast = upper
+                # Build range expression
+                range_expr = f"{lower_cast}..{upper_cast}"
+                # For string slicing, return String (Python strings are String in Rust)
+                return f"{obj}[{range_expr}].to_string()"
             index = self.emit_expression(expr.index)
+            # Check if indexing a tuple with integer literal - use .N syntax
+            # Tuples in Rust use .0, .1, etc. not [0], [1]
+            if isinstance(expr.index, IRLiteral) and isinstance(expr.index.value, int):
+                # Check if the object expression looks like a tuple
+                # (block expressions returning tuples, tuple literals, etc.)
+                if obj.startswith("({") or obj.startswith("(") or self._is_tuple_expression(expr.obj):
+                    return f"{obj}.{expr.index.value}"
             # Cast integer indices to usize for Vec/slice indexing
             # This handles cases like values[i] where i: int (i64 in Rust)
             if isinstance(expr.index, IRName):
@@ -1310,6 +1878,17 @@ class RustEmitter:
             if "." not in s and "e" not in s.lower():
                 s += ".0"
             return s
+        if isinstance(expr.value, bytes):
+            # Convert bytes to Rust byte string literal
+            # Python b'hello' -> Rust b"hello"
+            try:
+                decoded = expr.value.decode("ascii")
+                escaped = decoded.replace("\\", "\\\\").replace('"', '\\"')
+                return f'b"{escaped}"'
+            except UnicodeDecodeError:
+                # For non-ASCII bytes, use byte array
+                byte_list = ", ".join(f"0x{b:02x}" for b in expr.value)
+                return f"[{byte_list}]"
         return repr(expr.value)
 
     def _emit_binop(self, expr: IRBinaryOp) -> str:
@@ -1441,6 +2020,19 @@ class RustEmitter:
             if self._looks_like_string(left) or self._looks_like_string(right):
                 return f'format!("{{}}{{}}", {left}, {right})'
 
+        # Handle Option<T> == T comparisons by wrapping the non-Option side in Some()
+        # Python: if opt_var == "value" -> Rust: if opt_var == Some("value".to_string())
+        # Only applies when the Option variable is tracked in option_vars (function-scoped)
+        if expr.op in (BinaryOp.EQ, BinaryOp.NE):
+            # Check if left side is an Option variable and right is not None
+            if isinstance(expr.left, IRName) and expr.left.name in self.ctx.option_vars:
+                if right != "None" and not right.startswith("Some("):
+                    right = f"Some({right})"
+            # Check if right side is an Option variable and left is not None
+            elif isinstance(expr.right, IRName) and expr.right.name in self.ctx.option_vars:
+                if left != "None" and not left.startswith("Some("):
+                    left = f"Some({left})"
+
         op = BINOP_MAP.get(expr.op, "+")
 
         # Add parentheses around nested binary ops to preserve precedence
@@ -1471,16 +2063,18 @@ class RustEmitter:
             # Check if this function was imported from a stub package
             if func_name in self.ctx.stub_imports:
                 crate_name = self.ctx.stub_imports[func_name]
+                # Resolve alias to original name if applicable
+                original_name = self.ctx.import_aliases.get(func_name, func_name)
                 # Look up the full mapping key: crate.function (e.g., "tokio.sleep")
-                full_key = f"{crate_name}.{func_name}"
+                full_key = f"{crate_name}.{original_name}"
                 mapping = get_stub_mapping(full_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
                     if mapping.needs_result:
                         if self.ctx.in_result_context:
                             # Use ? operator for error propagation
-                            if result.endswith(".unwrap()"):
-                                result = result[:-9] + "?"
+                            if not self._result_already_handled(result):
+                                result = f"{result}?"
                         else:
                             # Use .unwrap() when not in Result context
                             if not self._result_already_handled(result):
@@ -1504,8 +2098,8 @@ class RustEmitter:
                     if mapping.needs_result:
                         if self.ctx.in_result_context:
                             # Use ? operator for error propagation
-                            if result.endswith(".unwrap()"):
-                                result = result[:-9] + "?"
+                            if not self._result_already_handled(result):
+                                result = f"{result}?"
                         else:
                             # Use .unwrap() when not in Result context
                             if not self._result_already_handled(result):
@@ -1520,8 +2114,8 @@ class RustEmitter:
                 if mapping.needs_result:
                     if self.ctx.in_result_context:
                         # Use ? operator for error propagation
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                        if not self._result_already_handled(result):
+                            result = f"{result}?"
                     else:
                         # Use .unwrap() when not in Result context
                         if not self._result_already_handled(result):
@@ -1535,6 +2129,27 @@ class RustEmitter:
             mapping = PATHLIB_MAPPINGS.get("Path")
             if mapping:
                 return mapping.rust_code.format(args=", ".join(args))
+
+        # Handle stub type constructor calls - TypeName() -> crate::TypeName::new()
+        # This handles cases like Map() -> serde_json::Map::new()
+        # Only applies to capitalized names (types) that have a .new mapping
+        if isinstance(expr.func, IRName):
+            func_name = expr.func.name
+            if func_name in self.ctx.stub_imports and func_name[0].isupper():
+                crate_name = self.ctx.stub_imports[func_name]
+                # Look for .new constructor mapping
+                new_key = f"{crate_name}.{func_name}.new"
+                mapping = get_stub_mapping(new_key)
+                if mapping:
+                    result = self._apply_stdlib_mapping(mapping, args)
+                    if mapping.needs_result:
+                        if self.ctx.in_result_context:
+                            if not self._result_already_handled(result):
+                                result = f"{result}?"
+                        else:
+                            if not self._result_already_handled(result):
+                                result = f"{result}.unwrap()"
+                    return result
 
         # Handle class constructor calls - ClassName(...) -> ClassName::new(...)
         if func in self.ctx.class_names:
@@ -1592,11 +2207,54 @@ class RustEmitter:
         if func == "float":
             return f"{args[0]} as f64"
 
+        # Handle set() - empty set constructor
+        if func == "set":
+            if not args:
+                return "HashSet::new()"
+            # set(iterable) -> iterable.into_iter().collect::<HashSet<_>>()
+            return f"{args[0]}.into_iter().collect::<HashSet<_>>()"
+
+        # Handle dict() - empty dict constructor
+        if func == "dict":
+            if not args:
+                return "HashMap::new()"
+
+        # Handle list() - empty list constructor
+        if func == "list":
+            if not args:
+                return "Vec::new()"
+            # list(iterable) -> iterable.into_iter().collect::<Vec<_>>()
+            return f"{args[0]}.into_iter().collect::<Vec<_>>()"
+
+        # Handle Python built-in open() function
+        if func == "open":
+            if len(args) >= 2:
+                path = args[0]
+                mode = args[1].strip('"').strip("'").replace(".to_string()", "")
+                # Remove .to_string() wrapper if present
+                mode = mode.replace('"', "").replace("'", "")
+                if "w" in mode:
+                    # Write mode: use File::create
+                    return f"std::fs::File::create({path}).unwrap()"
+                else:
+                    # Read mode (default): use File::open
+                    return f"std::fs::File::open({path}).unwrap()"
+            elif len(args) == 1:
+                # Default is read mode
+                return f"std::fs::File::open({args[0]}).unwrap()"
+
         # Regular function call - check if it returns Result
         call_expr = f"{func}({', '.join(args)})"
 
         # Append ? if calling a Result-returning function inside a Result context
-        if self.ctx.in_result_context and func in self.ctx.result_functions:
+        # But NOT if we're assigning to a Result-typed variable (user wants to store the Result)
+        # And NOT if we're returning the Result directly (pass through to caller)
+        if (
+            self.ctx.in_result_context
+            and func in self.ctx.result_functions
+            and not self.ctx.assigning_to_result_type
+            and not self.ctx.in_direct_return
+        ):
             call_expr += "?"
 
         return call_expr
@@ -1626,6 +2284,22 @@ class RustEmitter:
             if isinstance(expr.obj, IRName) and expr.obj.name in self.ctx.stub_imports:
                 # Type.method() where Type is a stub type - returns the Type
                 return expr.obj.name
+
+            # Check for Data<T>.get_ref() pattern - returns the inner type T
+            if isinstance(expr.obj, IRName) and expr.method == "get_ref":
+                var_name = expr.obj.name
+                if var_name in self.ctx.param_types:
+                    param_type = self.ctx.param_types[var_name]
+                    if isinstance(param_type, IRGenericType):
+                        # Check if it's Data, Arc, Box, etc. - unwrap the inner type
+                        outer_name = param_type.name.split(".")[-1]  # Get 'Data' from 'web.Data'
+                        if outer_name in ("Data", "Arc", "Box", "Rc", "RefCell"):
+                            if param_type.type_args:
+                                inner_type = param_type.type_args[0]
+                                if isinstance(inner_type, IRClassType):
+                                    return inner_type.name
+                                elif isinstance(inner_type, IRPrimitiveType):
+                                    return inner_type.name
 
             # Otherwise, try to infer the type of the receiver for chained calls
             receiver_type = self._infer_stub_type(expr.obj)
@@ -1658,6 +2332,10 @@ class RustEmitter:
 
         For methods like get_one that need ::<Type>, inject based on
         the assignment target type context.
+
+        clap's get_one::<T>(&str) returns Option<&T>, so:
+        - If target type is Option<T>, use ::<T> and add .cloned() to get Option<T>
+        - If target type is T (non-Option), use ::<T> (user expects to unwrap)
         """
         # Methods that need turbofish type inference
         turbofish_methods = {"get_one", "try_get_one", "get_many", "try_get_many"}
@@ -1671,11 +2349,75 @@ class RustEmitter:
             # This is the most common case for clap argument retrieval
             target_type = "String"
 
+        # Strip Option<...> wrapper since get_one already returns Option<&T>
+        # We need the inner type T for the turbofish
+        inner_type = target_type
+        needs_cloned = False
+        if target_type.startswith("Option<") and target_type.endswith(">"):
+            inner_type = target_type[7:-1]  # Extract T from Option<T>
+            needs_cloned = True
+
         # Insert turbofish after the method name
         # Pattern: .get_one( -> .get_one::<Type>(
         old_pattern = f".{method}("
-        new_pattern = f".{method}::<{target_type}>("
-        return rust_code.replace(old_pattern, new_pattern)
+        new_pattern = f".{method}::<{inner_type}>("
+        result = rust_code.replace(old_pattern, new_pattern)
+
+        # Add .cloned() to convert Option<&T> to Option<T>
+        # Skip if .cloned() is already present (e.g., from stub mapping)
+        if needs_cloned and method in ("get_one", "try_get_one"):
+            if ".cloned()" not in result:
+                # Find the closing paren of the method call and add .cloned()
+                # Simple case: result ends with the argument and )
+                result = result + ".cloned()"
+
+        log_decision(
+            "turbofish_injection",
+            method=method,
+            target_type=target_type,
+            inner_type=inner_type,
+            needs_cloned=needs_cloned,
+        )
+        increment("turbofish_injections")
+        return result
+
+    def _add_int_conversion(self, rust_code: str, returns_type: str | None) -> str:
+        """Add .into() for integer type conversion if needed.
+
+        When a method returns an integer type (e.g., i32, u32) and the assignment
+        target expects a different integer type (e.g., i64), we need to add .into()
+        for Rust's type conversion.
+
+        Args:
+            rust_code: The generated Rust code
+            returns_type: The return type from the stub mapping (e.g., "i32", "u32")
+
+        Returns:
+            The rust_code with .into() appended if conversion is needed
+        """
+        if not returns_type:
+            return rust_code
+
+        target_type = self.ctx.assignment_target_type
+        if not target_type:
+            return rust_code
+
+        # Integer types that need conversion
+        int_types = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize"}
+
+        # Only add .into() if both are integer types and they're different
+        if returns_type in int_types and target_type in int_types:
+            if returns_type != target_type:
+                log_decision(
+                    "int_conversion",
+                    returns_type=returns_type,
+                    target_type=target_type,
+                    added_into=True,
+                )
+                increment("int_conversions")
+                return f"{rust_code}.into()"
+
+        return rust_code
 
     def _transform_arg_for_type(self, arg: str, rust_type: str) -> str:
         """Transform an argument based on expected Rust type.
@@ -1697,9 +2439,15 @@ class RustEmitter:
 
         # Handle &str type: "x".to_string() -> "x"
         # Also handles wrapped types containing &str
-        if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type:
+        # Also handle generic reference types like &Q, &K which expect &str for string literals
+        is_ref_type = rust_type.startswith("&") and len(rust_type) <= 3
+        if rust_type in ("&str", "&'static str", "&'staticstr") or "&str" in rust_type or is_ref_type:
             if arg.endswith(".to_string()"):
                 return arg[:-12]  # Remove .to_string()
+            # If arg is a simple identifier (variable), borrow it
+            # This handles cases like encode(original) -> encode(&original)
+            if arg.isidentifier() and not arg.startswith("&"):
+                return f"&{arg}"
 
         # Handle impl Into<Str> which accepts &str but NOT String
         # clap's Str type only implements From<&str>, not From<String>
@@ -1719,28 +2467,73 @@ class RustEmitter:
 
                 return re.sub(r'"([^"]*)"\.to_string\(\)', r'"\1"', arg)
 
+        # Handle &dyn trait object types - these ALWAYS need & added even for non-identifiers
+        # because concrete types need to be borrowed as trait objects
+        # e.g., RS256.signer_from_jwk(key) -> &RS256.signer_from_jwk(key) for &dyn JwsSigner
+        if rust_type.startswith("&dyn") or "&dyn" in rust_type:
+            if not arg.startswith("&"):
+                return f"&{arg}"
+            return arg
+
+        # Handle explicit reference types like &T, &str, &[u8], &mut T, etc.
+        # If the param_type starts with & and arg doesn't already start with &, borrow it
+        # This handles both identifiers (variables) and expressions (method calls)
+        if rust_type.startswith("&") and not arg.startswith("&"):
+            # Distinguish between &mut and & references
+            if rust_type.startswith("&mut "):
+                # Track that this variable needs to be declared with `mut` (only for identifiers)
+                if arg.isidentifier():
+                    self.ctx.mut_vars.add(arg)
+                return f"&mut {arg}"
+            return f"&{arg}"
+
+        # NOTE: We do NOT automatically add & for generic type parameters (T, U, V, etc.)
+        # because many APIs use Into<T> bounds which require ownership, not references.
+        # Examples:
+        # - reqwest::body() takes impl Into<Body> - needs ownership
+        # - tokio::spawn() takes impl Future - needs ownership
+        # If specific APIs need &, they should have explicit &T in their param_types.
+
         return arg
 
     def _result_already_handled(self, result: str) -> bool:
-        """Check if a Result is already handled in the expression.
+        """Check if a Result is already handled at the OUTERMOST level of the expression.
 
-        Returns True if the expression contains .unwrap() or ? operator,
-        indicating the Result has already been unwrapped somewhere in the chain.
+        Returns True if the outermost call already has .unwrap() or ? operator.
         This prevents adding duplicate .unwrap() calls.
+
+        IMPORTANT: Only checks the outermost level - inner expressions may have ? but
+        that doesn't mean the outer expression result is handled.
         """
-        # Check for .unwrap() anywhere in the expression (not just at the end)
-        if ".unwrap()" in result:
+        # Strip trailing whitespace
+        result = result.rstrip()
+
+        # Check if expression ends with .unwrap() (at outermost level)
+        if result.endswith(".unwrap()"):
             return True
-        # Check for ? operator (but not inside strings)
-        # Simple heuristic: ? followed by end, semicolon, or method call
-        if "?" in result:
+
+        # Check if expression ends with ? operator (at outermost level)
+        # Need to check that ? is at the end, after closing all parentheses
+        if result.endswith("?"):
             return True
+
+        # Check for ? just before a closing paren at the outermost level
+        # e.g., "foo(bar(x)?)" - the inner ? doesn't count
+        # We need to find the outermost expression's end
+        # This is tricky with nested parens - for now, just check the very end
+
         return False
 
     def _apply_stdlib_mapping(self, mapping: StdlibMapping, args: list[str]) -> str:
         """Apply a stdlib mapping to generate Rust code."""
 
         rust_code = mapping.rust_code
+
+        # Convert hyphenated crate names to underscored Rust identifiers
+        # Pattern: word-word:: -> word_word::
+        import re
+
+        rust_code = re.sub(r"(\b\w+)-(\w+)::", r"\1_\2::", rust_code)
 
         # Transform args based on param_types if available
         # Use getattr since not all mapping types have param_types
@@ -1756,9 +2549,21 @@ class RustEmitter:
         # Handle different placeholder formats
         if "{args}" in rust_code:
             rust_code = rust_code.format(args=", ".join(args))
-        elif "{arg0}" in rust_code or "{arg1}" in rust_code:
+        elif "{arg0}" in rust_code or "{arg1}" in rust_code or "{&arg0}" in rust_code or "{&arg1}" in rust_code:
             # Handle indexed args
+            # {argN} - substitute directly
+            # {&argN} - substitute with .to_string() stripped (for &str parameters)
             replacements = {f"arg{i}": arg for i, arg in enumerate(args)}
+            # First handle {&argN} syntax - strip .to_string() for &str args
+            for i, arg in enumerate(args):
+                ref_placeholder = f"{{&arg{i}}}"
+                if ref_placeholder in rust_code:
+                    # Strip .to_string() from string literals for &str parameters
+                    stripped_arg = arg
+                    if arg.endswith(".to_string()"):
+                        stripped_arg = arg[:-12]  # Remove .to_string()
+                    rust_code = rust_code.replace(ref_placeholder, stripped_arg)
+            # Then handle regular {argN} placeholders
             for key, val in replacements.items():
                 rust_code = rust_code.replace(f"{{{key}}}", val)
 
@@ -1903,12 +2708,83 @@ class RustEmitter:
                     # Handle Result-returning stub calls
                     if mapping.needs_result:
                         if self.ctx.in_result_context:
-                            if result.endswith(".unwrap()"):
-                                result = result[:-9] + "?"
+                            if not self._result_already_handled(result):
+                                result = f"{result}?"
                         else:
                             if not self._result_already_handled(result):
                                 result = f"{result}.unwrap()"
                     return result
+                # Also check method mappings (e.g., URL_SAFE_NO_PAD.decode for constants)
+                method_mapping = get_stub_method_mapping(type_name, method)
+                if method_mapping:
+                    # For constants/engines, we don't have a {self} placeholder
+                    # The rust_code should contain the full path
+                    rust_code = method_mapping.rust_code
+                    # Replace argument placeholders
+                    for i, arg in enumerate(args):
+                        rust_code = rust_code.replace(f"{{arg{i}}}", arg)
+                    # Add required imports
+                    for imp in method_mapping.rust_imports:
+                        self.ctx.stdlib_imports.add(imp)
+                    # Handle Result-returning calls
+                    if method_mapping.needs_result:
+                        if self.ctx.in_result_context:
+                            if not self._result_already_handled(rust_code):
+                                rust_code = f"{rust_code}?"
+                        else:
+                            if not self._result_already_handled(rust_code):
+                                rust_code = f"{rust_code}.unwrap()"
+                    return rust_code
+
+            # Handle Result/Option static method calls BEFORE class_names check
+            # Result.unwrap(x) -> x.unwrap(), Result.is_err(x) -> x.is_err(), etc.
+            if type_name in ("Result", "Option") and args:
+                # Methods that take (self) only
+                if method in ("unwrap", "unwrap_err", "is_ok", "is_err", "is_some", "is_none"):
+                    return f"{args[0]}.{method}()"
+                # Methods that take (self, value)
+                if method == "unwrap_or":
+                    if len(args) >= 2:
+                        return f"{args[0]}.{method}({args[1]})"
+                # expect/expect_err take &str, not String
+                if method in ("expect", "expect_err"):
+                    if len(args) >= 2:
+                        # Strip .to_string() since expect takes &str
+                        msg = (
+                            args[1].removesuffix(".to_string()") if args[1].endswith(".to_string()") else f"&{args[1]}"
+                        )
+                        return f"{args[0]}.{method}({msg})"
+                # Methods that take (self, closure)
+                if method in ("unwrap_or_else", "map", "map_err", "and_then", "or_else"):
+                    if len(args) >= 2:
+                        return f"{args[0]}.{method}({args[1]})"
+                # map_error: Result.map_error(x, Wrapper) -> x.map_err(|e| Wrapper(e))?
+                # Adds ? at the end to propagate the converted error
+                # Strip any trailing ? from the inner expression since we add our own
+                if method == "map_error":
+                    if len(args) >= 2:
+                        inner = args[0].rstrip("?")
+                        # Resolve wrapper argument to full Rust path if it's a stub function
+                        wrapper = args[1]
+                        if len(expr.args) >= 2:
+                            wrapper_expr = expr.args[1]
+                            if isinstance(wrapper_expr, IRName):
+                                wrapper_name = wrapper_expr.name
+                                if wrapper_name in self.ctx.stub_imports:
+                                    crate_name = self.ctx.stub_imports[wrapper_name]
+                                    mapping = get_stub_mapping(f"{crate_name}.{wrapper_name}")
+                                    if mapping and mapping.rust_code:
+                                        # Extract the function path from rust_code
+                                        # e.g., "actix_web::error::ErrorInternalServerError({arg0})"
+                                        # -> "actix_web::error::ErrorInternalServerError"
+                                        rust_path = mapping.rust_code.split("(")[0]
+                                        wrapper = rust_path
+                        return f"{inner}.map_err(|e| {wrapper}(e))?"
+
+            # Check for local class static method calls (e.g., Cli.parse())
+            if type_name in self.ctx.class_names:
+                # Static method call on a local class - use :: instead of .
+                return f"{type_name}::{method}({', '.join(args)})"
 
         # Check for stdlib module.function calls (e.g., os.getcwd(), json.loads())
         if isinstance(expr.obj, IRName):
@@ -1919,8 +2795,8 @@ class RustEmitter:
                 # Handle Result-returning stdlib calls
                 if mapping.needs_result:
                     if self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                        if not self._result_already_handled(result):
+                            result = f"{result}?"
                     else:
                         if not self._result_already_handled(result):
                             result = f"{result}.unwrap()"
@@ -1934,8 +2810,8 @@ class RustEmitter:
                 result = self._apply_datetime_constructor(dt_mapping, args, expr)
                 if dt_mapping.needs_result:
                     if self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                        if not self._result_already_handled(result):
+                            result = f"{result}?"
                     else:
                         if not self._result_already_handled(result):
                             result = f"{result}.unwrap()"
@@ -1995,6 +2871,8 @@ class RustEmitter:
                         else:
                             if not self._result_already_handled(rust_code):
                                 rust_code = f"{rust_code}.unwrap()"
+                    # Add .into() for integer type conversion if needed
+                    rust_code = self._add_int_conversion(rust_code, stub_mapping.returns)
                     return rust_code
 
         # Check for chained stub method calls (e.g., Arg.new(...).short(...))
@@ -2027,11 +2905,13 @@ class RustEmitter:
                 # Handle Result-returning stub method calls
                 if stub_mapping.needs_result:
                     if self.ctx.in_result_context:
-                        if rust_code.endswith(".unwrap()"):
-                            rust_code = rust_code[:-9] + "?"
+                        if not self._result_already_handled(rust_code):
+                            rust_code = f"{rust_code}?"
                     else:
                         if not self._result_already_handled(rust_code):
                             rust_code = f"{rust_code}.unwrap()"
+                # Add .into() for integer type conversion if needed
+                rust_code = self._add_int_conversion(rust_code, stub_mapping.returns)
                 return rust_code
 
         # Check for nested stdlib calls (e.g., os.path.exists())
@@ -2042,8 +2922,8 @@ class RustEmitter:
                 result = self._apply_stdlib_mapping(mapping, args)
                 if mapping.needs_result:
                     if self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                        if not self._result_already_handled(result):
+                            result = f"{result}?"
                     else:
                         if not self._result_already_handled(result):
                             result = f"{result}.unwrap()"
@@ -2056,8 +2936,8 @@ class RustEmitter:
                 result = self._apply_stdlib_mapping(dt_mapping, args)
                 if dt_mapping.needs_result:
                     if self.ctx.in_result_context:
-                        if result.endswith(".unwrap()"):
-                            result = result[:-9] + "?"
+                        if not self._result_already_handled(result):
+                            result = f"{result}?"
                     else:
                         if not self._result_already_handled(result):
                             result = f"{result}.unwrap()"
@@ -2087,6 +2967,28 @@ class RustEmitter:
                 if method in ("unwrap_or_else", "map", "map_err", "and_then", "or_else"):
                     if len(args) >= 2:
                         return f"{args[0]}.{method}({args[1]})"
+                # map_error: Result.map_error(x, Wrapper) -> x.map_err(|e| Wrapper(e))?
+                # Adds ? at the end to propagate the converted error
+                # Strip any trailing ? from the inner expression since we add our own
+                if method == "map_error":
+                    if len(args) >= 2:
+                        inner = args[0].rstrip("?")
+                        # Resolve wrapper argument to full Rust path if it's a stub function
+                        wrapper = args[1]
+                        if len(expr.args) >= 2:
+                            wrapper_expr = expr.args[1]
+                            if isinstance(wrapper_expr, IRName):
+                                wrapper_name = wrapper_expr.name
+                                if wrapper_name in self.ctx.stub_imports:
+                                    crate_name = self.ctx.stub_imports[wrapper_name]
+                                    mapping = get_stub_mapping(f"{crate_name}.{wrapper_name}")
+                                    if mapping and mapping.rust_code:
+                                        # Extract the function path from rust_code
+                                        # e.g., "actix_web::error::ErrorInternalServerError({arg0})"
+                                        # -> "actix_web::error::ErrorInternalServerError"
+                                        rust_path = mapping.rust_code.split("(")[0]
+                                        wrapper = rust_path
+                        return f"{inner}.map_err(|e| {wrapper}(e))?"
                 # Methods that take (self, default, closure)
                 if method in ("map_or", "map_or_else"):
                     if len(args) >= 3:
@@ -2104,15 +3006,25 @@ class RustEmitter:
                 if method == "into_inner":
                     return f"*{args[0]}"
 
+        # Check if this is a static method call on a stub module type (e.g., web.Data.new())
+        # In this case, use :: instead of . for the method call
+        if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
+            base_name = expr.obj.obj.name
+            if base_name in self.ctx.stub_imports:
+                # This is a stub module attribute - emit as static method call
+                obj = self.emit_expression(expr.obj)
+                return f"{obj}::{method}({', '.join(args)})"
+
         obj = self.emit_expression(expr.obj)
 
-        # Handle .clone() -> .to_string() when target type is String
-        # This handles &str -> String conversion which .clone() doesn't do
-        # Methods like subcommand_name() return &str, so .clone() gives &str not String
+        # Handle .clone() method
         if method == "clone":
             target_type = self.ctx.assignment_target_type
+            # When target type is String and source might be &str, use .to_string()
             if target_type and target_type == "String":
                 return f"{obj}.to_string()"
+            # Otherwise, generate .clone() directly
+            return f"{obj}.clone()"
 
         # String methods
         if method == "append":
@@ -2152,6 +3064,28 @@ class RustEmitter:
             return f"{obj}.chars().all(|c| c.is_alphanumeric())"
         if method == "isspace":
             return f"{obj}.chars().all(|c| c.is_whitespace())"
+        if method == "encode":
+            # Python str.encode() returns bytes (UTF-8 by default)
+            # In Rust, String.as_bytes() returns &[u8]
+            return f"{obj}.as_bytes().to_vec()"
+
+        # File read method - Python f.read() returns file contents
+        # This requires std::io::Read trait for File objects
+        if method == "read" and not args:
+            # Check if target type is bytes/Vec<u8>
+            target_type = self.ctx.assignment_target_type
+            if target_type and target_type in ("Vec<u8>", "bytes"):
+                # Binary read - use read_to_end via Read trait
+                self.ctx.extra_imports.add("std::io::Read")
+                return f"{{ let mut __buf = Vec::new(); {obj}.read_to_end(&mut __buf).unwrap(); __buf }}"
+            else:
+                # Text read - use read_to_string via Read trait
+                self.ctx.extra_imports.add("std::io::Read")
+                return f"{{ let mut __buf = String::new(); {obj}.read_to_string(&mut __buf).unwrap(); __buf }}"
+
+        # Set methods (Python set.add -> Rust HashSet.insert)
+        if method == "add" and args:
+            return f"{obj}.insert({args[0]})"
 
         # Dict methods (only apply if args present to distinguish from user methods)
         if method == "get" and args:
@@ -2159,9 +3093,11 @@ class RustEmitter:
                 return f"{obj}.get(&{args[0]}).cloned().unwrap_or({args[1]})"
             return f"{obj}.get(&{args[0]}).cloned()"
         if method == "keys":
-            return f"{obj}.keys()"
+            # .keys() returns references, add .cloned() to get owned values
+            return f"{obj}.keys().cloned()"
         if method == "values":
-            return f"{obj}.values()"
+            # .values() returns references, add .cloned() to get owned values
+            return f"{obj}.values().cloned()"
         if method == "items":
             return f"{obj}.iter()"
 
@@ -2209,7 +3145,14 @@ class RustEmitter:
         call_expr = f"{obj}.{method_name}({', '.join(args)})"
 
         # Append ? if calling a Result-returning method inside a Result context
-        if self.ctx.in_result_context and method in self.ctx.result_functions:
+        # But NOT if we're assigning to a Result-typed variable (user wants to store the Result)
+        # And NOT if we're returning the Result directly (pass through to caller)
+        if (
+            self.ctx.in_result_context
+            and method in self.ctx.result_functions
+            and not self.ctx.assigning_to_result_type
+            and not self.ctx.in_direct_return
+        ):
             call_expr += "?"
 
         return call_expr
@@ -2219,7 +3162,9 @@ class RustEmitter:
         iter_expr = self.emit_expression(expr.iter)
         element = self.emit_expression(expr.element)
 
-        result = f"{iter_expr}.iter()"
+        # Use .into_iter() to consume the original and produce owned values
+        # This avoids Vec<&T> vs Vec<T> mismatches when reassigning
+        result = f"{iter_expr}.into_iter()"
 
         # Add filter if there are conditions
         for cond in expr.conditions:
@@ -2238,11 +3183,21 @@ class RustEmitter:
 
         for part in expr.parts:
             if isinstance(part, IRLiteral) and isinstance(part.value, str):
-                # Literal string part - escape braces
-                escaped = part.value.replace("{", "{{").replace("}", "}}")
+                # Literal string part - escape for Rust string literal
+                # Order matters: backslashes first, then quotes, then braces
+                escaped = part.value.replace("\\", "\\\\")
+                escaped = escaped.replace('"', '\\"')
+                escaped = escaped.replace("{", "{{").replace("}", "}}")
                 format_str += escaped
+            elif isinstance(part, IRFormattedValue):
+                # Expression with format spec: f"{value:x}" -> format!("{:x}", value)
+                if part.format_spec:
+                    format_str += "{:" + part.format_spec + "}"
+                else:
+                    format_str += "{}"
+                args.append(self.emit_expression(part.value))
             else:
-                # Expression part
+                # Expression part without format spec
                 format_str += "{}"
                 args.append(self.emit_expression(part))
 

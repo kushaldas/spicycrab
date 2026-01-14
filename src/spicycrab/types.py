@@ -16,7 +16,7 @@ Usage:
         return Ok(a // b)
 """
 
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 # Type variables for generic types
 T = TypeVar("T")
@@ -162,6 +162,20 @@ class Result(Generic[T, E]):
     @staticmethod
     def is_err(result: "Result[T, E]") -> bool:
         """Check if Result is Err. Transpiles to: result.is_err()"""
+        ...
+
+    @staticmethod
+    def map_error(result: "Result[T, E]", wrapper: type) -> "Result[T, Any]":
+        """Convert error type using a wrapper function/type.
+
+        Transpiles to: result.map_err(|e| Wrapper(e))
+
+        Example:
+            from spicycrab_actix_web import ErrorInternalServerError
+
+            # Convert redis::RedisError to actix_web::Error
+            conn_result = Result.map_error(redis.get_connection(), ErrorInternalServerError)
+        """
         ...
 
 
