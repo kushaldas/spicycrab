@@ -149,6 +149,10 @@ class EmitterContext:
     mut_vars: set[str] = field(default_factory=set)
     # Variables with Option types (for comparison wrapping) - function-scoped
     option_vars: set[str] = field(default_factory=set)
+    # Variables read in the current function/method body - function-scoped
+    read_vars: set[str] = field(default_factory=set)
+    # Assignment counts in the current function/method body - function-scoped
+    assignment_counts: dict[str, int] = field(default_factory=dict)
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -1043,12 +1047,13 @@ class RustEmitter:
                 if self._is_option_type(param.type):
                     self.ctx.option_vars.add(param.name)
 
+            prev_read_vars = self.ctx.read_vars
+            prev_assignment_counts = self.ctx.assignment_counts
+            self.ctx.read_vars, self.ctx.assignment_counts = self._collect_var_usage(method.body)
+
             # Regular method body
             self.ctx.indent += 1
-            for i, stmt in enumerate(method.body):
-                is_last = i == len(method.body) - 1
-                self.ctx.in_last_stmt = is_last
-                lines.append(self.emit_statement(stmt))
+            lines.extend(self._emit_statement_block(method.body, mark_tail=True))
             self.ctx.in_last_stmt = False
             self.ctx.indent -= 1
 
@@ -1058,6 +1063,8 @@ class RustEmitter:
             self.ctx.param_types = prev_param_types
             self.ctx.type_env = prev_type_env
             self.ctx.option_vars = prev_option_vars
+            self.ctx.read_vars = prev_read_vars
+            self.ctx.assignment_counts = prev_assignment_counts
             self.ctx.narrowed_options = set()
             self.ctx.mut_vars = prev_mut_vars
 
@@ -1146,12 +1153,13 @@ class RustEmitter:
             if self._is_option_type(param.type):
                 self.ctx.option_vars.add(param.name)
 
+        prev_read_vars = self.ctx.read_vars
+        prev_assignment_counts = self.ctx.assignment_counts
+        self.ctx.read_vars, self.ctx.assignment_counts = self._collect_var_usage(func.body)
+
         # Body - mark last statement for expression return
         self.ctx.indent += 1
-        for i, stmt in enumerate(func.body):
-            is_last = i == len(func.body) - 1
-            self.ctx.in_last_stmt = is_last
-            lines.append(self.emit_statement(stmt))
+        lines.extend(self._emit_statement_block(func.body, mark_tail=True))
         self.ctx.in_last_stmt = False
         self.ctx.indent -= 1
 
@@ -1162,6 +1170,8 @@ class RustEmitter:
         self.ctx.type_env = prev_type_env
         self.ctx.mut_vars = prev_mut_vars
         self.ctx.option_vars = prev_option_vars
+        self.ctx.read_vars = prev_read_vars
+        self.ctx.assignment_counts = prev_assignment_counts
         self.ctx.narrowed_options = set()
 
         lines.append(f"{indent}}}")
@@ -1176,6 +1186,255 @@ class RustEmitter:
 
         for stmt in stmts:
             self._scan_stmt_for_mut_vars(stmt)
+
+    def _collect_var_usage(self, stmts: list[IRStatement]) -> tuple[set[str], dict[str, int]]:
+        """Collect variable reads and assignment counts for local codegen decisions."""
+        reads: set[str] = set()
+        assignment_counts: dict[str, int] = {}
+
+        for stmt in stmts:
+            self._scan_stmt_for_var_usage(stmt, reads, assignment_counts)
+
+        return reads, assignment_counts
+
+    def _scan_stmt_for_var_usage(
+        self,
+        stmt: IRStatement,
+        reads: set[str],
+        assignment_counts: dict[str, int],
+    ) -> None:
+        """Recursively scan a statement for local variable reads/writes."""
+        if isinstance(stmt, IRAssign):
+            assignment_counts[stmt.target] = assignment_counts.get(stmt.target, 0) + 1
+            self._scan_expr_for_var_reads(stmt.value, reads)
+        elif isinstance(stmt, IRTupleUnpack):
+            for target in stmt.targets:
+                assignment_counts[target] = assignment_counts.get(target, 0) + 1
+            self._scan_expr_for_var_reads(stmt.value, reads)
+        elif isinstance(stmt, IRAttrAssign):
+            self._scan_expr_for_var_reads(stmt.obj, reads)
+            self._scan_expr_for_var_reads(stmt.value, reads)
+        elif isinstance(stmt, IRExprStmt):
+            self._scan_expr_for_var_reads(stmt.expr, reads)
+        elif isinstance(stmt, IRReturn):
+            self._scan_expr_for_var_reads(stmt.value, reads)
+        elif isinstance(stmt, IRIf):
+            self._scan_expr_for_var_reads(stmt.condition, reads)
+            for s in stmt.then_body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+            for elif_cond, elif_body in stmt.elif_clauses:
+                self._scan_expr_for_var_reads(elif_cond, reads)
+                for s in elif_body:
+                    self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+            for s in stmt.else_body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+        elif isinstance(stmt, IRFor):
+            assignment_counts[stmt.target] = assignment_counts.get(stmt.target, 0) + 1
+            self._scan_expr_for_var_reads(stmt.iter, reads)
+            for s in stmt.body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+        elif isinstance(stmt, IRWhile):
+            self._scan_expr_for_var_reads(stmt.condition, reads)
+            for s in stmt.body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+        elif isinstance(stmt, IRWith):
+            if stmt.target:
+                assignment_counts[stmt.target] = assignment_counts.get(stmt.target, 0) + 1
+            self._scan_expr_for_var_reads(stmt.context, reads)
+            for s in stmt.body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+        elif isinstance(stmt, IRTry):
+            for s in stmt.body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+            for s in stmt.else_body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+            for handler in stmt.handlers:
+                for s in handler.body:
+                    self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+            for s in stmt.finally_body:
+                self._scan_stmt_for_var_usage(s, reads, assignment_counts)
+        elif isinstance(stmt, IRRaise):
+            self._scan_expr_for_var_reads(stmt.exc, reads)
+
+    def _scan_expr_for_var_reads(self, expr: IRExpression | None, reads: set[str]) -> None:
+        """Recursively scan an expression for local variable reads."""
+        if expr is None:
+            return
+
+        if isinstance(expr, IRName):
+            reads.add(expr.name)
+        elif isinstance(expr, IRCall):
+            for arg in expr.args:
+                self._scan_expr_for_var_reads(arg, reads)
+            for arg in expr.kwargs.values():
+                self._scan_expr_for_var_reads(arg, reads)
+            if not isinstance(expr.func, IRName):
+                self._scan_expr_for_var_reads(expr.func, reads)
+        elif isinstance(expr, IRMethodCall):
+            self._scan_expr_for_var_reads(expr.obj, reads)
+            for arg in expr.args:
+                self._scan_expr_for_var_reads(arg, reads)
+            for arg in expr.kwargs.values():
+                self._scan_expr_for_var_reads(arg, reads)
+        elif isinstance(expr, IRBinaryOp):
+            self._scan_expr_for_var_reads(expr.left, reads)
+            self._scan_expr_for_var_reads(expr.right, reads)
+        elif isinstance(expr, IRUnaryOp):
+            self._scan_expr_for_var_reads(expr.operand, reads)
+        elif isinstance(expr, IRAttribute):
+            self._scan_expr_for_var_reads(expr.obj, reads)
+        elif isinstance(expr, IRSubscript):
+            self._scan_expr_for_var_reads(expr.obj, reads)
+            self._scan_expr_for_var_reads(expr.index, reads)
+        elif isinstance(expr, IRSlice):
+            self._scan_expr_for_var_reads(expr.lower, reads)
+            self._scan_expr_for_var_reads(expr.upper, reads)
+            self._scan_expr_for_var_reads(expr.step, reads)
+        elif isinstance(expr, IRList):
+            for element in expr.elements:
+                self._scan_expr_for_var_reads(element, reads)
+        elif isinstance(expr, IRDict):
+            for key, value in zip(expr.keys, expr.values):
+                self._scan_expr_for_var_reads(key, reads)
+                self._scan_expr_for_var_reads(value, reads)
+        elif isinstance(expr, IRSet):
+            for element in expr.elements:
+                self._scan_expr_for_var_reads(element, reads)
+        elif isinstance(expr, IRTuple):
+            for element in expr.elements:
+                self._scan_expr_for_var_reads(element, reads)
+        elif isinstance(expr, IRIfExp):
+            self._scan_expr_for_var_reads(expr.condition, reads)
+            self._scan_expr_for_var_reads(expr.then_expr, reads)
+            self._scan_expr_for_var_reads(expr.else_expr, reads)
+        elif isinstance(expr, IRListComp):
+            self._scan_expr_for_var_reads(expr.iter, reads)
+            self._scan_expr_for_var_reads(expr.element, reads)
+            for condition in expr.conditions:
+                self._scan_expr_for_var_reads(condition, reads)
+        elif isinstance(expr, IRFormattedValue):
+            self._scan_expr_for_var_reads(expr.value, reads)
+        elif isinstance(expr, IRFString):
+            for part in expr.parts:
+                self._scan_expr_for_var_reads(part, reads)
+        elif isinstance(expr, IRAwait):
+            self._scan_expr_for_var_reads(expr.value, reads)
+
+    def _emit_statement_block(self, stmts: list[IRStatement], mark_tail: bool = False) -> list[str]:
+        """Emit a sequence of statements with local peephole optimizations."""
+        lines: list[str] = []
+        i = 0
+        prev_last_stmt = self.ctx.in_last_stmt
+        try:
+            while i < len(stmts):
+                optimized = self._try_emit_vec_init_from_pushes(stmts, i)
+                if optimized:
+                    emitted, next_index = optimized
+                    self.ctx.in_last_stmt = False
+                    lines.append(emitted)
+                    i = next_index
+                    continue
+
+                self.ctx.in_last_stmt = mark_tail and i == len(stmts) - 1
+                lines.append(self.emit_statement(stmts[i]))
+                i += 1
+        finally:
+            self.ctx.in_last_stmt = prev_last_stmt
+
+        return lines
+
+    def _try_emit_vec_init_from_pushes(self, stmts: list[IRStatement], index: int) -> tuple[str, int] | None:
+        """Emit `let v = vec![...]` for `v = []; v.append(...); ...` sequences."""
+        if index >= len(stmts):
+            return None
+
+        stmt = stmts[index]
+        if not isinstance(stmt, IRAssign) or not stmt.is_declaration or not self._is_empty_vec_init(stmt.value):
+            return None
+
+        elements: list[IRExpression] = []
+        next_index = index + 1
+        while next_index < len(stmts):
+            pushed = self._pushed_value(stmts[next_index], stmt.target)
+            if pushed is None:
+                break
+            elements.append(pushed)
+            next_index += 1
+
+        if not elements:
+            return None
+
+        keep_mut = self._block_mutates_var(stmts[next_index:], stmt.target)
+        target_is_read = self._block_reads_var(stmts[next_index:], stmt.target)
+        emitted = self._emit_vec_init_assignment(stmt, elements, keep_mut, target_is_read)
+        return emitted, next_index
+
+    def _block_reads_var(self, stmts: list[IRStatement], target: str) -> bool:
+        """Return True if a statement block reads a variable."""
+        reads: set[str] = set()
+        assignment_counts: dict[str, int] = {}
+        for stmt in stmts:
+            self._scan_stmt_for_var_usage(stmt, reads, assignment_counts)
+        return target in reads
+
+    def _is_empty_vec_init(self, expr: IRExpression | None) -> bool:
+        """Return True for `[]` and `list()` initializers."""
+        if isinstance(expr, IRList):
+            return not expr.elements
+        return (
+            isinstance(expr, IRCall)
+            and isinstance(expr.func, IRName)
+            and expr.func.name == "list"
+            and not expr.args
+            and not expr.kwargs
+        )
+
+    def _pushed_value(self, stmt: IRStatement, target: str) -> IRExpression | None:
+        """Return the pushed value for `target.append(x)` / `target.push(x)` statements."""
+        if not isinstance(stmt, IRExprStmt) or not isinstance(stmt.expr, IRMethodCall):
+            return None
+        call = stmt.expr
+        if not isinstance(call.obj, IRName) or call.obj.name != target:
+            return None
+        if call.method not in {"append", "push"} or len(call.args) != 1 or call.kwargs:
+            return None
+        return call.args[0]
+
+    def _emit_vec_init_assignment(
+        self,
+        stmt: IRAssign,
+        elements: list[IRExpression],
+        keep_mut: bool,
+        target_is_read: bool,
+    ) -> str:
+        """Emit an assignment with an optimized vec![...] initializer."""
+        original_value = stmt.value
+        original_mutable = stmt.is_mutable
+        original_read_vars = self.ctx.read_vars.copy()
+        stmt.value = IRList(elements=elements, line=stmt.line)
+        stmt.is_mutable = keep_mut
+        if not keep_mut:
+            self.ctx.mut_vars.discard(stmt.target)
+        if not target_is_read:
+            self.ctx.read_vars.discard(stmt.target)
+        try:
+            return self._emit_assign(stmt)
+        finally:
+            self.ctx.read_vars = original_read_vars
+            stmt.value = original_value
+            stmt.is_mutable = original_mutable
+
+    def _local_binding_name(self, name: str) -> str:
+        """Return an underscore-prefixed name for unused single-assignment locals."""
+        if name.startswith("_"):
+            return name
+        if name in self.ctx.hoisted_vars:
+            return name
+        if self.ctx.assignment_counts.get(name, 0) != 1:
+            return name
+        if name in self.ctx.read_vars:
+            return name
+        return f"_{name}"
 
     def _scan_stmt_for_mut_vars(self, stmt: IRStatement) -> None:
         """Recursively scan a statement for &mut variable usage."""
@@ -1228,25 +1487,13 @@ class RustEmitter:
             return
 
         if isinstance(expr, IRMethodCall):
-            mutating_methods = {
-                "append",
-                "push",
-                "extend",
-                "insert",
-                "pop",
-                "remove",
-                "clear",
-                "sort",
-                "reverse",
-                "update",
-                "add",
-                "discard",
-            }
-            mutating_prefixes = ("set_", "remove_", "add_")
-            if isinstance(expr.obj, IRName) and (
-                expr.method in mutating_methods or any(expr.method.startswith(prefix) for prefix in mutating_prefixes)
-            ):
+            if isinstance(expr.obj, IRName) and self._is_mutating_method_name(expr.method):
                 self.ctx.mut_vars.add(expr.obj.name)
+
+            if self._is_random_shuffle_call(expr):
+                arg = expr.args[0]
+                if isinstance(arg, IRName):
+                    self.ctx.mut_vars.add(arg.name)
 
             # Check stub method mappings for &mut param types
             if isinstance(expr.obj, IRMethodCall):
@@ -1306,6 +1553,144 @@ class RustEmitter:
                 if isinstance(expr.func.obj, IRName) and expr.func.obj.name in self.ctx.stub_imports:
                     return expr.func.obj.name
         return None
+
+    def _is_mutating_method_name(self, method: str) -> bool:
+        """Return True for Python/Rust methods that mutate their receiver."""
+        mutating_methods = {
+            "append",
+            "push",
+            "extend",
+            "insert",
+            "pop",
+            "remove",
+            "clear",
+            "sort",
+            "reverse",
+            "update",
+            "add",
+            "discard",
+            "recv",
+            "recv_many",
+            "try_recv",
+            "read",
+            "write",
+            "write_all",
+            "flush",
+        }
+        mutating_prefixes = ("set_", "remove_", "add_")
+        return method in mutating_methods or any(method.startswith(prefix) for prefix in mutating_prefixes)
+
+    def _is_random_shuffle_call(self, expr: IRMethodCall) -> bool:
+        """Return True for random.shuffle(x)."""
+        return (
+            isinstance(expr.obj, IRName)
+            and expr.obj.name == "random"
+            and expr.method == "shuffle"
+            and len(expr.args) == 1
+        )
+
+    def _block_mutates_var(self, stmts: list[IRStatement], target: str) -> bool:
+        """Return True if statements mutate or reassign a variable."""
+        return any(self._stmt_mutates_var(stmt, target) for stmt in stmts)
+
+    def _stmt_mutates_var(self, stmt: IRStatement, target: str) -> bool:
+        """Return True if a statement mutates or reassigns a variable."""
+        if isinstance(stmt, IRAssign):
+            return stmt.target == target and not stmt.is_declaration or self._expr_mutates_var(stmt.value, target)
+        if isinstance(stmt, IRTupleUnpack):
+            return target in stmt.targets or self._expr_mutates_var(stmt.value, target)
+        if isinstance(stmt, IRAttrAssign):
+            if isinstance(stmt.obj, IRName) and stmt.obj.name == target:
+                return True
+            return self._expr_mutates_var(stmt.obj, target) or self._expr_mutates_var(stmt.value, target)
+        if isinstance(stmt, IRExprStmt):
+            return self._expr_mutates_var(stmt.expr, target)
+        if isinstance(stmt, IRReturn):
+            return self._expr_mutates_var(stmt.value, target)
+        if isinstance(stmt, IRIf):
+            return (
+                self._expr_mutates_var(stmt.condition, target)
+                or self._block_mutates_var(stmt.then_body, target)
+                or any(self._block_mutates_var(body, target) for _, body in stmt.elif_clauses)
+                or self._block_mutates_var(stmt.else_body, target)
+            )
+        if isinstance(stmt, IRFor):
+            return self._expr_mutates_var(stmt.iter, target) or self._block_mutates_var(stmt.body, target)
+        if isinstance(stmt, IRWhile):
+            return self._expr_mutates_var(stmt.condition, target) or self._block_mutates_var(stmt.body, target)
+        if isinstance(stmt, IRWith):
+            return self._expr_mutates_var(stmt.context, target) or self._block_mutates_var(stmt.body, target)
+        if isinstance(stmt, IRTry):
+            return (
+                self._block_mutates_var(stmt.body, target)
+                or self._block_mutates_var(stmt.else_body, target)
+                or any(self._block_mutates_var(handler.body, target) for handler in stmt.handlers)
+                or self._block_mutates_var(stmt.finally_body, target)
+            )
+        if isinstance(stmt, IRRaise):
+            return self._expr_mutates_var(stmt.exc, target)
+        return False
+
+    def _expr_mutates_var(self, expr: IRExpression | None, target: str) -> bool:
+        """Return True if an expression mutates a variable."""
+        if expr is None:
+            return False
+        if isinstance(expr, IRMethodCall):
+            if isinstance(expr.obj, IRName) and expr.obj.name == target and self._is_mutating_method_name(expr.method):
+                return True
+            if self._is_random_shuffle_call(expr) and isinstance(expr.args[0], IRName) and expr.args[0].name == target:
+                return True
+            return (
+                self._expr_mutates_var(expr.obj, target)
+                or any(self._expr_mutates_var(arg, target) for arg in expr.args)
+                or any(self._expr_mutates_var(arg, target) for arg in expr.kwargs.values())
+            )
+        if isinstance(expr, IRCall):
+            return (
+                any(self._expr_mutates_var(arg, target) for arg in expr.args)
+                or any(self._expr_mutates_var(arg, target) for arg in expr.kwargs.values())
+                or self._expr_mutates_var(expr.func, target)
+            )
+        if isinstance(expr, IRBinaryOp):
+            return self._expr_mutates_var(expr.left, target) or self._expr_mutates_var(expr.right, target)
+        if isinstance(expr, IRUnaryOp):
+            return self._expr_mutates_var(expr.operand, target)
+        if isinstance(expr, IRAttribute):
+            return self._expr_mutates_var(expr.obj, target)
+        if isinstance(expr, IRSubscript):
+            return self._expr_mutates_var(expr.obj, target) or self._expr_mutates_var(expr.index, target)
+        if isinstance(expr, IRSlice):
+            return (
+                self._expr_mutates_var(expr.lower, target)
+                or self._expr_mutates_var(expr.upper, target)
+                or self._expr_mutates_var(expr.step, target)
+            )
+        if isinstance(expr, (IRList, IRSet, IRTuple)):
+            return any(self._expr_mutates_var(element, target) for element in expr.elements)
+        if isinstance(expr, IRDict):
+            return any(
+                self._expr_mutates_var(key, target) or self._expr_mutates_var(value, target)
+                for key, value in zip(expr.keys, expr.values)
+            )
+        if isinstance(expr, IRIfExp):
+            return (
+                self._expr_mutates_var(expr.condition, target)
+                or self._expr_mutates_var(expr.then_expr, target)
+                or self._expr_mutates_var(expr.else_expr, target)
+            )
+        if isinstance(expr, IRListComp):
+            return (
+                self._expr_mutates_var(expr.iter, target)
+                or self._expr_mutates_var(expr.element, target)
+                or any(self._expr_mutates_var(condition, target) for condition in expr.conditions)
+            )
+        if isinstance(expr, IRFormattedValue):
+            return self._expr_mutates_var(expr.value, target)
+        if isinstance(expr, IRFString):
+            return any(self._expr_mutates_var(part, target) for part in expr.parts)
+        if isinstance(expr, IRAwait):
+            return self._expr_mutates_var(expr.value, target)
+        return False
 
     def emit_statement(self, stmt: IRStatement) -> str:
         """Emit a statement."""
@@ -1413,6 +1798,8 @@ class RustEmitter:
             return f"{indent}{stmt.target} = {value};"
 
         if stmt.is_declaration:
+            binding_name = self._local_binding_name(stmt.target)
+            can_be_mut = binding_name == stmt.target
             # Handle forward declaration (type annotation without value): alg: str
             # Generate: let mut alg: String;
             if stmt.value is None and stmt.type_annotation:
@@ -1420,8 +1807,8 @@ class RustEmitter:
                 type_str = self._extract_type_string(stmt.type_annotation)
                 if type_str:
                     self.ctx.type_env[stmt.target] = type_str
-                mut = "mut " if (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
-                return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()};"
+                mut = "mut " if can_be_mut and (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
+                return f"{indent}let {mut}{binding_name}: {rust_type.to_rust()};"
 
             # Set target type for turbofish inference before emitting value
             if stmt.type_annotation:
@@ -1443,7 +1830,7 @@ class RustEmitter:
             self.ctx.assigning_to_result_type = False
 
             # Add mut if explicitly marked mutable (reassigned later) OR used with &mut
-            mut = "mut " if (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
+            mut = "mut " if can_be_mut and (stmt.is_mutable or stmt.target in self.ctx.mut_vars) else ""
             if stmt.type_annotation:
                 rust_type = self.resolver.resolve(stmt.type_annotation)
                 # Track the type for instance method resolution
@@ -1455,7 +1842,7 @@ class RustEmitter:
                 if value == "None" and rust_type.name != "Option":
                     rust_type_str = f"Option<{rust_type.to_rust()}>"
                     self.ctx.option_vars.add(stmt.target)
-                    return f"{indent}let {mut}{stmt.target}: {rust_type_str} = {value};"
+                    return f"{indent}let {mut}{binding_name}: {rust_type_str} = {value};"
                 # Track Option-typed variables for comparison wrapping
                 if rust_type.name == "Option":
                     self.ctx.option_vars.add(stmt.target)
@@ -1464,8 +1851,8 @@ class RustEmitter:
                 is_call = isinstance(stmt.value, (IRCall, IRMethodCall))
                 if rust_type.name == "Option" and value != "None" and not is_call:
                     value = f"Some({value})"
-                return f"{indent}let {mut}{stmt.target}: {rust_type.to_rust()} = {value};"
-            return f"{indent}let {mut}{stmt.target} = {value};"
+                return f"{indent}let {mut}{binding_name}: {rust_type.to_rust()} = {value};"
+            return f"{indent}let {mut}{binding_name} = {value};"
         else:
             # Check for compound assignment pattern: x = x op y -> x op= y
             # This avoids clippy::assign_op_pattern warnings
@@ -1646,6 +2033,13 @@ class RustEmitter:
         """Emit an if statement."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
+        tail_expression = (
+            self.ctx.in_last_stmt
+            and bool(stmt.else_body)
+            and self._block_always_exits(stmt.then_body)
+            and self._block_always_exits(stmt.else_body)
+            and all(self._block_always_exits(body) for _, body in stmt.elif_clauses)
+        )
 
         # Find variables that need hoisting (assigned in multiple branches)
         hoistable = self._find_hoistable_vars(stmt)
@@ -1679,8 +2073,7 @@ class RustEmitter:
         # If we unwrapped variables, track them so they're used without Option
         for var in unwrapped_vars:
             self.ctx.unwrapped_options.add(var)
-        for s in stmt.then_body:
-            lines.append(self.emit_statement(s))
+        lines.extend(self._emit_statement_block(stmt.then_body, mark_tail=tail_expression))
         for var in unwrapped_vars:
             self.ctx.unwrapped_options.discard(var)
         self.ctx.indent -= 1
@@ -1702,8 +2095,7 @@ class RustEmitter:
             # Track unwrapped variables for the elif body
             for var in elif_unwrapped:
                 self.ctx.unwrapped_options.add(var)
-            for s in elif_body:
-                lines.append(self.emit_statement(s))
+            lines.extend(self._emit_statement_block(elif_body, mark_tail=tail_expression))
             for var in elif_unwrapped:
                 self.ctx.unwrapped_options.discard(var)
             self.ctx.indent -= 1
@@ -1711,8 +2103,7 @@ class RustEmitter:
         if stmt.else_body:
             lines.append(f"{indent}}} else {{")
             self.ctx.indent += 1
-            for s in stmt.else_body:
-                lines.append(self.emit_statement(s))
+            lines.extend(self._emit_statement_block(stmt.else_body, mark_tail=tail_expression))
             self.ctx.indent -= 1
 
         lines.append(f"{indent}}}")
@@ -1737,8 +2128,7 @@ class RustEmitter:
         lines.append(f"{indent}while {cond} {{")
 
         self.ctx.indent += 1
-        for s in stmt.body:
-            lines.append(self.emit_statement(s))
+        lines.extend(self._emit_statement_block(stmt.body))
         self.ctx.indent -= 1
 
         lines.append(f"{indent}}}")
@@ -1751,11 +2141,11 @@ class RustEmitter:
         indent = self.ctx.indent_str()
 
         iter_expr = self.emit_expression(stmt.iter)
-        lines.append(f"{indent}for {stmt.target} in {iter_expr} {{")
+        target = self._local_binding_name(stmt.target)
+        lines.append(f"{indent}for {target} in {iter_expr} {{")
 
         self.ctx.indent += 1
-        for s in stmt.body:
-            lines.append(self.emit_statement(s))
+        lines.extend(self._emit_statement_block(stmt.body))
         self.ctx.indent -= 1
 
         lines.append(f"{indent}}}")
@@ -1781,24 +2171,25 @@ class RustEmitter:
                     if stmt.context.method in ("TemporaryDirectory", "NamedTemporaryFile"):
                         is_tempfile_ctx = True
 
-        # Use mut by default since context managers often need mutation
         if stmt.target:
             if is_tempfile_ctx:
+                target = self._local_binding_name(stmt.target)
                 # tempfile context managers: bind the path, not the object
                 # Keep the TempDir alive with _temp_ctx, bind path to target
                 lines.append(f"{inner_indent}let _temp_ctx = {ctx_expr};")
                 if "TemporaryDirectory" in ctx_expr or "tempdir" in ctx_expr:
-                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
+                    lines.append(f"{inner_indent}let {target} = _temp_ctx.path().to_string_lossy().to_string();")
                 else:
                     # NamedTempFile - get the path
-                    lines.append(f"{inner_indent}let {stmt.target} = _temp_ctx.path().to_string_lossy().to_string();")
+                    lines.append(f"{inner_indent}let {target} = _temp_ctx.path().to_string_lossy().to_string();")
             else:
-                lines.append(f"{inner_indent}let mut {stmt.target} = {ctx_expr};")
+                target = self._local_binding_name(stmt.target)
+                mut = "mut " if target == stmt.target and stmt.target in self.ctx.mut_vars else ""
+                lines.append(f"{inner_indent}let {mut}{target} = {ctx_expr};")
         else:
             lines.append(f"{inner_indent}let _ctx = {ctx_expr};")
 
-        for s in stmt.body:
-            lines.append(self.emit_statement(s))
+        lines.extend(self._emit_statement_block(stmt.body))
 
         self.ctx.indent -= 1
         lines.append(f"{indent}}} // drop")
@@ -1914,15 +2305,11 @@ class RustEmitter:
 
     def _emit_try_arm_body(self, body: list[IRStatement], arm_is_tail: bool = False) -> list[str]:
         """Emit statements inside a match arm."""
-        lines: list[str] = []
         prev_last_stmt = self.ctx.in_last_stmt
         try:
-            for i, s in enumerate(body):
-                self.ctx.in_last_stmt = arm_is_tail and i == len(body) - 1
-                lines.append(self.emit_statement(s))
+            return self._emit_statement_block(body, mark_tail=arm_is_tail)
         finally:
             self.ctx.in_last_stmt = prev_last_stmt
-        return lines
 
     def _register_try_binding(self, assign: IRAssign) -> None:
         """Track the Ok binding type for method resolution inside the try arm."""
@@ -1942,17 +2329,16 @@ class RustEmitter:
         if not stmt.handlers:
             lines.append(f"{indent}{{")
             self.ctx.indent += 1
-            for s in stmt.body:
-                lines.append(self.emit_statement(s))
+            lines.extend(self._emit_statement_block(stmt.body))
             self.ctx.indent -= 1
             lines.append(f"{indent}}}")
 
             if stmt.else_body:
-                lines.extend(self._emit_try_arm_body(stmt.else_body))
+                lines.extend(self._emit_statement_block(stmt.else_body))
 
             if stmt.finally_body:
                 lines.append(f"{indent}// finally block")
-                lines.extend(self._emit_try_arm_body(stmt.finally_body))
+                lines.extend(self._emit_statement_block(stmt.finally_body))
 
             return "\n".join(lines)
 

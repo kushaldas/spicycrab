@@ -334,12 +334,10 @@ def generate_cargo_toml(
 
     # Clippy lint configuration
     # - unnecessary_cast: conservative casts ensure type safety for Python int -> Rust u64
-    # - vec_init_then_push: optimizing vec![] + push() requires complex analysis
     # - unnecessary_to_owned: string literal to String conversion then borrow is safe
     # - format_in_format_args: f-string transpilation creates format! inside println!
     lines.append("[lints.clippy]")
     lines.append('unnecessary_cast = "allow"')
-    lines.append('vec_init_then_push = "allow"')
     lines.append('unnecessary_to_owned = "allow"')
     lines.append('format_in_format_args = "allow"')
     lines.append("")

@@ -32,6 +32,10 @@ The transpiler automatically generates idiomatic Rust patterns to avoid common c
 +--------------------------------+------------------------------+
 | ``println!("{}", "literal")``  | ``println!("literal")``      |
 +--------------------------------+------------------------------+
+| ``v = []; v.append(x)``        | ``let v = vec![x];``         |
++--------------------------------+------------------------------+
+| Unused local assignment        | ``let _name = value;``       |
++--------------------------------+------------------------------+
 
 Example: Length Checks
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -83,45 +87,42 @@ Example: Compound Assignment
        }
    }
 
-Allowed Clippy Lints
---------------------
+Generated Lint Configuration
+----------------------------
 
-The following lints are allowed in generated code as they are either stylistic
-or would require complex code analysis to fix automatically:
+Generated ``Cargo.toml`` keeps lint allowances narrow. These lints are allowed
+because they are stylistic or are required by Python-compatible code generation:
 
-+-------------------------------+------------------------------------------------+
-| Lint                          | Reason                                         |
-+===============================+================================================+
-| ``unused_variables``          | Generated code may declare variables that      |
-|                               | aren't used in all code paths                  |
-+-------------------------------+------------------------------------------------+
-| ``unused_mut``                | Transpiler may conservatively mark variables   |
-|                               | as mutable when mutation is possible           |
-+-------------------------------+------------------------------------------------+
-| ``clippy::vec_init_then_push``| Optimizing ``vec![] + push()`` to              |
-|                               | ``vec![items]`` requires complex analysis      |
-+-------------------------------+------------------------------------------------+
+* ``unused_must_use``: async channel operations can intentionally ignore
+  returned ``Result`` values.
+* ``clippy::unnecessary_cast``: conservative casts preserve Python int
+  semantics across Rust integer widths.
+* ``clippy::unnecessary_to_owned``: string ownership conversions are sometimes
+  emitted before borrowing.
+* ``clippy::format_in_format_args``: f-string transpilation can create nested
+  ``format!`` inside ``println!``.
+
+The emitter reduces common warnings directly:
+
+* Consecutive ``append``/``push`` calls after an empty list declaration become a
+  single ``vec![...]`` initializer.
+* Single-assignment locals that are never read are emitted as underscore
+  bindings, preserving initializer side effects while avoiding unused-variable
+  warnings.
+* Mutability analysis recognizes receiver mutations and calls such as
+  ``random.shuffle(items)``.
 
 Running Clippy Manually
 -----------------------
 
-To run clippy on generated Rust code with the recommended settings:
+To run clippy on generated Rust code:
 
 .. code-block:: bash
 
-   cargo clippy -- -D warnings -A unused_variables -A unused_mut -A clippy::vec_init_then_push
+   cargo clippy -- -D warnings
 
 Or to see all warnings without failing:
 
 .. code-block:: bash
 
    cargo clippy
-
-Future Improvements
--------------------
-
-The following clippy optimizations are planned for future versions:
-
-- ``vec_init_then_push``: Detect consecutive push calls after ``vec![]`` creation
-- Better mutability analysis to reduce ``unused_mut`` warnings
-- Dead code elimination to reduce ``unused_variables`` warnings
