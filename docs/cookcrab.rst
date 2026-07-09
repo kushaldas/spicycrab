@@ -31,6 +31,27 @@ Or generate your own stubs:
 3. Write Python code using the stub types
 4. Transpile: ``crabpy transpile mycode.py``
 
+Cargo dependency emission
+-------------------------
+
+Each stub package can define Cargo dependencies in its ``_spicycrab.toml``:
+
+.. code-block:: toml
+
+   [cargo.dependencies]
+   tunnelbana-core = { path = "/home/me/code/tunnelbana/crates/tunnelbana-core" }
+   async-trait = "0.1"
+
+When generating ``Cargo.toml``, spicycrab includes dependencies only for stub
+packages imported by the Python input. If several stub packages are installed,
+unused stubs do not add unused Cargo dependencies to the generated project.
+
+Table dependency specs are preserved, so hand-written stubs can use local
+``path`` dependencies, ``default-features = false``, explicit ``features``, or
+other standard Cargo dependency fields. User feature overrides from
+``[tool.spicycrab.features]`` in ``pyproject.toml`` or ``[features]`` in
+``spicycrab.toml`` are still merged into the selected stub dependencies.
+
 .. warning::
 
    Always use ``cookcrab install`` instead of ``pip install`` directly.
