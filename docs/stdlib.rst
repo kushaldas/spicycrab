@@ -236,10 +236,7 @@ Using list as Vec
 .. code-block:: rust
 
    pub fn create_list() -> Vec<i64> {
-       let mut items: Vec<i64> = vec![];
-       items.push(1);
-       items.push(2);
-       items.push(3);
+       let items: Vec<i64> = vec![1, 2, 3];
        items
    }
 
@@ -989,16 +986,12 @@ Shuffle a sequence in place.
 
    use rand::seq::SliceRandom;
 
-   pub fn shuffle_deck(cards: &mut Vec<i64>) {
+   pub fn shuffle_deck(mut cards: Vec<i64>) {
        cards.shuffle(&mut rand::thread_rng());
    }
 
-.. warning::
-
-   **Known Limitation:** ``random.shuffle()`` modifies the sequence in place,
-   which requires mutable access in Rust. The transpiler's mutability analysis
-   may not automatically detect that a variable needs to be mutable when
-   ``shuffle()`` is called on it. See :ref:`random-shuffle-limitation` below.
+``random.shuffle()`` mutates its argument. spicycrab marks local variables passed
+to ``random.shuffle()`` as mutable in generated Rust.
 
 random.gauss()
 ^^^^^^^^^^^^^^
@@ -1045,52 +1038,8 @@ Supported random functions
 | ``random.gauss(mu, sigma)`` | ``rand_distr::Normal::new(mu, sigma)``         |
 +-----------------------------+------------------------------------------------+
 
-.. _random-shuffle-limitation:
-
 Known Limitations
 ^^^^^^^^^^^^^^^^^
-
-**random.shuffle() and Mutability**
-
-In Python, ``random.shuffle()`` modifies a list in place:
-
-.. code-block:: python
-
-   items = [1, 2, 3, 4, 5]
-   random.shuffle(items)  # items is now shuffled
-
-In Rust, this requires the variable to be declared as mutable (``let mut``).
-The spicycrab transpiler performs mutability analysis to detect when variables
-need to be mutable, but it currently does not detect that calling
-``random.shuffle()`` on a variable requires mutability.
-
-**Workaround:** If you encounter a compilation error like:
-
-.. code-block:: text
-
-   error[E0596]: cannot borrow `items` as mutable, as it is not declared as mutable
-
-You have two options:
-
-1. **Manual fix:** Edit the generated Rust code to add ``mut``:
-
-   .. code-block:: rust
-
-      // Change this:
-      let items: Vec<i64> = vec![1, 2, 3, 4, 5];
-      // To this:
-      let mut items: Vec<i64> = vec![1, 2, 3, 4, 5];
-
-2. **Use sample instead:** If you don't need in-place shuffling, use
-   ``random.sample()`` with the full length to get a shuffled copy:
-
-   .. code-block:: python
-
-      # Instead of:
-      random.shuffle(items)
-
-      # Use:
-      shuffled: list[int] = random.sample(items, len(items))
 
 **random.seed() Not Supported**
 
