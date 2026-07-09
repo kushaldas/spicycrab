@@ -21,6 +21,7 @@ The transpiler automatically:
 - Adds ``tokio`` dependency to Cargo.toml when async functions are detected
 - Adds ``#[tokio::main]`` attribute to async main functions
 - Converts ``await expr`` to ``expr.await`` (Rust syntax)
+- Emits ``async def`` methods inside classes as async Rust methods
 - Filters out ``asyncio.run(main())`` since ``#[tokio::main]`` handles entry
 
 Basic Async/Await

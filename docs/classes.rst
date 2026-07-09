@@ -100,6 +100,98 @@ Method with parameters
        }
    }
 
+Async methods
+^^^^^^^^^^^^^
+
+Classes can contain ``async def`` methods. spicycrab emits them as async Rust
+methods in the class ``impl`` block.
+
+.. code-block:: python
+
+   class Worker:
+       def __init__(self, name: str) -> None:
+           self.name: str = name
+
+       async def label(self) -> str:
+           return self.name
+
+.. code-block:: rust
+
+   pub struct Worker {
+       pub name: String,
+   }
+
+   impl Worker {
+       pub fn new(name: String) -> Self {
+           Self { name }
+       }
+
+       pub async fn label(&self) -> String {
+           self.name.clone()
+       }
+   }
+
+Tunnelbana MicroService classes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When an installed stub maps a base class named ``MicroService`` to
+``tunnelbana_core::MicroService``, spicycrab emits a Rust trait implementation
+for Tunnelbana microservices. This is a targeted integration for the
+Tunnelbana stub packages, not generic Rust trait inference.
+
+.. code-block:: python
+
+   from spicycrab_tunnelbana_core import Context, Error, InternalData, MicroService, Result
+
+   class Marker(MicroService):
+       name: str
+
+       def __init__(self, name: str) -> None:
+           self.name = name
+
+       async def process_response(
+           self, ctx: Context, data: InternalData
+       ) -> Result[InternalData, Error]:
+           data.set_attr("generated-marker", self.name)
+           return Result.Ok(data)
+
+spicycrab emits the struct and constructor as normal Rust, then moves
+Tunnelbana hook methods into an ``async_trait`` trait implementation:
+
+.. code-block:: rust
+
+   #[derive(Debug, Clone)]
+   pub struct Marker {
+       pub name: String,
+   }
+
+   impl Marker {
+       pub fn new(name: String) -> Self {
+           Self { name }
+       }
+   }
+
+   #[async_trait::async_trait]
+   impl tunnelbana_core::MicroService for Marker {
+       fn name(&self) -> &str {
+           &self.name
+       }
+
+       async fn process_response(
+           &self,
+           ctx: &mut tunnelbana_core::Context,
+           mut data: tunnelbana_core::InternalData,
+       ) -> tunnelbana_core::Result<tunnelbana_core::InternalData> {
+           data.set_attr("generated-marker".to_string(), self.name.clone());
+           Ok(data)
+       }
+   }
+
+Supported Tunnelbana hook methods are ``name``, ``process_request``,
+``process_response``, ``register_endpoints``, and ``handle_endpoint``.
+If the Python class has a ``name`` field but no ``name`` method, spicycrab
+generates ``fn name(&self) -> &str`` automatically.
+
 Dataclasses
 -----------
 
