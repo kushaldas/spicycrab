@@ -361,17 +361,28 @@ def get_stub_enum_variant_mapping(enum_type: str, variant: str, crate_name: str 
     return None
 
 
-def get_stub_cargo_deps() -> dict[str, Any]:
-    """Get all cargo dependencies from installed stub packages.
+def get_stub_cargo_deps(crate_names: set[str] | None = None) -> dict[str, Any]:
+    """Get cargo dependencies from installed stub packages.
+
+    Args:
+        crate_names: Optional set of stub crate names to include. If omitted,
+            dependencies from all discovered stub packages are returned.
 
     Returns:
         Dict of dependency name to dependency spec (version or table)
     """
-    cache = _get_cache()
     deps: dict[str, Any] = {}
-    for pkg in cache.values():
+    for pkg in _selected_stub_packages(crate_names):
         deps.update(pkg.cargo_deps)
     return deps
+
+
+def _selected_stub_packages(crate_names: set[str] | None = None) -> list[StubPackage]:
+    """Return discovered stub packages, optionally filtered by crate name."""
+    cache = _get_cache()
+    if crate_names is None:
+        return list(cache.values())
+    return [pkg for name, pkg in cache.items() if name in crate_names]
 
 
 def get_all_stub_packages() -> dict[str, StubPackage]:
@@ -473,28 +484,38 @@ def load_user_feature_config(project_dir: str | None = None) -> dict[str, list[s
 def get_stub_cargo_deps_with_features(
     project_dir: str | None = None,
     user_features: dict[str, list[str]] | None = None,
+    crate_names: set[str] | None = None,
 ) -> dict[str, Any]:
     """Get cargo dependencies with user-specified features merged in.
 
     Args:
         project_dir: Directory to search for user config. Defaults to current directory.
         user_features: Optional dict of features to use instead of loading from config.
+        crate_names: Optional set of stub crate names to include. If omitted,
+            dependencies from all discovered stub packages are returned.
 
     Returns:
         Dict of dependency name to dependency spec with features applied
     """
-    cache = _get_cache()
-
     # Load user features from config if not provided
     if user_features is None:
         user_features = load_user_feature_config(project_dir)
 
     deps: dict[str, Any] = {}
-    for pkg in cache.values():
+    for pkg in _selected_stub_packages(crate_names):
         # Use pkg.name for Cargo.toml (e.g., "native-tls" with hyphen)
         # pkg.rust_crate is for Rust code (e.g., "native_tls" with underscore)
         cargo_dep_name = pkg.name
-        version = pkg.rust_version
+        base_spec = pkg.cargo_deps.get(cargo_dep_name)
+        if base_spec is None and pkg.rust_crate != cargo_dep_name:
+            base_spec = pkg.cargo_deps.get(pkg.rust_crate)
+        if base_spec is None and pkg.cargo_deps:
+            # Hand-written stubs can name dependencies differently from the
+            # package name. Preserve those exact dependency specs.
+            deps.update(pkg.cargo_deps)
+            continue
+        if base_spec is None:
+            base_spec = pkg.rust_version
 
         # Start with default features or empty list
         features: list[str] = []
@@ -508,14 +529,23 @@ def get_stub_cargo_deps_with_features(
             # Use default features if user didn't specify
             features = list(pkg.default_features)
 
-        # Create dependency spec
-        if features:
+        # Create dependency spec, preserving table fields like `path`.
+        if isinstance(base_spec, dict):
+            spec = dict(base_spec)
+            if features:
+                existing_features = list(spec.get("features", []))
+                for feature in features:
+                    if feature not in existing_features:
+                        existing_features.append(feature)
+                spec["features"] = existing_features
+            deps[cargo_dep_name] = spec
+        elif features:
             deps[cargo_dep_name] = {
-                "version": version,
+                "version": base_spec,
                 "features": features,
             }
         else:
-            deps[cargo_dep_name] = version
+            deps[cargo_dep_name] = base_spec
 
     return deps
 

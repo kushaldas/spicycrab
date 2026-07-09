@@ -8,7 +8,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from spicycrab.codegen.stub_discovery import get_stub_cargo_deps, get_stub_cargo_deps_with_features
+from spicycrab.codegen.stub_discovery import (
+    get_crate_for_python_module,
+    get_stub_cargo_deps,
+    get_stub_cargo_deps_with_features,
+)
 
 if TYPE_CHECKING:
     from spicycrab.ir.nodes import IRModule
@@ -22,9 +26,23 @@ class CargoDependency:
     version: str
     features: list[str] = field(default_factory=list)
     optional: bool = False
+    spec: dict[str, object] | None = None
 
     def to_toml(self) -> str:
         """Convert to TOML format."""
+        if self.spec is not None:
+            parts: list[str] = []
+            for key, value in self.spec.items():
+                if isinstance(value, str):
+                    parts.append(f'{key} = "{value}"')
+                elif isinstance(value, bool):
+                    parts.append(f"{key} = {str(value).lower()}")
+                elif isinstance(value, list):
+                    values = ", ".join(_toml_value(v) for v in value)
+                    parts.append(f"{key} = [{values}]")
+                else:
+                    parts.append(f"{key} = {value}")
+            return f"{self.name} = {{ {', '.join(parts)} }}"
         if self.features or self.optional:
             parts = [f'version = "{self.version}"']
             if self.features:
@@ -34,6 +52,44 @@ class CargoDependency:
                 parts.append("optional = true")
             return f"{self.name} = {{ {', '.join(parts)} }}"
         return f'{self.name} = "{self.version}"'
+
+
+def _toml_value(value: object) -> str:
+    """Render a simple TOML value used in dependency specs."""
+    if isinstance(value, str):
+        return f'"{value}"'
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+def _cargo_dependency_from_spec(dep_name: str, dep_spec: object) -> CargoDependency:
+    """Build a CargoDependency while preserving table specs such as path deps."""
+    if isinstance(dep_spec, str):
+        return CargoDependency(dep_name, dep_spec)
+    if isinstance(dep_spec, dict):
+        version = str(dep_spec.get("version", ""))
+        return CargoDependency(dep_name, version, spec=dict(dep_spec))
+    return CargoDependency(dep_name, str(dep_spec))
+
+
+def _stub_crates_for_modules(modules: list[IRModule] | None) -> set[str] | None:
+    """Find stub crates imported by the modules.
+
+    Returning None preserves the historical "all stubs" behavior when no
+    module context is available.
+    """
+    if modules is None:
+        return None
+
+    crates: set[str] = set()
+    for module in modules:
+        for imp in module.imports:
+            module_name = imp.module.split(".")[0]
+            crate_name = get_crate_for_python_module(module_name)
+            if crate_name:
+                crates.add(crate_name)
+    return crates
 
 
 # Default dependencies for common patterns
@@ -162,30 +218,17 @@ def generate_cargo_toml(
             deps[dep.name] = dep
 
     # Add dependencies from installed stub packages (with user features applied)
-    stub_deps = get_stub_cargo_deps_with_features(project_dir=project_dir)
+    selected_stub_crates = _stub_crates_for_modules(modules)
+    stub_deps = get_stub_cargo_deps_with_features(project_dir=project_dir, crate_names=selected_stub_crates)
     for dep_name, dep_spec in stub_deps.items():
         if dep_name not in deps:
-            # Handle both string version and table spec
-            if isinstance(dep_spec, str):
-                deps[dep_name] = CargoDependency(dep_name, dep_spec)
-            elif isinstance(dep_spec, dict):
-                version = dep_spec.get("version", "")
-                features = dep_spec.get("features", [])
-                optional = dep_spec.get("optional", False)
-                deps[dep_name] = CargoDependency(dep_name, version, features=features, optional=optional)
+            deps[dep_name] = _cargo_dependency_from_spec(dep_name, dep_spec)
 
     # Add transitive dependencies from stub packages (e.g., hex from sha2)
-    transitive_deps = get_stub_cargo_deps()
+    transitive_deps = get_stub_cargo_deps(crate_names=selected_stub_crates)
     for dep_name, dep_spec in transitive_deps.items():
         if dep_name not in deps:
-            # Handle both string version and table spec
-            if isinstance(dep_spec, str):
-                deps[dep_name] = CargoDependency(dep_name, dep_spec)
-            elif isinstance(dep_spec, dict):
-                version = dep_spec.get("version", "")
-                features = dep_spec.get("features", [])
-                optional = dep_spec.get("optional", False)
-                deps[dep_name] = CargoDependency(dep_name, version, features=features, optional=optional)
+            deps[dep_name] = _cargo_dependency_from_spec(dep_name, dep_spec)
 
     # Detect passthrough Rust attributes and add required dependencies
     if modules:
