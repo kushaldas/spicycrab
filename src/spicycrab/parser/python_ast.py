@@ -1067,6 +1067,13 @@ class PythonASTVisitor(ast.NodeVisitor):
             )
 
         # Visit each statement only once
+        else_body = []
+        for s in node.orelse:
+            ir_stmt = self._visit_statement(s)
+            if ir_stmt:
+                else_body.append(ir_stmt)
+
+        # Visit each statement only once
         finally_body = []
         for s in node.finalbody:
             ir_stmt = self._visit_statement(s)
@@ -1076,6 +1083,7 @@ class PythonASTVisitor(ast.NodeVisitor):
         return IRTry(
             body=body,
             handlers=handlers,
+            else_body=else_body,
             finally_body=finally_body,
             line=node.lineno,
         )

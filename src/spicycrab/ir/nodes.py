@@ -421,6 +421,7 @@ class IRTry(IRStatement):
 
     body: list[IRStatement] = field(default_factory=list)
     handlers: list[IRExceptHandler] = field(default_factory=list)
+    else_body: list[IRStatement] = field(default_factory=list)
     finally_body: list[IRStatement] = field(default_factory=list)
 
 

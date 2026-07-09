@@ -1,7 +1,12 @@
 Error Handling
 ==============
 
-spicycrab supports Rust-style error handling with ``Result[T, E]`` types.
+spicycrab is Result-first. Use ``Result[T, E]``, ``Ok(...)``, ``Err(...)``,
+and Rust-style propagation instead of relying on Python's exception runtime.
+
+Python ``raise`` and ``try/except`` are supported only where they can be lowered
+to Rust ``Result`` code. spicycrab does not emulate Python exception objects,
+tracebacks, or exception class hierarchy.
 
 Result Type
 -----------
@@ -122,11 +127,11 @@ When calling functions from external Rust crates via cookcrab-generated stubs,
 the ``?`` operator is automatically added when **both** conditions are met:
 
 1. Your Python function returns ``Result[T, E]``
-2. The stub mapping has a ``returns`` field indicating it returns ``Result``
+2. The stub mapping is marked ``needs_result = true``
 
 **How it works:**
 
-1. **Stub Definition** (``_spicycrab.toml``): The ``returns`` field tells the
+1. **Stub Definition** (``_spicycrab.toml``): ``needs_result = true`` tells the
    transpiler that the function is fallible:
 
    .. code-block:: toml
@@ -134,10 +139,10 @@ the ``?`` operator is automatically added when **both** conditions are met:
       [[mappings.functions]]
       python = "reqwest.blocking.get"
       rust_code = "reqwest::blocking::get({arg0})"
-      returns = "Result<Response, Error>"
+      needs_result = true
 
 2. **Stub Discovery**: When the emitter encounters a call to ``reqwest.blocking.get``,
-   it looks up the mapping and finds ``returns = "Result<Response, Error>"``.
+   it looks up the mapping and finds ``needs_result = true``.
 
 3. **Emitter Decision**: If the current function returns ``Result`` and the called
    function returns ``Result``, the ``?`` operator is added automatically.
@@ -167,8 +172,9 @@ the ``?`` operator is automatically added when **both** conditions are met:
    }
 
 **Important**: If your function does NOT return ``Result``, the ``?`` operator
-won't be added (Rust wouldn't allow it). In that case, you must explicitly
-handle the error using ``Result.unwrap()`` or a try/except block:
+won't be added because Rust would reject it. Prefer changing the function to
+return ``Result``. If that is not appropriate, handle the error explicitly with
+``Result.unwrap()`` or a supported ``try/except`` block:
 
 .. code-block:: python
 
@@ -183,7 +189,9 @@ handle the error using ``Result.unwrap()`` or a try/except block:
 raise → return Err
 ------------------
 
-Python's ``raise`` statement becomes ``return Err(...)``.
+Python's ``raise`` statement becomes ``return Err(...)``. The exception class is
+not preserved as a Python exception type; the raised value is treated as the
+Rust error payload.
 
 Basic raise
 ^^^^^^^^^^^
@@ -226,7 +234,13 @@ Raise with formatted message
 try/except → match
 ------------------
 
-When try/except wraps a Result-returning call, it becomes a ``match``.
+``try/except`` is structured sugar over a Rust ``match`` on ``Result``. The try
+body must start with a Result-returning call, either assigned to a variable or
+used as an expression statement. The remaining try body, plus any ``else`` body,
+runs in the ``Ok`` arm. The first ``except`` handler runs in the ``Err`` arm.
+
+spicycrab does not type-match Python exception classes here. ``except ValueError``
+and ``except Exception`` both mean "handle the ``Err`` value" today.
 
 Basic try/except
 ^^^^^^^^^^^^^^^^
@@ -246,14 +260,85 @@ Basic try/except
    pub fn safe_divide(a: i64, b: i64) -> i64 {
        match divide(a, b) {
            Ok(result) => {
-               return result;
+               result
            }
            Err(e) => {
                println!("Error: {}", e);
-               return 0;
+               0
            }
        }
    }
+
+The value bound in the ``Ok`` arm is scoped to that arm. Put work that needs that
+value inside the ``try`` body or inside an ``else`` block.
+
+Expression statement form
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use this form when the fallible call is performed for its side effect:
+
+.. code-block:: python
+
+   def log_if_ready(flag: bool) -> None:
+       try:
+           ensure_ready(flag)
+           print("ready")
+       except Exception as e:
+           print(f"not ready: {e}")
+
+.. code-block:: rust
+
+   pub fn log_if_ready(flag: bool) {
+       match ensure_ready(flag) {
+           Ok(_) => {
+               println!("ready");
+           }
+           Err(e) => {
+               println!("not ready: {}", e);
+           }
+       }
+   }
+
+try/else
+^^^^^^^^
+
+The ``else`` body is emitted in the ``Ok`` arm after the try body:
+
+.. code-block:: python
+
+   def recover(flag: bool) -> Result[int, str]:
+       try:
+           value: int = might_fail(flag)
+       except Exception as e:
+           return Err(e)
+       else:
+           return Ok(value + 1)
+
+.. code-block:: rust
+
+   pub fn recover(flag: bool) -> Result<i64, String> {
+       match might_fail(flag) {
+           Ok(value) => {
+               Ok(value + 1)
+           }
+           Err(e) => {
+               Err(e)
+           }
+       }
+   }
+
+Unsupported try/except shapes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Unsupported ``try/except`` forms fail during transpilation instead of falling
+back to panic catching. The following are not Python-compatible Rust ``Result``
+matches and are rejected or not modeled:
+
+* ``try`` blocks that do not start with a Result-returning call.
+* Multiple typed ``except`` handlers with different behavior.
+* ``try/except/finally``. Use Rust scope-based cleanup or explicit cleanup calls.
+* Python exception hierarchy matching, traceback inspection, and re-raise
+  semantics.
 
 Complete Example
 ----------------
@@ -320,8 +405,10 @@ Complete Example
 Explicit Unwrap Methods
 -----------------------
 
-**IMPORTANT:** spicycrab does NOT auto-generate ``.unwrap()`` calls in Rust code
-unless explicitly requested in Python. This promotes safer error handling.
+Prefer propagating errors with ``Result`` and ``?``. When you intentionally want
+panic-on-error behavior, use the explicit ``Result`` or ``Option`` helper methods.
+Some stdlib and stub mappings also unwrap outside a ``Result``-returning function
+for compatibility, but new code should make that choice visible.
 
 To explicitly unwrap a Result or Option, use the static method syntax:
 
@@ -465,6 +552,8 @@ Supported static methods
 | ``Result.is_ok(x)``            | ``x.is_ok()``               |
 +--------------------------------+-----------------------------+
 | ``Result.is_err(x)``           | ``x.is_err()``              |
++--------------------------------+-----------------------------+
+| ``Result.map_error(x, W)``     | ``x.map_err(|e| W(e))?``    |
 +--------------------------------+-----------------------------+
 | ``Option.unwrap(x)``           | ``x.unwrap()``              |
 +--------------------------------+-----------------------------+

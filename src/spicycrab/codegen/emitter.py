@@ -69,6 +69,7 @@ from spicycrab.ir.nodes import (
     PrimitiveType,
     UnaryOp,
 )
+from spicycrab.utils.errors import CodegenError
 
 if TYPE_CHECKING:
     pass
@@ -1211,9 +1212,13 @@ class RustEmitter:
         elif isinstance(stmt, IRTry):
             for s in stmt.body:
                 self._scan_stmt_for_mut_vars(s)
+            for s in stmt.else_body:
+                self._scan_stmt_for_mut_vars(s)
             for handler in stmt.handlers:
                 for s in handler.body:
                     self._scan_stmt_for_mut_vars(s)
+            for s in stmt.finally_body:
+                self._scan_stmt_for_mut_vars(s)
 
     def _scan_expr_for_mut_vars(self, expr: IRExpression | None) -> None:
         """Scan an expression for method calls with &mut parameter types."""
@@ -1800,62 +1805,141 @@ class RustEmitter:
 
         return "\n".join(lines)
 
+    def _is_result_call_expr(self, expr: IRExpression | None) -> bool:
+        """Return True when an expression is a call that leaves a Result value."""
+        if isinstance(expr, IRCall):
+            return self._is_result_function_call(expr)
+        if isinstance(expr, IRMethodCall):
+            return self._is_result_method_call(expr)
+        return False
+
+    def _is_result_function_call(self, expr: IRCall) -> bool:
+        """Return True when a function call is known to return Result."""
+        if isinstance(expr.func, IRName):
+            func_name = expr.func.name
+            if func_name in self.ctx.result_functions:
+                return True
+            if func_name in self.ctx.stub_imports:
+                crate_name = self.ctx.stub_imports[func_name]
+                original_name = self.ctx.import_aliases.get(func_name, func_name)
+                mapping = get_stub_mapping(f"{crate_name}.{original_name}")
+                return bool(mapping and mapping.needs_result)
+
+        if isinstance(expr.func, IRAttribute) and isinstance(expr.func.obj, IRName):
+            type_name = expr.func.obj.name
+            func_name = expr.func.attr
+            if f"{type_name}.{func_name}" in self.ctx.result_functions:
+                return True
+            if type_name in self.ctx.stub_imports:
+                crate_name = self.ctx.stub_imports[type_name]
+                lookup_type = self._stub_lookup_type_name(type_name)
+                mapping = get_stub_mapping(f"{crate_name}.{lookup_type}.{func_name}")
+                if mapping and mapping.needs_result:
+                    return True
+            mapping = get_stdlib_mapping(type_name, func_name)
+            if mapping and mapping.needs_result:
+                return True
+            dt_mapping = get_datetime_mapping(f"{type_name}.{func_name}")
+            return bool(dt_mapping and dt_mapping.needs_result)
+
+        return False
+
+    def _is_result_method_call(self, expr: IRMethodCall) -> bool:
+        """Return True when a method call is known to return Result."""
+        method = expr.method
+        if method in self.ctx.result_functions:
+            return True
+
+        if isinstance(expr.obj, IRName):
+            type_name = expr.obj.name
+            if type_name in self.ctx.stub_imports:
+                crate_name = self.ctx.stub_imports[type_name]
+                lookup_type = self._stub_lookup_type_name(type_name)
+                mapping = get_stub_mapping(f"{crate_name}.{lookup_type}.{method}")
+                if mapping and mapping.needs_result:
+                    return True
+                method_mapping = get_stub_method_mapping(lookup_type, method, crate_name)
+                if method_mapping and method_mapping.needs_result:
+                    return True
+
+            mapping = get_stdlib_mapping(type_name, method)
+            if mapping and mapping.needs_result:
+                return True
+            dt_mapping = get_datetime_mapping(f"{type_name}.{method}")
+            if dt_mapping and dt_mapping.needs_result:
+                return True
+
+            if type_name in self.ctx.type_env:
+                var_type = self.ctx.type_env[type_name]
+                class_name = var_type.split(".")[-1]
+                lookup_class = self._stub_lookup_type_name(class_name)
+                stub_crate = self._stub_crate_for_type(class_name)
+                stub_mapping = get_stub_method_mapping(lookup_class, method, stub_crate)
+                return bool(stub_mapping and stub_mapping.needs_result)
+
+        inferred_type, inferred_crate = self._infer_stub_type_and_crate(expr.obj)
+        if inferred_type:
+            stub_mapping = get_stub_method_mapping(inferred_type, method, inferred_crate)
+            if stub_mapping and stub_mapping.needs_result:
+                return True
+
+        if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
+            module = f"{expr.obj.obj.name}.{expr.obj.attr}"
+            mapping = get_stdlib_mapping(module, method)
+            if mapping and mapping.needs_result:
+                return True
+            dt_mapping = get_datetime_mapping(f"{module}.{method}")
+            return bool(dt_mapping and dt_mapping.needs_result)
+
+        return False
+
+    def _emit_unhandled_result_expression(self, expr: IRExpression | None, target_type: str | None = None) -> str:
+        """Emit a Result expression without adding `?` or `.unwrap()`."""
+        prev_result_context = self.ctx.in_result_context
+        prev_direct_return = self.ctx.in_direct_return
+        prev_assigning_to_result_type = self.ctx.assigning_to_result_type
+        prev_assignment_target_type = self.ctx.assignment_target_type
+
+        self.ctx.in_result_context = True
+        self.ctx.in_direct_return = False
+        self.ctx.assigning_to_result_type = True
+        self.ctx.assignment_target_type = target_type
+        try:
+            return self.emit_expression(expr)
+        finally:
+            self.ctx.in_result_context = prev_result_context
+            self.ctx.in_direct_return = prev_direct_return
+            self.ctx.assigning_to_result_type = prev_assigning_to_result_type
+            self.ctx.assignment_target_type = prev_assignment_target_type
+
+    def _emit_try_arm_body(self, body: list[IRStatement], arm_is_tail: bool = False) -> list[str]:
+        """Emit statements inside a match arm."""
+        lines: list[str] = []
+        prev_last_stmt = self.ctx.in_last_stmt
+        try:
+            for i, s in enumerate(body):
+                self.ctx.in_last_stmt = arm_is_tail and i == len(body) - 1
+                lines.append(self.emit_statement(s))
+        finally:
+            self.ctx.in_last_stmt = prev_last_stmt
+        return lines
+
+    def _register_try_binding(self, assign: IRAssign) -> None:
+        """Track the Ok binding type for method resolution inside the try arm."""
+        if assign.type_annotation:
+            type_str = self._extract_type_string(assign.type_annotation)
+            if type_str:
+                self.ctx.type_env[assign.target] = type_str
+            rust_type = self.resolver.resolve(assign.type_annotation)
+            if rust_type.name == "Option":
+                self.ctx.option_vars.add(assign.target)
+
     def _emit_try(self, stmt: IRTry) -> str:
-        """Emit try/except as match on Result or catch_unwind for panics."""
+        """Emit try/except as structured sugar over Result matches."""
         lines: list[str] = []
         indent = self.ctx.indent_str()
 
-        # Check if this is a single-statement try with a Result-returning call
-        # Pattern: try: result = fallible_call() except: handle_error()
-        if len(stmt.body) == 1 and stmt.handlers and isinstance(stmt.body[0], IRAssign) and stmt.body[0].value:
-            assign = stmt.body[0]
-            # Check if the call returns Result
-            call = assign.value
-            is_result_call = False
-            if isinstance(call, IRCall):
-                func = self.emit_expression(call.func)
-                is_result_call = func in self.ctx.result_functions
-            elif isinstance(call, IRMethodCall):
-                is_result_call = call.method in self.ctx.result_functions
-
-            if is_result_call:
-                return self._emit_try_as_match(stmt, assign, indent)
-
-        # Check if try body is a single expression statement with Result call
-        if len(stmt.body) == 1 and stmt.handlers and isinstance(stmt.body[0], IRExprStmt) and stmt.body[0].expr:
-            expr_stmt = stmt.body[0]
-            call = expr_stmt.expr
-            is_result_call = False
-            if isinstance(call, IRCall):
-                func = self.emit_expression(call.func)
-                is_result_call = func in self.ctx.result_functions
-            elif isinstance(call, IRMethodCall):
-                is_result_call = call.method in self.ctx.result_functions
-
-            if is_result_call:
-                return self._emit_try_expr_as_match(stmt, expr_stmt, indent)
-
-        # Fallback: use catch_unwind for runtime panics
-        if stmt.handlers:
-            lines.append(
-                f"{indent}if let Err(_panic_err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{"
-            )
-            self.ctx.indent += 1
-
-            for s in stmt.body:
-                lines.append(self.emit_statement(s))
-
-            self.ctx.indent -= 1
-            lines.append(f"{indent}}})) {{")
-
-            self.ctx.indent += 1
-            if stmt.handlers:
-                handler = stmt.handlers[0]
-                for s in handler.body:
-                    lines.append(self.emit_statement(s))
-            self.ctx.indent -= 1
-            lines.append(f"{indent}}}")
-        else:
+        if not stmt.handlers:
             lines.append(f"{indent}{{")
             self.ctx.indent += 1
             for s in stmt.body:
@@ -1863,76 +1947,103 @@ class RustEmitter:
             self.ctx.indent -= 1
             lines.append(f"{indent}}}")
 
+            if stmt.else_body:
+                lines.extend(self._emit_try_arm_body(stmt.else_body))
+
+            if stmt.finally_body:
+                lines.append(f"{indent}// finally block")
+                lines.extend(self._emit_try_arm_body(stmt.finally_body))
+
+            return "\n".join(lines)
+
         if stmt.finally_body:
-            lines.append(f"{indent}// finally block")
-            for s in stmt.finally_body:
-                lines.append(self.emit_statement(s))
+            raise CodegenError(
+                "try/except/finally is not supported; use Result handling plus Rust scope-based cleanup",
+                line=stmt.line,
+            )
 
-        return "\n".join(lines)
+        # Pattern: try: result = fallible_call(); ... except: handle_error()
+        if stmt.body and isinstance(stmt.body[0], IRAssign) and stmt.body[0].value:
+            assign = stmt.body[0]
+            if self._is_result_call_expr(assign.value):
+                return self._emit_try_as_match(stmt, assign, indent, stmt.body[1:] + stmt.else_body)
 
-    def _emit_try_as_match(self, stmt: IRTry, assign: IRAssign, indent: str) -> str:
+        # Pattern: try: fallible_call(); ... except: handle_error()
+        if stmt.body and isinstance(stmt.body[0], IRExprStmt) and stmt.body[0].expr:
+            expr_stmt = stmt.body[0]
+            if self._is_result_call_expr(expr_stmt.expr):
+                return self._emit_try_expr_as_match(stmt, expr_stmt, indent, stmt.body[1:] + stmt.else_body)
+
+        raise CodegenError(
+            "try/except is only supported when the try body starts with a Result-returning call",
+            line=stmt.line,
+        )
+
+    def _emit_try_as_match(self, stmt: IRTry, assign: IRAssign, indent: str, ok_body: list[IRStatement]) -> str:
         """Emit try/except with assignment as match on Result."""
         lines: list[str] = []
-        call_expr = self.emit_expression(assign.value)
+        target_type = self.resolver.resolve(assign.type_annotation).to_rust() if assign.type_annotation else None
+        call_expr = self._emit_unhandled_result_expression(assign.value, target_type)
         var_name = assign.target
+        self._register_try_binding(assign)
+        mut = "mut " if (assign.is_mutable or var_name in self.ctx.mut_vars) else ""
+        arm_is_tail = self.ctx.in_last_stmt
 
-        # match fallible_call() { Ok(var) => { ... }, Err(e) => { ... } }
         lines.append(f"{indent}match {call_expr} {{")
         self.ctx.indent += 1
         inner_indent = self.ctx.indent_str()
 
-        # Ok arm - just bind the variable, rest of code continues after match
-        lines.append(f"{inner_indent}Ok({var_name}) => {{}}")
+        lines.append(f"{inner_indent}Ok({mut}{var_name}) => {{")
+        self.ctx.indent += 1
+        lines.extend(self._emit_try_arm_body(ok_body, arm_is_tail))
+        self.ctx.indent -= 1
+        lines.append(f"{inner_indent}}}")
 
-        # Err arm - execute handler body
         handler = stmt.handlers[0]
         err_name = handler.name if handler.name else "_err"
         lines.append(f"{inner_indent}Err({err_name}) => {{")
         self.ctx.indent += 1
-        for s in handler.body:
-            lines.append(self.emit_statement(s))
+        lines.extend(self._emit_try_arm_body(handler.body, arm_is_tail))
         self.ctx.indent -= 1
         lines.append(f"{inner_indent}}}")
 
         self.ctx.indent -= 1
         lines.append(f"{indent}}}")
-
-        # Finally block
-        if stmt.finally_body:
-            lines.append(f"{indent}// finally block")
-            for s in stmt.finally_body:
-                lines.append(self.emit_statement(s))
 
         return "\n".join(lines)
 
-    def _emit_try_expr_as_match(self, stmt: IRTry, expr_stmt: IRExprStmt, indent: str) -> str:
+    def _emit_try_expr_as_match(
+        self,
+        stmt: IRTry,
+        expr_stmt: IRExprStmt,
+        indent: str,
+        ok_body: list[IRStatement],
+    ) -> str:
         """Emit try/except with expression (no assignment) as match on Result."""
         lines: list[str] = []
-        call_expr = self.emit_expression(expr_stmt.expr)
+        call_expr = self._emit_unhandled_result_expression(expr_stmt.expr)
+        arm_is_tail = self.ctx.in_last_stmt
 
-        # match fallible_call() { Ok(_) => { }, Err(e) => { ... } }
         lines.append(f"{indent}match {call_expr} {{")
         self.ctx.indent += 1
         inner_indent = self.ctx.indent_str()
 
-        lines.append(f"{inner_indent}Ok(_) => {{}}")
+        lines.append(f"{inner_indent}Ok(_) => {{")
+        self.ctx.indent += 1
+        lines.extend(self._emit_try_arm_body(ok_body, arm_is_tail))
+        self.ctx.indent -= 1
+        lines.append(f"{inner_indent}}}")
 
         handler = stmt.handlers[0]
         err_name = handler.name if handler.name else "_err"
         lines.append(f"{inner_indent}Err({err_name}) => {{")
         self.ctx.indent += 1
-        for s in handler.body:
-            lines.append(self.emit_statement(s))
+        lines.extend(self._emit_try_arm_body(handler.body, arm_is_tail))
         self.ctx.indent -= 1
         lines.append(f"{inner_indent}}}")
 
         self.ctx.indent -= 1
         lines.append(f"{indent}}}")
-
-        if stmt.finally_body:
-            lines.append(f"{indent}// finally block")
-            for s in stmt.finally_body:
-                lines.append(self.emit_statement(s))
 
         return "\n".join(lines)
 
