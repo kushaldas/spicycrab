@@ -595,12 +595,15 @@ class PythonASTVisitor(ast.NodeVisitor):
                     field_type = self.type_parser.parse(item.annotation, item.target.id)
                     fields.append((item.target.id, field_type))
 
-            elif isinstance(item, ast.FunctionDef):
+            elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # Save __init__ for field extraction
                 if item.name == "__init__":
                     init_method = item
 
-                method = self.visit_FunctionDef(item)
+                if isinstance(item, ast.AsyncFunctionDef):
+                    method = self.visit_AsyncFunctionDef(item)
+                else:
+                    method = self.visit_FunctionDef(item)
                 method.is_method = True
 
                 # Check for @staticmethod decorator

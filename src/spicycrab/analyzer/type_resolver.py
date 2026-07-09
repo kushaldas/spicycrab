@@ -193,6 +193,11 @@ class TypeResolver:
                     # Otherwise use anyhow::Result<T>
                     inner = self.resolve(ir_type.type_args[0])
                     return RustType(name="anyhow::Result", generics=[inner])
+                if stub_rust_type.endswith("::Result") and ir_type.type_args:
+                    # Crate-local Result aliases usually fix the error type:
+                    # type Result<T> = std::result::Result<T, Error>.
+                    inner = self._resolve_result_alias_inner(ir_type.type_args[0])
+                    return RustType(name=stub_rust_type, generics=[inner])
                 # For other stub types, resolve all type args
                 generics = [self.resolve(t) for t in ir_type.type_args]
                 return RustType(name=stub_rust_type, generics=generics)
@@ -208,6 +213,14 @@ class TypeResolver:
 
         generics = [self.resolve(t) for t in ir_type.type_args]
         return RustType(name=rust_name, generics=generics)
+
+    def _resolve_result_alias_inner(self, ir_type: IRType) -> RustType:
+        """Resolve the success type for crate-local Result aliases."""
+        if isinstance(ir_type, IRClassType):
+            crate_name = self.stub_imports.get(ir_type.name)
+            if crate_name == "tunnelbana-core" and ir_type.name in {"Frontend", "Backend", "MicroService"}:
+                return RustType(name=f"Box<dyn tunnelbana_core::{ir_type.name}>")
+        return self.resolve(ir_type)
 
     def _resolve_union(self, ir_type: IRUnionType) -> RustType:
         """Resolve a Union type.

@@ -14,7 +14,7 @@ jobs:
       matrix:
         python-version: ['3.14']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -33,7 +33,7 @@ jobs:
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
 
       - name: Cache sccache
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
           key: sccache-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
@@ -60,7 +60,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -83,7 +83,7 @@ jobs:
   rust-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
 
       - name: Cache sccache
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.cache/sccache
           key: sccache-rust-check-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}

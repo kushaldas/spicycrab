@@ -178,6 +178,19 @@ class Timer:
         assert cls.has_enter is True
         assert cls.has_exit is True
 
+    def test_parse_async_class_method(self) -> None:
+        """Test parsing async methods declared inside classes."""
+        source = """
+class Service:
+    async def process(self, value: int) -> int:
+        return value
+"""
+        module = parse_source(source)
+        cls = module.classes[0]
+        assert len(cls.methods) == 1
+        assert cls.methods[0].name == "process"
+        assert cls.methods[0].is_async is True
+
 
 class TestParseControlFlow:
     """Test control flow parsing."""
