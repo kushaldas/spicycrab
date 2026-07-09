@@ -105,9 +105,9 @@ def get_stub_mapping(key: str):
     return _get_stub_discovery().get_stub_mapping(key)
 
 
-def get_stub_method_mapping(type_name: str, method_name: str):
+def get_stub_method_mapping(type_name: str, method_name: str, crate_name: str | None = None):
     """Get stub method mapping for a type and method."""
-    return _get_stub_discovery().get_stub_method_mapping(type_name, method_name)
+    return _get_stub_discovery().get_stub_method_mapping(type_name, method_name, crate_name)
 
 
 def get_stub_type_mapping(key: str, crate_name: str | None = None):

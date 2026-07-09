@@ -8,15 +8,18 @@ actix-web patterns and transpile it to idiomatic Rust.
 Installation
 ------------
 
-Generate and install actix-web stubs:
+Install actix-web stubs:
 
 .. code-block:: bash
 
-   # Generate stubs
-   cookcrab generate actix-web -o ./stubs
+   cookcrab install actix-web
 
-   # Install in your environment
-   pip install -e ./stubs/actix-web
+You can also generate them locally and install from that output directory:
+
+.. code-block:: bash
+
+   cookcrab generate actix-web -o ./stubs
+   python3 -m pip install -e ./stubs/actix-web
 
 Basic Example
 -------------
@@ -124,6 +127,11 @@ All standard HTTP methods are supported:
    App.new().route("/resource", put().to(update_handler))   # PUT
    App.new().route("/resource", delete().to(delete_handler)) # DELETE
    App.new().route("/resource", patch().to(patch_handler))  # PATCH
+
+Passthrough route attributes such as ``#[get("/path")]`` and
+``#[post("/path")]`` are also supported. When these attributes are used,
+spicycrab adds the ``actix-web`` Cargo dependency even if no actix-web stub
+module is imported in the Python file.
 
 Example Patterns
 ----------------

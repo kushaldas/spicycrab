@@ -236,12 +236,16 @@ def generate_cargo_toml(
 
         uses_serde_derive = False
         uses_clap_derive = False
+        uses_actix_http_macro = False
         uses_redis_aio = False
+        actix_http_methods = {"get", "post", "put", "delete", "patch", "head", "options"}
 
         for module in modules:
             # Check function rust_attributes
             for func in module.functions:
                 for attr in func.rust_attributes:
+                    if any(attr.startswith(f"#[{method}(") for method in actix_http_methods):
+                        uses_actix_http_macro = True
                     if "#[derive(" in attr:
                         match = re.search(r"#\[derive\(([^)]+)\)", attr)
                         if match:
@@ -254,6 +258,8 @@ def generate_cargo_toml(
             # Check class rust_attributes
             for cls in module.classes:
                 for attr in cls.rust_attributes:
+                    if any(attr.startswith(f"#[{method}(") for method in actix_http_methods):
+                        uses_actix_http_macro = True
                     if "#[derive(" in attr:
                         match = re.search(r"#\[derive\(([^)]+)\)", attr)
                         if match:
@@ -262,6 +268,10 @@ def generate_cargo_toml(
                                 uses_serde_derive = True
                             if "Parser" in derives:
                                 uses_clap_derive = True
+                for method in cls.methods:
+                    for attr in method.rust_attributes:
+                        if any(attr.startswith(f"#[{http_method}(") for http_method in actix_http_methods):
+                            uses_actix_http_macro = True
 
             # Check imports for redis aio usage
             for imp in module.imports:
@@ -275,6 +285,11 @@ def generate_cargo_toml(
         # Add serde dependency with derive feature
         if uses_serde_derive:
             deps["serde"] = CargoDependency("serde", "1", features=["derive"])
+
+        # Passthrough actix-web route attributes need the actix-web macro crate
+        # even if the Python source does not import the actix-web stubs.
+        if uses_actix_http_macro and "actix-web" not in deps:
+            deps["actix-web"] = CargoDependency("actix-web", "4")
 
         # Ensure clap has derive feature if Parser is used
         if uses_clap_derive and "clap" in deps:

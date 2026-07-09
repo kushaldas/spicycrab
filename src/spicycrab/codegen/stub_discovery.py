@@ -215,18 +215,47 @@ def get_stub_mapping(func_name: str) -> StdlibMapping | None:
     return None
 
 
-def get_stub_method_mapping(type_name: str, method_name: str) -> StdlibMapping | None:
-    """Get mapping for a method from any installed stub package.
+def get_stub_method_mapping(
+    type_name: str,
+    method_name: str,
+    crate_name: str | None = None,
+) -> StdlibMapping | None:
+    """Get mapping for a method from installed stub packages.
 
     Args:
         type_name: Type name (e.g., "Command")
         method_name: Method name (e.g., "arg")
+        crate_name: Optional crate name to restrict lookup to (e.g., "reqwest").
+                    If provided, only looks in that crate's mappings.
+                    If None, searches all crates (legacy behavior, not recommended).
 
     Returns:
         StdlibMapping if found, None otherwise
+
+    Note:
+        When multiple crates export the same type name (e.g., RequestBuilder in
+        reqwest and ureq), you MUST provide crate_name to get the correct mapping.
     """
     cache = _get_cache()
     key = f"{type_name}.{method_name}"
+
+    if crate_name is not None:
+        pkg = cache.get(crate_name)
+        if pkg and key in pkg.method_mappings:
+            mapping = pkg.method_mappings[key]
+            log_decision(
+                "stub_method_lookup",
+                key=key,
+                found=True,
+                crate=crate_name,
+                rust_code=mapping.rust_code,
+            )
+            increment("stub_method_hits")
+            return mapping
+        log_decision("stub_method_lookup", key=key, found=False, crate=crate_name)
+        increment("stub_method_misses")
+        return None
+
     for pkg in cache.values():
         if key in pkg.method_mappings:
             mapping = pkg.method_mappings[key]
@@ -236,10 +265,11 @@ def get_stub_method_mapping(type_name: str, method_name: str) -> StdlibMapping |
                 found=True,
                 crate=pkg.name,
                 rust_code=mapping.rust_code,
+                legacy_search=True,
             )
             increment("stub_method_hits")
             return mapping
-    log_decision("stub_method_lookup", key=key, found=False)
+    log_decision("stub_method_lookup", key=key, found=False, legacy_search=True)
     increment("stub_method_misses")
     return None
 

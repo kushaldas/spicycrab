@@ -125,7 +125,7 @@ Use ``cookcrab install`` to fetch and install stubs from the official repository
    cookcrab install tokio
 
    # Install a specific version
-   cookcrab install tokio -v 1.49.0
+   cookcrab install tokio -v 1.52.3
 
 This command:
 
@@ -143,12 +143,12 @@ You can also generate stubs from scratch using ``cookcrab generate``:
    cookcrab generate tokio -o /tmp/stubs
 
    # Install the generated stubs
-   cookcrab install tokio --repo /tmp/stubs
+   python3 -m pip install -e /tmp/stubs/tokio
 
 .. warning::
 
-   Always use ``cookcrab install`` instead of ``pip install`` directly.
-   This ensures compatibility with spicycrab's stub discovery system.
+   Use ``cookcrab install`` for the official stub repository. Editable local
+   installs are appropriate for stubs you generated into ``/tmp/stubs``.
 
 Using tokio imports
 ^^^^^^^^^^^^^^^^^^^

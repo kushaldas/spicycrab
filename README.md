@@ -49,7 +49,7 @@ crabpy transpile src/ -o rust_project/ -n my_project
 # Generate stubs for a Rust crate
 cookcrab generate clap -o /tmp/stubs
 
-# Install the stubs
+# Install the generated stubs
 python3 -m pip install -e /tmp/stubs/clap_builder
 python3 -m pip install -e /tmp/stubs/clap
 
