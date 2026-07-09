@@ -380,6 +380,10 @@ Attributes can also be applied to functions:
    async def openid_federation() -> str:
        return "entity-statement-jwt"
 
+Route attributes from actix-web, such as ``#[get(...)]`` and ``#[post(...)]``,
+also cause spicycrab to include the ``actix-web`` Cargo dependency when
+generating ``Cargo.toml``.
+
 .. code-block:: rust
 
    #[inline]

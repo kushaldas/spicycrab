@@ -664,10 +664,27 @@ class RustEmitter:
         crate_name = self.ctx.stub_imports.get(name)
         if not crate_name:
             return None
-        rust_type = get_stub_type_mapping(name, crate_name)
+        lookup_name = self._stub_lookup_type_name(name)
+        rust_type = get_stub_type_mapping(lookup_name, crate_name)
         if rust_type:
             return rust_type
-        return f"{crate_name.replace('-', '_')}::{name}"
+        return f"{crate_name.replace('-', '_')}::{lookup_name}"
+
+    def _stub_lookup_type_name(self, type_name: str) -> str:
+        """Return the original stub type name for an imported alias."""
+        return self.ctx.import_aliases.get(type_name, type_name)
+
+    def _stub_crate_for_type(self, type_name: str | None) -> str | None:
+        """Infer the imported stub crate for a Python type name."""
+        if not type_name:
+            return None
+        simple_name = type_name.split(".")[-1]
+        if simple_name in self.ctx.stub_imports:
+            return self.ctx.stub_imports[simple_name]
+        for imported_name, crate_name in self.ctx.stub_imports.items():
+            if self._stub_lookup_type_name(imported_name) == simple_name:
+                return crate_name
+        return None
 
     def _microservice_trait_path(self, cls: IRClass) -> str | None:
         """Return the tunnelbana MicroService trait path if this class extends it."""
@@ -1231,9 +1248,9 @@ class RustEmitter:
                 # Chained method call - check the method mapping
                 method = expr.method
                 # Get the receiver type from the chain
-                receiver_type = self._infer_stub_type_for_scan(expr.obj)
+                receiver_type, receiver_crate = self._infer_stub_type_and_crate(expr.obj)
                 if receiver_type:
-                    mapping = get_stub_method_mapping(receiver_type, method)
+                    mapping = get_stub_method_mapping(receiver_type, method, receiver_crate)
                     if mapping and mapping.param_types:
                         for i, param_type in enumerate(mapping.param_types):
                             if param_type and param_type.startswith("&mut ") and i < len(expr.args):
@@ -2305,8 +2322,9 @@ class RustEmitter:
             # Check if the type was imported from a stub package
             if type_name in self.ctx.stub_imports:
                 crate_name = self.ctx.stub_imports[type_name]
+                lookup_type = self._stub_lookup_type_name(type_name)
                 # Look up the full mapping key: crate.Type.method (e.g., "anyhow.Result.Ok")
-                full_key = f"{crate_name}.{type_name}.{func_name}"
+                full_key = f"{crate_name}.{lookup_type}.{func_name}"
                 mapping = get_stub_mapping(full_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
@@ -2335,8 +2353,9 @@ class RustEmitter:
             func_name = expr.func.name
             if func_name in self.ctx.stub_imports and func_name[0].isupper():
                 crate_name = self.ctx.stub_imports[func_name]
+                lookup_type = self._stub_lookup_type_name(func_name)
                 # Look for .new constructor mapping
-                new_key = f"{crate_name}.{func_name}.new"
+                new_key = f"{crate_name}.{lookup_type}.new"
                 mapping = get_stub_mapping(new_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
@@ -2451,29 +2470,30 @@ class RustEmitter:
 
         return call_expr
 
-    def _infer_stub_type(self, expr: IRExpression) -> str | None:
-        """Infer the stub type of an expression for method chaining.
+    def _infer_stub_type_and_crate(self, expr: IRExpression) -> tuple[str | None, str | None]:
+        """Infer the stub type and crate of an expression for method chaining.
 
-        For expressions like Arg.new(...).short(...), we need to know that
-        Arg.new(...) returns an Arg type so we can look up the short() method.
-
-        Returns the type name (e.g., "Arg") if it can be inferred, None otherwise.
+        For expressions like Arg.new(...).short(...), the emitter needs both the
+        receiver type and the crate that supplied it. The crate is required when
+        generated stubs share type names such as reqwest::RequestBuilder and
+        ureq::RequestBuilder.
         """
         # Simple variable with known type
         if isinstance(expr, IRName):
             if expr.name in self.ctx.type_env:
                 var_type = self.ctx.type_env[expr.name]
-                return var_type.split(".")[-1]
+                type_name = self._stub_lookup_type_name(var_type.split(".")[-1])
+                return type_name, self._stub_crate_for_type(var_type)
             # Check if this is a stub type name (e.g., Arg, Command)
             if expr.name in self.ctx.stub_imports:
-                return expr.name
-            return None
+                return self._stub_lookup_type_name(expr.name), self.ctx.stub_imports[expr.name]
+            return None, None
 
         if isinstance(expr, IRAttribute):
-            receiver_type = self._infer_stub_type(expr.obj)
+            receiver_type, receiver_crate = self._infer_stub_type_and_crate(expr.obj)
             if receiver_type == "Context" and expr.attr == "state":
-                return "State"
-            return None
+                return "State", receiver_crate
+            return None, None
 
         # Method call on a stub type: Type.method(...) -> Type (if returns_self)
         # or method call chain: expr.method(...) where expr is a stub type
@@ -2481,7 +2501,7 @@ class RustEmitter:
             # Check if this is Type.new(...) pattern - static method on stub type
             if isinstance(expr.obj, IRName) and expr.obj.name in self.ctx.stub_imports:
                 # Type.method() where Type is a stub type - returns the Type
-                return expr.obj.name
+                return self._stub_lookup_type_name(expr.obj.name), self.ctx.stub_imports[expr.obj.name]
 
             # Check for Data<T>.get_ref() pattern - returns the inner type T
             if isinstance(expr.obj, IRName) and expr.method == "get_ref":
@@ -2495,21 +2515,21 @@ class RustEmitter:
                             if param_type.type_args:
                                 inner_type = param_type.type_args[0]
                                 if isinstance(inner_type, IRClassType):
-                                    return inner_type.name
+                                    return inner_type.name, self._stub_crate_for_type(inner_type.name)
                                 elif isinstance(inner_type, IRPrimitiveType):
-                                    return inner_type.name
+                                    return inner_type.name, self._stub_crate_for_type(inner_type.name)
 
             # Otherwise, try to infer the type of the receiver for chained calls
-            receiver_type = self._infer_stub_type(expr.obj)
+            receiver_type, receiver_crate = self._infer_stub_type_and_crate(expr.obj)
             if receiver_type:
                 # Check the method mapping for return type info
-                stub_mapping = get_stub_method_mapping(receiver_type, expr.method)
+                stub_mapping = get_stub_method_mapping(receiver_type, expr.method, receiver_crate)
                 if stub_mapping:
                     # Use the returns field if available, otherwise assume self type
                     if stub_mapping.returns:
-                        return stub_mapping.returns
-                    return receiver_type
-            return None
+                        return stub_mapping.returns, self._stub_crate_for_type(stub_mapping.returns) or receiver_crate
+                    return receiver_type, receiver_crate
+            return None, None
 
         # Call on a stub type constructor: Type.new(...) -> Type
         if isinstance(expr, IRCall):
@@ -2520,10 +2540,19 @@ class RustEmitter:
                     # Check if this is a constructor-like static method (new, from, etc.)
                     if type_name in self.ctx.stub_imports:
                         # It's a known stub type, the result type is the type itself
-                        return type_name
-            return None
+                        return self._stub_lookup_type_name(type_name), self.ctx.stub_imports[type_name]
+            if isinstance(expr.func, IRName):
+                func_name = expr.func.name
+                if func_name in self.ctx.stub_imports and func_name[0].isupper():
+                    return self._stub_lookup_type_name(func_name), self.ctx.stub_imports[func_name]
+            return None, None
 
-        return None
+        return None, None
+
+    def _infer_stub_type(self, expr: IRExpression) -> str | None:
+        """Infer the stub type of an expression for method chaining."""
+        type_name, _crate_name = self._infer_stub_type_and_crate(expr)
+        return type_name
 
     def _inject_turbofish(self, rust_code: str, method: str) -> str:
         """Inject turbofish type parameter for generic methods.
@@ -2923,15 +2952,16 @@ class RustEmitter:
             type_name = expr.obj.name
             if type_name in self.ctx.stub_imports:
                 crate_name = self.ctx.stub_imports[type_name]
+                lookup_type = self._stub_lookup_type_name(type_name)
                 # Look up the full mapping key: crate.Type.method (e.g., "anyhow.Result.Ok")
-                full_key = f"{crate_name}.{type_name}.{method}"
+                full_key = f"{crate_name}.{lookup_type}.{method}"
                 mapping = get_stub_mapping(full_key)
                 if mapping:
                     result = self._apply_stdlib_mapping(mapping, args)
                     result = self._handle_result_mapping(result, mapping.needs_result)
                     return result
                 # Also check method mappings (e.g., URL_SAFE_NO_PAD.decode for constants)
-                method_mapping = get_stub_method_mapping(type_name, method)
+                method_mapping = get_stub_method_mapping(lookup_type, method, crate_name)
                 if method_mapping:
                     # For constants/engines, we don't have a {self} placeholder
                     # The rust_code should contain the full path
@@ -3036,7 +3066,9 @@ class RustEmitter:
                     return rust_code
 
                 # Check for stub method mapping (e.g., Command.about() for clap)
-                stub_mapping = get_stub_method_mapping(class_name, method)
+                lookup_class = self._stub_lookup_type_name(class_name)
+                stub_crate = self._stub_crate_for_type(class_name)
+                stub_mapping = get_stub_method_mapping(lookup_class, method, stub_crate)
                 if stub_mapping:
                     obj = self.emit_expression(expr.obj)
                     # Transform args based on param_types
@@ -3066,9 +3098,9 @@ class RustEmitter:
 
         # Check for chained stub method calls (e.g., Arg.new(...).short(...))
         # Try to infer the type from the expression chain
-        inferred_type = self._infer_stub_type(expr.obj)
+        inferred_type, inferred_crate = self._infer_stub_type_and_crate(expr.obj)
         if inferred_type:
-            stub_mapping = get_stub_method_mapping(inferred_type, method)
+            stub_mapping = get_stub_method_mapping(inferred_type, method, inferred_crate)
             if stub_mapping:
                 obj = self.emit_expression(expr.obj)
                 # Transform args based on param_types

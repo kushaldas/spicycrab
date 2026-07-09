@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from spicycrab.codegen.stdlib.types import StdlibMapping
 from spicycrab.codegen.stub_discovery import (
     StubPackage,
     _parse_config,
@@ -82,9 +83,7 @@ class TestParseConfig:
                 "rust_version": "4.5",
                 "python_module": "spicycrab_clap",
             },
-            "cargo": {
-                "dependencies": {"clap": {"version": "4.5", "features": ["derive"]}}
-            },
+            "cargo": {"dependencies": {"clap": {"version": "4.5", "features": ["derive"]}}},
             "mappings": {},
         }
 
@@ -230,6 +229,7 @@ class TestGeneratedClapStubPackage:
     def test_clap_toml_parses(self, clap_toml_path):
         """Test that the generated clap stub package TOML parses correctly."""
         import tomllib
+
         content = clap_toml_path.read_text()
         config = tomllib.loads(content)
 
@@ -242,6 +242,7 @@ class TestGeneratedClapStubPackage:
     def test_clap_builder_has_command_mapping(self, clap_builder_toml_path):
         """Test clap_builder has Command.new function mapping."""
         import tomllib
+
         content = clap_builder_toml_path.read_text()
         config = tomllib.loads(content)
         pkg = _parse_config(config)
@@ -255,6 +256,7 @@ class TestGeneratedClapStubPackage:
     def test_clap_builder_has_arg_mapping(self, clap_builder_toml_path):
         """Test clap_builder has Arg.new function mapping."""
         import tomllib
+
         content = clap_builder_toml_path.read_text()
         config = tomllib.loads(content)
         pkg = _parse_config(config)
@@ -268,6 +270,7 @@ class TestGeneratedClapStubPackage:
     def test_clap_builder_has_method_mappings(self, clap_builder_toml_path):
         """Test clap_builder has method mappings for Command and Arg."""
         import tomllib
+
         content = clap_builder_toml_path.read_text()
         config = tomllib.loads(content)
         pkg = _parse_config(config)
@@ -283,6 +286,7 @@ class TestGeneratedClapStubPackage:
     def test_clap_builder_has_type_mappings(self, clap_builder_toml_path):
         """Test clap_builder has type mappings."""
         import tomllib
+
         content = clap_builder_toml_path.read_text()
         config = tomllib.loads(content)
         pkg = _parse_config(config)
@@ -294,6 +298,7 @@ class TestGeneratedClapStubPackage:
     def test_clap_builder_has_cargo_deps(self, clap_builder_toml_path):
         """Test clap_builder cargo dependencies are set correctly."""
         import tomllib
+
         content = clap_builder_toml_path.read_text()
         config = tomllib.loads(content)
         pkg = _parse_config(config)
@@ -318,6 +323,52 @@ class TestGetterFunctions:
         """Test get_stub_method_mapping returns None for unknown methods."""
         result = get_stub_method_mapping("NonexistentType", "method")
         assert result is None
+
+    def test_get_stub_method_mapping_can_be_scoped_by_crate(self, monkeypatch):
+        """Conflicting type.method stubs should resolve from the requested crate."""
+        from spicycrab.codegen import stub_discovery
+
+        ureq_pkg = StubPackage(
+            name="ureq",
+            rust_crate="ureq",
+            rust_version="3.3.0",
+            python_module="spicycrab_ureq",
+            method_mappings={
+                "RequestBuilder.send": StdlibMapping(
+                    python_module="spicycrab_ureq",
+                    python_func="RequestBuilder.send",
+                    rust_code="{self}.send({arg0})",
+                    rust_imports=[],
+                    needs_result=True,
+                )
+            },
+        )
+        reqwest_pkg = StubPackage(
+            name="reqwest",
+            rust_crate="reqwest",
+            rust_version="0.13.4",
+            python_module="spicycrab_reqwest",
+            method_mappings={
+                "RequestBuilder.send": StdlibMapping(
+                    python_module="spicycrab_reqwest",
+                    python_func="RequestBuilder.send",
+                    rust_code="{self}.send()",
+                    rust_imports=[],
+                    needs_result=True,
+                )
+            },
+        )
+        monkeypatch.setattr(
+            stub_discovery,
+            "_stub_cache",
+            {
+                "ureq": ureq_pkg,
+                "reqwest": reqwest_pkg,
+            },
+        )
+
+        assert get_stub_method_mapping("RequestBuilder", "send", "reqwest").rust_code == "{self}.send()"
+        assert get_stub_method_mapping("RequestBuilder", "send", "ureq").rust_code == "{self}.send({arg0})"
 
     def test_get_stub_type_mapping_not_found(self):
         """Test get_stub_type_mapping returns None for unknown types."""

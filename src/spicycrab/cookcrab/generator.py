@@ -1740,6 +1740,16 @@ STD_METHOD_STUBS: dict[tuple[str, str, str], tuple[str, bool, bool, str | None, 
         "ConnectionManager",  # returns_type
         None,  # param_types
     ),
+    # reqwest request builders have async send methods with no arguments.
+    # Generic parsing can see multiple cfg-gated impls; keep the public call
+    # shape explicit so generated stubs do not accidentally include {arg0}.
+    ("reqwest", "RequestBuilder", "send"): (
+        "{self}.send()",
+        False,  # returns_self
+        True,  # needs_result - generated call unwraps/propagates the Result
+        "Response",  # returns_type
+        [],  # param_types
+    ),
     # base64 Engine trait method
     ("base64", "URL_SAFE_NO_PAD", "decode"): (
         "base64::engine::general_purpose::URL_SAFE_NO_PAD.decode({arg0})",
@@ -3717,6 +3727,7 @@ def generate_reexport_toml(
     - python paths: clap_builder.X -> clap.X
     - rust_code: clap_builder::X -> clap::X (since clap re-exports clap_builder)
     - rust_imports: same
+    - rust type paths: clap_builder::X -> clap::X
     """
     lines = [
         "[package]",
@@ -3743,7 +3754,7 @@ def generate_reexport_toml(
 
         source_content = source_toml_path.read_text()
 
-        # Find and copy all [[mappings.functions]] and [[mappings.methods]] blocks
+        # Find and copy all mapping blocks from the source crate.
         in_mapping_block = False
         current_block: list[str] = []
 
@@ -3789,6 +3800,9 @@ def _rewrite_mapping_block(block: list[str], source_crate: str, target_crate: st
             line = line.replace(f"{source_crate}::", f"{target_crate}::")
         # Rewrite rust_imports: ["clap_builder::X"] -> ["clap::X"]
         elif line.startswith("rust_imports = "):
+            line = line.replace(f'"{source_crate}::', f'"{target_crate}::')
+        # Rewrite type mappings: rust = "clap_builder::X" -> rust = "clap::X"
+        elif line.startswith("rust = "):
             line = line.replace(f'"{source_crate}::', f'"{target_crate}::')
         result.append(line)
     return result

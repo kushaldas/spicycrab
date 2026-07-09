@@ -27,7 +27,7 @@ and then transpile it to Rust, you need **stub packages**. These stubs:
 Or generate your own stubs:
 
 1. Generate stubs: ``cookcrab generate <crate_name> -o /tmp/stubs``
-2. Install stubs: ``cookcrab install <crate_name> --repo /tmp/stubs``
+2. Install the generated stub package from the local output directory
 3. Write Python code using the stub types
 4. Transpile: ``crabpy transpile mycode.py``
 
@@ -54,8 +54,9 @@ other standard Cargo dependency fields. User feature overrides from
 
 .. warning::
 
-   Always use ``cookcrab install`` instead of ``pip install`` directly.
-   This ensures compatibility with spicycrab's stub discovery system.
+   Use ``cookcrab install`` for stubs from the official repository.
+   Use local editable installs only for stubs you have just generated with
+   ``cookcrab generate``.
 
 Installation
 ------------
@@ -91,16 +92,20 @@ This is the recommended way to get stubs for common crates.
 
 .. code-block:: bash
 
-   cookcrab install tokio -v 1.49.0
-   cookcrab install anyhow -v 1.0.100
+   cookcrab install tokio -v 1.52.3
+   cookcrab install anyhow -v 1.0.103
 
 **Install from a custom repository:**
 
 .. code-block:: bash
 
-   # Install from a local or custom repository
+   # Install from a local or custom git repository with stubs/<crate> layout
    cookcrab install mycrate --repo /path/to/my-stubs
    cookcrab install mycrate --repo https://github.com/user/custom-stubs.git
+
+The ``--repo`` option is for a stubs repository, not the raw output directory
+from ``cookcrab generate``. For raw generated output, install the generated
+package path with ``python3 -m pip install -e``.
 
 **What happens during install:**
 
@@ -110,8 +115,8 @@ This is the recommended way to get stubs for common crates.
 
 .. warning::
 
-   Always use ``cookcrab install`` rather than ``pip install`` directly.
-   This ensures:
+   For stubs from the official repository, use ``cookcrab install`` rather than
+   installing packages directly. This ensures:
 
    - Stubs come from the trusted spicycrab-stubs repository
    - Proper wheel building and installation
@@ -121,12 +126,25 @@ This is the recommended way to get stubs for common crates.
 
 The official repository includes stubs for:
 
+- ``actix-web`` and ``actix-web-lab`` - Web services
 - ``anyhow`` - Error handling
-- ``tokio`` - Async runtime (spawn, sleep, channels)
-- ``clap`` - Command line argument parsing
+- ``base64`` - Base64 encoding and decoding
 - ``chrono`` - Date and time handling
-- ``fern`` - Logging
-- ``log`` - Logging facade
+- ``clap`` and ``clap_builder`` - Command line argument parsing
+- ``config`` - Configuration loading
+- ``env_logger``, ``fern``, and ``log`` - Logging
+- ``grindvakt`` - Shared HTTP, key, MAC, and PKCE primitives
+- ``josekit`` - JOSE/JWT/JWE/JWS operations
+- ``lazy_static`` - Lazy static initialization
+- ``native-tls``, ``rustls``, and ``rustls-pemfile`` - TLS support
+- ``oidfed_metadata_policy`` - OpenID federation metadata policy
+- ``redis`` - Redis client
+- ``reqwest`` and ``ureq`` - HTTP clients
+- ``serde`` and ``serde_json`` - Serialization
+- ``sha2`` - SHA-2 hashing
+- ``tokio`` - Async runtime (spawn, sleep, channels)
+- ``toml`` - TOML parsing
+- ``tunnelbana-core`` and ``tunnelbana-plugins`` - Tunnelbana plugin APIs
 
 Check for available stubs:
 
@@ -158,7 +176,7 @@ in the official repository.
    cookcrab generate clap -o /tmp/stubs
 
    # Generate stubs for a specific version
-   cookcrab generate clap --version 4.5.0 -o /tmp/stubs
+   cookcrab generate clap -v 4.6.1 -o /tmp/stubs
 
 **From a local crate:**
 
@@ -182,7 +200,8 @@ in the official repository.
 
 .. code-block:: bash
 
-   cookcrab install clap --repo /tmp/stubs
+   python3 -m pip install -e /tmp/stubs/clap_builder
+   python3 -m pip install -e /tmp/stubs/clap
 
 validate
 ^^^^^^^^
@@ -459,8 +478,8 @@ A stub package contains:
 
    [project]
    name = "spicycrab-clap"
-   version = "4.5.54"
-   dependencies = ["spicycrab-clap-builder>=4.5.0"]
+   version = "4.6.1"
+   dependencies = ["spicycrab-clap_builder"]
 
    [project.entry-points."spicycrab.stubs"]
    clap = "spicycrab_clap"
@@ -505,11 +524,11 @@ Transpilation mappings:
    [package]
    name = "clap"
    rust_crate = "clap"
-   rust_version = "4.5"
+   rust_version = "4.6.1"
    python_module = "spicycrab_clap"
 
    [cargo.dependencies.clap]
-   version = "4.5"
+   version = "4.6.1"
    features = ["derive"]
 
    [[mappings.functions]]
@@ -549,6 +568,33 @@ Many Rust crates re-export types from other crates. cookcrab handles this automa
    Generating stubs for source crate: clap_builder...
 
 The generated ``spicycrab_clap`` package will depend on ``spicycrab_clap_builder``.
+Mappings in the re-exporting package are rewritten to use the public crate path:
+function mappings, method imports, and type mappings all refer to ``clap::...``
+rather than leaking ``clap_builder::...`` into generated user code.
+
+Method Mapping Resolution
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Method mappings are scoped by the stub crate inferred from imports and receiver
+types. This matters when multiple crates expose the same Rust type name. For
+example, both ``reqwest`` and ``ureq`` expose a ``RequestBuilder``, but
+``reqwest::RequestBuilder::send`` takes no body argument while
+``ureq::RequestBuilder::send`` can take a body.
+
+Use explicit imports and type annotations when the receiver type cannot be
+inferred from the surrounding expression:
+
+.. code-block:: python
+
+   from spicycrab_reqwest import Client, Response
+
+   async def fetch(url: str) -> str:
+       client: Client = Client.new()
+       response: Response = await client.get(url).send()
+       return await response.text()
+
+The ``Client`` annotation tells spicycrab to resolve the chained
+``RequestBuilder.send`` mapping from the ``reqwest`` stub package.
 
 Custom Stub Modifications
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -557,6 +603,10 @@ After generating stubs, you may need to customize them:
 
 1. **Edit __init__.py** - Add missing methods or fix type signatures
 2. **Edit _spicycrab.toml** - Add custom mappings or fix Rust code generation
+
+When a generated stub needs a repeatable package-specific fix, prefer fixing
+``cookcrab`` itself and adding a generator regression test. Keep hand-written
+stub edits for APIs that cannot be represented accurately by the generator.
 
 Example: Adding a custom mapping:
 
@@ -578,6 +628,15 @@ Always validate your stubs before use:
 
    cookcrab validate /tmp/stubs/clap
 
+``cookcrab validate`` accepts one stub package path at a time. To validate a
+repository of generated stubs:
+
+.. code-block:: bash
+
+   for stub in ./stubs/*; do
+       [ -d "$stub" ] && cookcrab validate "$stub"
+   done
+
 This checks:
 
 - Required files exist (pyproject.toml, __init__.py, _spicycrab.toml)
@@ -591,10 +650,11 @@ To contribute stubs to the official repository:
 
 1. Fork the `spicycrab-stubs <https://github.com/kushaldas/spicycrab-stubs>`_ repository
 2. Generate stubs: ``cookcrab generate <crate> -o ./stubs``
-3. Review and customize the generated stubs
+3. Review the generated stubs and fix generator gaps where possible
 4. Validate: ``cookcrab validate ./stubs/<crate>``
 5. Test: ``cookcrab install <crate> --repo ./`` and run examples
-6. Submit a pull request
+6. Transpile the examples, run ``cargo check``, and run ``cargo build``
+7. Submit a pull request
 
 Crate Features
 --------------
@@ -666,7 +726,7 @@ Example: Using reqwest with blocking
 .. code-block:: bash
 
    cookcrab generate reqwest -o /tmp/stubs
-   pip install -e /tmp/stubs/reqwest
+   python3 -m pip install -e /tmp/stubs/reqwest
 
 2. Create your Python code:
 
@@ -698,7 +758,7 @@ Example: Using reqwest with blocking
 .. code-block:: toml
 
    [dependencies]
-   reqwest = { version = "0.13.1", features = ["blocking"] }
+   reqwest = { version = "0.13.4", features = ["blocking"] }
 
 Disabling Default Features
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -770,6 +830,29 @@ If a method call isn't being transpiled:
    [[mappings.methods]]
    python = "TypeName.method_name"
    rust_code = "{self}.method_name({arg0})"
+
+Wrong method mapping selected
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If generated Rust uses a mapping from the wrong crate, check for shared type
+names across installed stub packages. The most common shape is a builder type
+such as ``RequestBuilder`` that exists in more than one HTTP client crate.
+
+1. Import the type from the intended stub module.
+2. Add a type annotation for variables used in method chains.
+3. Make sure the stub package has a ``[[mappings.types]]`` entry for that type.
+
+.. code-block:: python
+
+   from spicycrab_reqwest import Client, Response
+
+   async def fetch(url: str) -> str:
+       client: Client = Client.new()
+       response: Response = await client.get(url).send()
+       return await response.text()
+
+Here, the ``Client`` annotation lets spicycrab keep the chain scoped to the
+``reqwest`` stub package, so ``send()`` is emitted with the reqwest signature.
 
 Cargo dependency issues
 ^^^^^^^^^^^^^^^^^^^^^^^

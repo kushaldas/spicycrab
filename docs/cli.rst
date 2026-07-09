@@ -251,7 +251,7 @@ Generate Python stubs from a Rust crate.
 ``-o, --output``
    Output directory (default: current directory)
 
-``--version``
+``-v, --version``
    Crate version (default: latest)
 
 ``--local``
@@ -265,7 +265,7 @@ Generate Python stubs from a Rust crate.
    cookcrab generate clap -o /tmp/stubs
 
    # Generate stubs for specific version
-   cookcrab generate anyhow --version 1.0.80 -o /tmp/stubs
+   cookcrab generate anyhow -v 1.0.103 -o /tmp/stubs
 
    # Generate from local crate
    cookcrab generate /path/to/mycrate --local -o /tmp/stubs
@@ -281,15 +281,19 @@ Install a stub package from the spicycrab-stubs repository.
 
 **Options:**
 
-``--version``
+``-v, --version``
    Stub version to install
+
+``--repo``
+   Stubs repository URL. This is intended for the official repository or another
+   git repository with the same ``stubs/<crate>`` layout.
 
 **Examples:**
 
 .. code-block:: bash
 
    cookcrab install clap
-   cookcrab install serde --version 1.0.0
+   cookcrab install serde -v 1.0.228
 
 search
 """"""
@@ -347,7 +351,7 @@ Complete workflow to use a Rust crate in Python and transpile:
    # 1. Generate stubs
    cookcrab generate clap -o /tmp/stubs
 
-   # 2. Install stubs (handles dependencies automatically)
+   # 2. Install generated stubs
    python3 -m pip install -e /tmp/stubs/clap_builder
    python3 -m pip install -e /tmp/stubs/clap
 
