@@ -51,7 +51,7 @@ def fetch_crate_info(crate_name: str) -> dict:
         click.ClickException: If crate not found or API error
     """
     url = f"{CRATES_IO_API}/{crate_name}"
-    headers = {"User-Agent": "cookcrab/0.1.0 (https://github.com/kushaldas/spicycrab)"}
+    headers = {"User-Agent": "cookcrab/0.1.1 (https://github.com/kushaldas/spicycrab)"}
 
     try:
         request = urllib.request.Request(url, headers=headers)
@@ -84,7 +84,7 @@ def download_crate(crate_name: str, version: str, output_dir: Path) -> Path:
     """
     # Download URL format: https://static.crates.io/crates/{name}/{name}-{version}.crate
     url = f"{CRATES_IO_DOWNLOAD}/{crate_name}/{crate_name}-{version}.crate"
-    headers = {"User-Agent": "cookcrab/0.1.0 (https://github.com/kushaldas/spicycrab)"}
+    headers = {"User-Agent": "cookcrab/0.1.1 (https://github.com/kushaldas/spicycrab)"}
 
     try:
         request = urllib.request.Request(url, headers=headers)
