@@ -82,6 +82,9 @@ Example: Compound Assignment
    }
 
    impl Counter {
+       pub fn new(value: i64) -> Self {
+           Self { value }
+       }
        pub fn increment(&mut self) {
            self.value += 1;
        }

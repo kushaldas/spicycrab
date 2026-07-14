@@ -60,12 +60,8 @@ When you define ``async def main()``, spicycrab automatically adds the
 
 .. code-block:: rust
 
-   async fn greet(name: String) -> String {
-       format!("Hello, {}!", name)
-   }
-
    #[tokio::main]
-   async fn main() {
+   pub async fn main() {
        let message: String = greet("World".to_string()).await;
        println!("{}", message);
    }
@@ -182,13 +178,8 @@ Use ``sleep`` with ``Duration`` for async delays:
 
 .. code-block:: rust
 
-   async fn delay_print(msg: String, secs: i64) {
-       tokio::time::sleep(std::time::Duration::from_secs(secs as u64)).await;
-       println!("{}", msg);
-   }
-
    #[tokio::main]
-   async fn main() {
+   pub async fn main() {
        println!("Starting...");
        delay_print("After 1 second".to_string(), 1).await;
        delay_print("After 2 more seconds".to_string(), 2).await;
@@ -257,15 +248,9 @@ Basic task spawning
 
 .. code-block:: rust
 
-   async fn do_work(task_id: i64) -> i64 {
-       println!("{}", format!("Task {} starting...", task_id));
-       tokio::time::sleep(std::time::Duration::from_millis(100 as u64)).await;
-       println!("{}", format!("Task {} finished!", task_id));
-       task_id * 10
-   }
-
    #[tokio::main]
-   async fn main() {
+   /// Main function demonstrating concurrent task spawning.
+   pub async fn main() {
        println!("Spawning tasks...");
        let handle1 = tokio::spawn(do_work(1));
        let handle2 = tokio::spawn(do_work(2));
@@ -273,7 +258,7 @@ Basic task spawning
        let result1: i64 = handle1.await.unwrap();
        let result2: i64 = handle2.await.unwrap();
        let result3: i64 = handle3.await.unwrap();
-       println!("{}", format!("Results: {}, {}, {}", result1, result2, result3));
+       println!("Results: {}, {}, {}", result1, result2, result3);
        println!("All tasks completed!");
    }
 
@@ -627,38 +612,37 @@ For shared *mutable* state, combine Arc with Mutex. The tokio stubs provide
 
    /// Increment the shared counter multiple times.
    pub async fn increment_counter(
-       counter: std::sync::Arc<tokio::sync::Mutex<i64>>,
-       task_id: i64,
-       times: i64
-   ) {
-       for i in 0..times {
-           println!("{}", format!("Task {}: incrementing (iteration {})",
-               task_id, i + 1));
-           tokio::time::sleep(std::time::Duration::from_millis(10 as u64)).await;
-       }
-   }
 
    #[tokio::main]
    /// Main function demonstrating Arc<Mutex<T>> usage.
    pub async fn main() {
-       let counter: std::sync::Arc<tokio::sync::Mutex<i64>> =
-           std::sync::Arc::new(tokio::sync::Mutex::new(0));
+       let counter: std::sync::Arc<tokio::sync::Mutex<i64>> = std::sync::Arc::new(
+           tokio::sync::Mutex::new(0),
+       );
        println!("Starting concurrent counter increments...");
-       println!("{}", format!("Initial strong count: {}",
-           std::sync::Arc::strong_count(&counter) as i64));
-       let counter1 = std::sync::Arc::clone(&counter);
-       let counter2 = std::sync::Arc::clone(&counter);
-       let counter3 = std::sync::Arc::clone(&counter);
-       println!("{}", format!("After cloning: strong count = {}",
-           std::sync::Arc::strong_count(&counter) as i64));
+       println!("Initial strong count: {}", std::sync::Arc::strong_count(& counter));
+       let counter1: std::sync::Arc<tokio::sync::Mutex<i64>> = std::sync::Arc::clone(
+           &counter,
+       );
+       let counter2: std::sync::Arc<tokio::sync::Mutex<i64>> = std::sync::Arc::clone(
+           &counter,
+       );
+       let counter3: std::sync::Arc<tokio::sync::Mutex<i64>> = std::sync::Arc::clone(
+           &counter,
+       );
+       println!(
+           "After cloning: strong count = {}", std::sync::Arc::strong_count(& counter)
+       );
        let handle1 = tokio::spawn(increment_counter(counter1, 1, 3));
        let handle2 = tokio::spawn(increment_counter(counter2, 2, 3));
        let handle3 = tokio::spawn(increment_counter(counter3, 3, 3));
        handle1.await.unwrap();
        handle2.await.unwrap();
        handle3.await.unwrap();
-       println!("{}", format!("After tasks complete: strong count = {}",
-           std::sync::Arc::strong_count(&counter) as i64));
+       println!(
+           "After tasks complete: strong count = {}", std::sync::Arc::strong_count(&
+           counter)
+       );
        println!("All increments completed!");
    }
 

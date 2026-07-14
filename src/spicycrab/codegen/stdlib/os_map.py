@@ -140,28 +140,28 @@ PATHLIB_MAPPINGS: dict[str, StdlibMapping] = {
     "Path.read_text": StdlibMapping(
         python_module="pathlib",
         python_func="read_text",
-        rust_code="std::fs::read_to_string({self}).unwrap()",
+        rust_code="std::fs::read_to_string(&{self}).unwrap()",
         rust_imports=["std::fs"],
         needs_result=True,
     ),
     "Path.read_bytes": StdlibMapping(
         python_module="pathlib",
         python_func="read_bytes",
-        rust_code="std::fs::read({self}).unwrap()",
+        rust_code="std::fs::read(&{self}).unwrap()",
         rust_imports=["std::fs"],
         needs_result=True,
     ),
     "Path.write_text": StdlibMapping(
         python_module="pathlib",
         python_func="write_text",
-        rust_code="std::fs::write({self}, {args}).unwrap()",
+        rust_code="std::fs::write(&{self}, {args}).unwrap()",
         rust_imports=["std::fs"],
         needs_result=True,
     ),
     "Path.write_bytes": StdlibMapping(
         python_module="pathlib",
         python_func="write_bytes",
-        rust_code="std::fs::write({self}, {args}).unwrap()",
+        rust_code="std::fs::write(&{self}, {args}).unwrap()",
         rust_imports=["std::fs"],
         needs_result=True,
     ),
@@ -186,14 +186,14 @@ PATHLIB_MAPPINGS: dict[str, StdlibMapping] = {
     "Path.mkdir": StdlibMapping(
         python_module="pathlib",
         python_func="mkdir",
-        rust_code="std::fs::create_dir_all({self}).unwrap()",
+        rust_code="std::fs::create_dir_all(&{self}).unwrap()",
         rust_imports=["std::fs"],
         needs_result=True,
     ),
     "Path.unlink": StdlibMapping(
         python_module="pathlib",
         python_func="unlink",
-        rust_code="std::fs::remove_file({self}).unwrap()",
+        rust_code="std::fs::remove_file(&{self}).unwrap()",
         rust_imports=["std::fs"],
         needs_result=True,
     ),
@@ -218,7 +218,7 @@ PATHLIB_MAPPINGS: dict[str, StdlibMapping] = {
     "Path.suffix": StdlibMapping(
         python_module="pathlib",
         python_func="suffix",
-        rust_code='{self}.extension().map(|s| format!(".", s.to_string_lossy())).unwrap_or_default()',
+        rust_code='{self}.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default()',
         rust_imports=[],
     ),
     "Path.joinpath": StdlibMapping(

@@ -259,9 +259,7 @@ Basic try/except
 
    pub fn safe_divide(a: i64, b: i64) -> i64 {
        match divide(a, b) {
-           Ok(result) => {
-               result
-           }
+           Ok(result) => result,
            Err(e) => {
                println!("Error: {}", e);
                0
@@ -372,14 +370,14 @@ Complete Example
 .. code-block:: rust
 
    pub fn read_config(path: String) -> Result<String, String> {
-       if path == "" {
+       if path == "".to_string() {
            return Err("empty path".to_string());
        }
        Ok("config data".to_string())
    }
 
    pub fn parse_config(data: String) -> Result<i64, String> {
-       if data == "" {
+       if data == "".to_string() {
            return Err("empty config".to_string());
        }
        Ok(42)
@@ -433,12 +431,6 @@ Basic unwrap
        Ok(42)
    }
 
-   fn main() {
-       let result: Result<i64, String> = get_value();
-       let value: i64 = result.unwrap();
-       println!("{}", value);
-   }
-
 unwrap_or with default
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -456,12 +448,6 @@ unwrap_or with default
 
    pub fn get_err() -> Result<i64, String> {
        Err("error".to_string())
-   }
-
-   fn main() {
-       let result: Result<i64, String> = get_err();
-       let value: i64 = result.unwrap_or(0);
-       println!("{}", value);
    }
 
 expect with custom message
@@ -483,12 +469,6 @@ expect with custom message
 
    pub fn get_value() -> Result<i64, String> {
        Ok(100)
-   }
-
-   fn main() {
-       let result: Result<i64, String> = get_value();
-       let value: i64 = result.expect("should have value");
-       println!("{}", value);
    }
 
 Checking Result status
@@ -521,18 +501,6 @@ Checking Result status
 
    pub fn get_err() -> Result<i64, String> {
        Err("failed".to_string())
-   }
-
-   fn main() {
-       let ok_result: Result<i64, String> = get_value();
-       if ok_result.is_ok() {
-           println!("{}", "got ok");
-       }
-
-       let err_result: Result<i64, String> = get_err();
-       if err_result.is_err() {
-           println!("{}", "got err");
-       }
    }
 
 Supported static methods

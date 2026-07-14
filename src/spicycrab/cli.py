@@ -232,6 +232,7 @@ def _transpile_file(
         name=name,
         modules=[ir_module],
         is_library=not has_main,
+        uses_serde_json="serde_json::" in rust_code,
         project_dir=str(input_path.parent),
     )
     cargo_toml.write_text(cargo_content)
@@ -343,6 +344,7 @@ def _transpile_directory(
             break
 
     # Generate Rust code for each module
+    emitted_rust: list[str] = []
     for module, py_file in zip(modules, py_files):
         resolver = resolve_types(module)
         module_name = py_file.stem.replace("-", "_")
@@ -365,6 +367,7 @@ def _transpile_directory(
             rs_file = src_dir / f"{module_name}.rs"
 
         rs_file.write_text(rust_code)
+        emitted_rust.append(rust_code)
         if verbose:
             click.echo(f"  Wrote {rs_file}")
 
@@ -395,6 +398,7 @@ def _transpile_directory(
         name=name,
         modules=modules,
         is_library=True,
+        uses_serde_json=any("serde_json::" in code for code in emitted_rust),
         project_dir=str(input_path),
     )
     cargo_toml.write_text(cargo_content)

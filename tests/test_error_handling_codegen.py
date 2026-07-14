@@ -38,7 +38,8 @@ def safe_divide(a: int, b: int) -> int:
     assert "Ok(result) => {" in rust_code
     assert "            result" in rust_code
     assert "Err(e) => {" in rust_code
-    assert 'println!("{}", format!("Error: {}", e));' in rust_code
+    # print(f"...") inlines into println! rather than nesting a format!() inside it
+    assert 'println!("Error: {}", e);' in rust_code
 
 
 def test_try_except_in_result_context_matches_without_question_mark() -> None:

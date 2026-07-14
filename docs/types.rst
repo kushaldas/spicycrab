@@ -43,7 +43,7 @@ str
 .. code-block:: rust
 
    let name: String = "Alice".to_string();
-   let empty: String = String::new();
+   let empty: String = "".to_string();
 
 bool
 ^^^^
@@ -99,10 +99,8 @@ Integer Types
    }
 
    pub fn index_size(arr: Vec<String>) -> usize {
-       arr.len()
+       arr.len() as usize
    }
-
-   let counter: i32 = 0;
 
 Available integer types:
 
@@ -151,8 +149,6 @@ Float Types
    pub fn compute_single(x: f32, y: f32) -> f32 {
        x * y
    }
-
-   let precise: f64 = 3.141592653589793;
 
 +-------------------+---------------------+----------------------------------+
 | Python            | Rust                | Precision                        |
@@ -266,8 +262,8 @@ Both ``is None`` and ``is not None`` are supported:
    }
 
    pub fn process(value: Option<String>) {
-       if value.is_some() {
-           println!("Got: {}", value.unwrap());
+       if let Some(value) = value {
+           println!("Got: {}", value);
        }
    }
 

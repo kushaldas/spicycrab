@@ -37,11 +37,7 @@ if-else
 .. code-block:: rust
 
    pub fn max_value(a: i64, b: i64) -> i64 {
-       if a > b {
-           return a;
-       } else {
-           return b;
-       }
+       if a > b { a } else { b }
    }
 
 if-elif-else
@@ -63,13 +59,13 @@ if-elif-else
 
    pub fn grade(score: i64) -> String {
        if score >= 90 {
-           return "A".to_string();
+           "A".to_string()
        } else if score >= 80 {
-           return "B".to_string();
+           "B".to_string()
        } else if score >= 70 {
-           return "C".to_string();
+           "C".to_string()
        } else {
-           return "F".to_string();
+           "F".to_string()
        }
    }
 
@@ -91,13 +87,9 @@ Nested if
 
    pub fn classify(x: i64, y: i64) -> String {
        if x > 0 {
-           if y > 0 {
-               return "first quadrant".to_string();
-           } else {
-               return "fourth quadrant".to_string();
-           }
+           if y > 0 { "first quadrant".to_string() } else { "fourth quadrant".to_string() }
        } else {
-           return "left side".to_string();
+           "left side".to_string()
        }
    }
 
@@ -120,7 +112,7 @@ for loop with range
    pub fn sum_to_n(n: i64) -> i64 {
        let mut total: i64 = 0;
        for i in 0..n {
-           total = total + i;
+           total += i;
        }
        total
    }
@@ -141,7 +133,7 @@ for loop with start and end
    pub fn sum_range(start: i64, end: i64) -> i64 {
        let mut total: i64 = 0;
        for i in start..end {
-           total = total + i;
+           total += i;
        }
        total
    }
@@ -162,7 +154,7 @@ for loop over list
    pub fn sum_list(items: Vec<i64>) -> i64 {
        let mut total: i64 = 0;
        for item in items {
-           total = total + item;
+           total += item;
        }
        total
    }
@@ -179,11 +171,10 @@ while loop
 
 .. code-block:: rust
 
-   pub fn countdown(n: i64) {
-       let mut n = n;
+   pub fn countdown(mut n: i64) {
        while n > 0 {
            println!("{}", n);
-           n = n - 1;
+           n -= 1;
        }
    }
 
@@ -233,7 +224,7 @@ continue
            if item < 0 {
                continue;
            }
-           total = total + item;
+           total += item;
        }
        total
    }
@@ -297,13 +288,13 @@ Logical Operators
 .. code-block:: rust
 
    pub fn check(x: i64) -> bool {
-       if x > 0 && x < 100 {
+       if (x > 0) && (x < 100) {
            return true;
        }
-       if x < -100 || x > 100 {
+       if (x < -100) || (x > 100) {
            return false;
        }
-       if !(x == 0) {
+       if !x == 0 {
            return true;
        }
        false

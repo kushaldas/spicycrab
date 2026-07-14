@@ -56,8 +56,7 @@ Default Arguments
 
 .. code-block:: rust
 
-   pub fn greet(name: String, greeting: Option<String>) -> String {
-       let greeting = greeting.unwrap_or("Hello".to_string());
+   pub fn greet(name: String, greeting: String) -> String {
        format!("{}, {}!", greeting, name)
    }
 
@@ -114,8 +113,8 @@ Mutable variables
 
    pub fn increment() -> i64 {
        let mut x: i64 = 0;
-       x = x + 1;
-       x = x + 1;
+       x += 1;
+       x += 1;
        x
    }
 
@@ -138,7 +137,8 @@ This creates an uninitialized variable that must be assigned before use:
 .. code-block:: rust
 
    pub fn process(flag: bool) -> String {
-       let result: String;
+       let mut result: String;
+       let mut result;
        if flag {
            result = "yes".to_string();
        } else {
@@ -264,7 +264,7 @@ range()
    pub fn sum_range(n: i64) -> i64 {
        let mut total: i64 = 0;
        for i in 0..n {
-           total = total + i;
+           total += i;
        }
        total
    }
@@ -341,7 +341,7 @@ for controlling how values are formatted (hex, padding, precision, etc.).
 .. code-block:: rust
 
    pub fn format_price(amount: f64) -> String {
-       format!("${:.2f}", amount)
+       format!("${:.2}", amount)
    }
 
    pub fn format_scientific(value: f64) -> String {

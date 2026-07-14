@@ -19,7 +19,7 @@ Path creation
 .. code-block:: rust
 
    pub fn get_path() -> PathBuf {
-       PathBuf::from("/home/user")
+       PathBuf::from("/home/user".to_string())
    }
 
 Path joining
@@ -129,7 +129,7 @@ Environment variables
 .. code-block:: rust
 
    pub fn get_home() -> String {
-       std::env::var("HOME").unwrap_or(String::new())
+       std::env::var("HOME").unwrap_or("".to_string())
    }
 
 sys
@@ -148,7 +148,7 @@ Command line arguments
 .. code-block:: rust
 
    pub fn get_args() -> Vec<String> {
-       std::env::args().collect()
+       std::env::args().collect::<Vec<_>>()
    }
 
 Platform detection
@@ -338,7 +338,7 @@ Current local time
 
    import datetime
 
-   def now():
+   def now() -> datetime.datetime:
        return datetime.datetime.now()
 
 .. code-block:: rust
@@ -355,7 +355,7 @@ Current UTC time
 
    import datetime
 
-   def utc_now():
+   def utc_now() -> datetime.datetime:
        return datetime.datetime.utcnow()
 
 .. code-block:: rust
@@ -371,7 +371,7 @@ Today's date
 
    import datetime
 
-   def today():
+   def today() -> datetime.date:
        return datetime.date.today()
 
 .. code-block:: rust
@@ -387,7 +387,7 @@ From timestamp
 
    import datetime
 
-   def from_ts(ts: float):
+   def from_ts(ts: float) -> datetime.datetime:
        return datetime.datetime.fromtimestamp(ts)
 
 .. code-block:: rust
@@ -405,7 +405,7 @@ The ``datetime.timedelta`` class maps to ``chrono::Duration``:
 
    import datetime
 
-   def get_duration():
+   def get_duration() -> datetime.timedelta:
        return datetime.timedelta(days=1, hours=2, minutes=30)
 
 .. code-block:: rust
@@ -587,10 +587,12 @@ tempfile.mkdtemp()
 .. code-block:: rust
 
    pub fn make_temp_dir() -> String {
-       let d = tempfile::tempdir().unwrap();
-       let p = d.path().to_string_lossy().to_string();
-       let _ = d.keep();  // Persist the directory
-       p
+       {
+           let d = tempfile::tempdir().unwrap();
+           let p = d.path().to_string_lossy().to_string();
+           let _ = d.keep();
+           p
+       }
    }
 
 tempfile.TemporaryDirectory()
@@ -607,8 +609,7 @@ tempfile.TemporaryDirectory()
 .. code-block:: rust
 
    pub fn use_temp_dir() {
-       let tmpdir = tempfile::tempdir().unwrap();
-       // Directory is cleaned up when tmpdir is dropped
+       let _tmpdir = tempfile::tempdir().unwrap();
    }
 
 Context manager support
@@ -670,7 +671,8 @@ subprocess.call()
 .. code-block:: rust
 
    pub fn run_command() -> i64 {
-       std::process::Command::new("ls")
+       let args: Vec<String> = vec!["-l".to_string()];
+       std::process::Command::new("ls".to_string())
            .args(&args)
            .status()
            .unwrap()
@@ -692,13 +694,15 @@ subprocess.check_output()
 .. code-block:: rust
 
    pub fn get_output() -> String {
+       let args: Vec<String> = vec!["hello".to_string()];
        String::from_utf8_lossy(
-           &std::process::Command::new("echo")
-               .args(&args)
-               .output()
-               .unwrap()
-               .stdout
-       ).to_string()
+               &std::process::Command::new("echo".to_string())
+                   .args(&args)
+                   .output()
+                   .unwrap()
+                   .stdout,
+           )
+           .to_string()
    }
 
 subprocess.getoutput()
@@ -715,13 +719,14 @@ subprocess.getoutput()
 
    pub fn shell_output() -> String {
        String::from_utf8_lossy(
-           &std::process::Command::new("sh")
-               .arg("-c")
-               .arg("echo hello")
-               .output()
-               .unwrap()
-               .stdout
-       ).to_string()
+               &std::process::Command::new("sh")
+                   .arg("-c")
+                   .arg("echo hello".to_string())
+                   .output()
+                   .unwrap()
+                   .stdout,
+           )
+           .to_string()
    }
 
 Supported subprocess functions
@@ -965,8 +970,9 @@ Select k random elements from a sequence (with replacement).
 
    use rand::seq::SliceRandom;
 
-   pub fn pick_with_replacement(items: Vec<i64>, k: usize) -> Vec<i64> {
-       (0..k).map(|_| items.choose(&mut rand::thread_rng()).cloned().unwrap())
+   pub fn pick_with_replacement(items: Vec<i64>, k: i64) -> Vec<i64> {
+       (0..k)
+           .map(|_| items.choose(&mut rand::thread_rng()).cloned().unwrap())
            .collect::<Vec<_>>()
    }
 
@@ -1007,10 +1013,13 @@ Generate a random number from a Gaussian (normal) distribution.
 
 .. code-block:: rust
 
-   use rand_distr::{Distribution, Normal};
-
    pub fn normal_value() -> f64 {
-       Normal::new(0.0, 1.0).unwrap().sample(&mut rand::thread_rng())
+       {
+           {
+               use rand_distr::{Distribution, Normal};
+               Normal::new(0.0, 1.0).unwrap().sample(&mut rand::thread_rng())
+           }
+       }
    }
 
 Supported random functions
@@ -1084,11 +1093,11 @@ The logging functions map directly to Rust's ``log`` macros:
 .. code-block:: rust
 
    pub fn example() {
-       log::debug!("{}", "Debug message");
-       log::info!("{}", "Info message");
-       log::warn!("{}", "Warning message");
-       log::error!("{}", "Error message");
-       log::error!("{}", "Critical message");  // No critical level in Rust
+       log::debug!("{}", "Debug message".to_string());
+       log::info!("{}", "Info message".to_string());
+       log::warn!("{}", "Warning message".to_string());
+       log::error!("{}", "Error message".to_string());
+       log::error!("{}", "Critical message".to_string());
    }
 
 Logger Initialization
@@ -1108,7 +1117,7 @@ Use ``logging.basicConfig()`` to initialize the logger:
 
    pub fn main() {
        env_logger::init();
-       log::info!("{}", "Application started");
+       log::info!("{}", "Application started".to_string());
    }
 
 .. warning::
@@ -1245,7 +1254,7 @@ Threading primitives from Rust's ``std::thread`` module.
 
    pub fn main() {
        let handle = std::thread::spawn(worker);
-       handle.join().unwrap();
+       handle.join();
    }
 
 **Thread sleep:**
@@ -1306,10 +1315,10 @@ Time and duration types from Rust's ``std::time`` module.
 .. code-block:: rust
 
    pub fn get_durations() {
-       let one_second = std::time::Duration::from_secs(1);
-       let half_second = std::time::Duration::from_millis(500);
-       let one_micro = std::time::Duration::from_micros(1);
-       let one_nano = std::time::Duration::from_nanos(1);
+       let _one_second = std::time::Duration::from_secs(1);
+       let _half_second = std::time::Duration::from_millis(500);
+       let _one_micro = std::time::Duration::from_micros(1);
+       let _one_nano = std::time::Duration::from_nanos(1);
    }
 
 **Measuring elapsed time with Instant:**
@@ -1328,9 +1337,8 @@ Time and duration types from Rust's ``std::time`` module.
 
    pub fn measure_time() {
        let start = std::time::Instant::now();
-       // ... do some work ...
        let elapsed = start.elapsed();
-       println!("Elapsed: {} ms", elapsed.as_millis());
+       println!("Elapsed: {} ms", elapsed.as_millis() as i64);
    }
 
 **System time and UNIX epoch:**
@@ -1346,10 +1354,10 @@ Time and duration types from Rust's ``std::time`` module.
 
 .. code-block:: rust
 
-   pub fn get_timestamp() -> u64 {
+   pub fn get_timestamp() -> i64 {
        let now = std::time::SystemTime::now();
        let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap();
-       since_epoch.as_secs()
+       since_epoch.as_secs() as i64
    }
 
 **Duration methods:**
@@ -1450,9 +1458,9 @@ I/O operations from Rust's ``std::io`` module.
 .. code-block:: rust
 
    pub fn get_streams() {
-       let input_stream = std::io::stdin();
-       let output_stream = std::io::stdout();
-       let error_stream = std::io::stderr();
+       let _input_stream = std::io::stdin();
+       let _output_stream = std::io::stdout();
+       let _error_stream = std::io::stderr();
    }
 
 rust_std.path
@@ -1467,7 +1475,7 @@ Path manipulation from Rust's ``std::path`` module.
    from rust_std.path import Path, PathBuf
 
    def make_path(s: str) -> PathBuf:
-       return PathBuf.from(s)
+       return PathBuf(s)
 
 .. code-block:: rust
 
@@ -1504,8 +1512,8 @@ locks (``RwLock``), condition variables (``Condvar``), and channels (``mpsc``).
 
    pub fn share_data() {
        let data: std::sync::Arc<String> = std::sync::Arc::new("shared".to_string());
-       let clone1: std::sync::Arc<String> = std::sync::Arc::clone(&data);
-       let count: i64 = std::sync::Arc::strong_count(&data) as i64;
+       let _clone1: std::sync::Arc<String> = std::sync::Arc::clone(&data);
+       let _count: i64 = std::sync::Arc::strong_count(&data) as i64;
    }
 
 **Mutex - Mutual exclusion:**
@@ -1524,9 +1532,10 @@ locks (``RwLock``), condition variables (``Condvar``), and channels (``mpsc``).
 .. code-block:: rust
 
    pub fn use_mutex() {
-       let counter: std::sync::Arc<std::sync::Mutex<i64>> =
-           std::sync::Arc::new(std::sync::Mutex::new(0));
-       let guard = counter.lock().unwrap();
+       let counter: std::sync::Arc<Mutex<i64>> = std::sync::Arc::new(
+           std::sync::Mutex::new(0),
+       );
+       let _guard = counter.lock();
    }
 
 **RwLock - Reader-writer lock:**
@@ -1547,10 +1556,9 @@ locks (``RwLock``), condition variables (``Condvar``), and channels (``mpsc``).
 .. code-block:: rust
 
    pub fn use_rwlock() {
-       let lock: std::sync::RwLock<String> =
-           std::sync::RwLock::new("data".to_string());
-       let reader = lock.read().unwrap();
-       let writer = lock.write().unwrap();
+       let mut lock: RwLock<String> = std::sync::RwLock::new("data".to_string());
+       let _reader = lock.read().unwrap();
+       let _writer = lock.write().unwrap();
    }
 
 **Condvar - Condition variable:**
@@ -1569,7 +1577,7 @@ locks (``RwLock``), condition variables (``Condvar``), and channels (``mpsc``).
 .. code-block:: rust
 
    pub fn use_condvar() {
-       let cvar: std::sync::Condvar = std::sync::Condvar::new();
+       let cvar: Condvar = std::sync::Condvar::new();
        cvar.notify_one();
        cvar.notify_all();
    }
@@ -1589,7 +1597,7 @@ locks (``RwLock``), condition variables (``Condvar``), and channels (``mpsc``).
 .. code-block:: rust
 
    pub fn use_barrier() {
-       let barrier: std::sync::Barrier = std::sync::Barrier::new(3);
+       let barrier: Barrier = std::sync::Barrier::new(3);
        barrier.wait();
    }
 

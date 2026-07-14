@@ -51,7 +51,7 @@ def fetch_crate_info(crate_name: str) -> dict:
         click.ClickException: If crate not found or API error
     """
     url = f"{CRATES_IO_API}/{crate_name}"
-    headers = {"User-Agent": "cookcrab/0.1.1 (https://github.com/kushaldas/spicycrab)"}
+    headers = {"User-Agent": "cookcrab/0.1.2 (https://github.com/kushaldas/spicycrab)"}
 
     try:
         request = urllib.request.Request(url, headers=headers)
@@ -84,7 +84,7 @@ def download_crate(crate_name: str, version: str, output_dir: Path) -> Path:
     """
     # Download URL format: https://static.crates.io/crates/{name}/{name}-{version}.crate
     url = f"{CRATES_IO_DOWNLOAD}/{crate_name}/{crate_name}-{version}.crate"
-    headers = {"User-Agent": "cookcrab/0.1.1 (https://github.com/kushaldas/spicycrab)"}
+    headers = {"User-Agent": "cookcrab/0.1.2 (https://github.com/kushaldas/spicycrab)"}
 
     try:
         request = urllib.request.Request(url, headers=headers)
@@ -140,17 +140,17 @@ def is_uv_available() -> bool:
 
 
 def get_pip_command() -> list[str]:
-    """Get the appropriate pip command (uv pip or python -m pip)."""
+    """Get an install command targeting cookcrab's Python environment."""
     if is_uv_available():
-        return ["uv", "pip"]
-    return [sys.executable, "-m", "pip"]
+        return ["uv", "pip", "install", "--python", sys.executable]
+    return [sys.executable, "-m", "pip", "install"]
 
 
-def get_build_command() -> list[str]:
-    """Get the appropriate build command."""
+def get_build_command(path: Path, output: Path) -> list[str]:
+    """Get a wheel build command independent of the active project environment."""
     if is_uv_available():
-        return ["uv", "run", "python", "-m", "build"]
-    return [sys.executable, "-m", "build"]
+        return ["uv", "build", "--wheel", "--out-dir", str(output), str(path)]
+    return [sys.executable, "-m", "build", "--wheel", "--outdir", str(output), str(path)]
 
 
 @click.group()
@@ -335,16 +335,10 @@ def build(path: Path, output: Path | None):
     click.echo(f"  Version: {version}")
     click.echo(f"  Output: {output}")
 
-    # Build using pip wheel or python -m build
+    # Build with uv's isolated builder or the bundled build dependency.
     output.mkdir(parents=True, exist_ok=True)
 
-    # Use appropriate build command
-    cmd = get_build_command() + [
-        "--wheel",
-        "--outdir",
-        str(output),
-        str(path),
-    ]
+    cmd = get_build_command(path, output)
 
     click.echo("")
     click.echo("Building wheel...")
@@ -500,12 +494,7 @@ def install(package: str, version: str | None, repo: str):
     wheel_dir = Path(tempfile.mkdtemp())
 
     try:
-        build_cmd = get_build_command() + [
-            "--wheel",
-            "--outdir",
-            str(wheel_dir),
-            str(stub_path),
-        ]
+        build_cmd = get_build_command(stub_path, wheel_dir)
         subprocess.run(build_cmd, check=True, capture_output=True, text=True)
 
         # Find the built wheel
@@ -520,7 +509,6 @@ def install(package: str, version: str | None, repo: str):
         # Step 3: Install wheel
         click.echo("Installing...")
         install_cmd = get_pip_command() + [
-            "install",
             "--force-reinstall",
             str(wheel_file),
         ]

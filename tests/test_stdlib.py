@@ -436,7 +436,10 @@ class TestRustStdFsMappings:
         mapping = get_fs_mapping("rust_std.fs.File.open")
         assert mapping is not None
         assert "std::fs::File::open" in mapping.rust_code
-        assert "?" in mapping.rust_code  # Error propagation
+        # Error handling is applied by the emitter from needs_result: `?` inside a
+        # Result-returning function, `.unwrap()` otherwise. A `?` baked into the
+        # template would also be emitted in non-Result functions, which is E0277.
+        assert "?" not in mapping.rust_code
         assert mapping.needs_result
 
     def test_fs_file_create(self):

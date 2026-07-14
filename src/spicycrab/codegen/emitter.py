@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 
 from spicycrab.analyzer.type_resolver import TypeResolver
 from spicycrab.codegen.stdlib import (
+    FS_METHOD_MAPPINGS,
+    IO_METHOD_MAPPINGS,
     PATHLIB_MAPPINGS,
+    RUST_TIME_METHOD_MAPPINGS,
+    SYNC_METHOD_MAPPINGS,
+    THREAD_METHOD_MAPPINGS,
     StdlibMapping,
     get_crate_for_python_module,
     get_datetime_mapping,
@@ -58,6 +63,7 @@ from spicycrab.ir.nodes import (
     IRSlice,
     IRStatement,
     IRSubscript,
+    IRSubscriptAssign,
     IRTry,
     IRTuple,
     IRTupleUnpack,
@@ -104,6 +110,60 @@ UNARYOP_MAP: dict[UnaryOp, str] = {
     UnaryOp.BIT_NOT: "!",
 }
 
+# Instance-method tables for rust_std values, keyed "TypeName.method"
+# (RwLock.read, Mutex.lock, SystemTime.duration_since, ...)
+RUST_STD_METHOD_TABLES = (
+    SYNC_METHOD_MAPPINGS,
+    RUST_TIME_METHOD_MAPPINGS,
+    IO_METHOD_MAPPINGS,
+    FS_METHOD_MAPPINGS,
+    THREAD_METHOD_MAPPINGS,
+)
+
+# timedelta keyword units that chrono::Duration has a constructor for
+TIMEDELTA_UNITS = ("weeks", "days", "hours", "minutes", "seconds", "milliseconds", "microseconds")
+
+# Owned (non-Copy) return types: returning one of these straight out of `&self`
+# has to clone, since moving out of a shared borrow is E0507.
+NON_COPY_RETURNS = ("String", "Vec<", "HashMap<", "HashSet<", "PathBuf", "BTreeMap<")
+
+# Rust integer types a len() result may legitimately need to be cast to
+RUST_INT_TYPES = frozenset(
+    {"usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128"}
+)
+
+
+# Python format-spec type chars with no Rust counterpart. Rust picks the
+# formatting from the value's own Display/LowerExp impl, so these are dropped:
+# `{:.2f}` is a hard rustc error (unknown format trait `f`) while `{:.2}` on an
+# f64 already means fixed-point. Chars Rust does share (e, E, x, X, o, b) stay.
+DROPPED_FORMAT_SPEC_TYPES = "fFdsgGn"
+
+
+def _python_format_spec_to_rust(spec: str) -> str:
+    """Translate a Python f-string format spec into Rust's syntax."""
+    if spec and spec[-1] in DROPPED_FORMAT_SPEC_TYPES:
+        return spec[:-1]
+    return spec
+
+
+def _len_receiver(emitted: str) -> str | None:
+    """Return the receiver of an emitted len() call, or None.
+
+    Matches bare `x.len()` as well as the cast forms `x.len() as i64` /
+    `as usize`, so the comparison rules below can recover the raw usize
+    expression regardless of which cast len() chose.
+    """
+    core = emitted
+    for int_type in RUST_INT_TYPES:
+        suffix = f" as {int_type}"
+        if core.endswith(suffix):
+            core = core[: -len(suffix)]
+            break
+    if core.endswith(".len()"):
+        return core[: -len(".len()")]
+    return None
+
 
 @dataclass
 class EmitterContext:
@@ -129,6 +189,12 @@ class EmitterContext:
     param_types: dict = field(default_factory=dict)  # var_name -> IRType object
     # Stub package imports: imported_name -> crate_name (e.g., "Result" -> "anyhow")
     stub_imports: dict[str, str] = field(default_factory=dict)
+    # rust_std imports: imported_name -> rust_std module (e.g., "Arc" -> "rust_std.sync"),
+    # so Arc.new(x) can be resolved against the rust_std.sync.Arc.new mapping
+    rust_std_imports: dict[str, str] = field(default_factory=dict)
+    # rust_std type names in scope: those imported, plus ones inferred from a
+    # mapping's return type (duration_since yields a Duration that was never imported)
+    rust_std_types: set[str] = field(default_factory=set)
     # Import aliases: alias -> original name (e.g., "reqwest_get" -> "get")
     import_aliases: dict[str, str] = field(default_factory=dict)
     # Assignment target type for turbofish inference (e.g., "String" for get_one::<String>)
@@ -153,6 +219,9 @@ class EmitterContext:
     read_vars: set[str] = field(default_factory=set)
     # Assignment counts in the current function/method body - function-scoped
     assignment_counts: dict[str, int] = field(default_factory=dict)
+    # Rust return type of the function being emitted (e.g. "usize"), so len()
+    # can cast to the type the caller actually expects
+    current_return_type: str | None = None
 
     def indent_str(self) -> str:
         return "    " * self.indent
@@ -406,6 +475,18 @@ class RustEmitter:
         """Process Python imports and categorize them."""
         for imp in imports:
             module_name = imp.module.split(".")[0]  # Get top-level module
+
+            # rust_std.* exposes Rust's std directly (from rust_std.sync import Arc).
+            # Remember the module each name came from so calls on it can be looked
+            # up as rust_std.sync.Arc.new rather than the bare Arc.new.
+            if module_name == "rust_std":
+                for name, alias in imp.names:
+                    effective_name = alias if alias else name
+                    self.ctx.rust_std_imports[effective_name] = imp.module
+                    self.ctx.rust_std_types.add(effective_name)
+                    if alias:
+                        self.ctx.import_aliases[alias] = name
+                continue
 
             # Check if this is a stub package import (e.g., from spicycrab_anyhow import Result)
             crate_name = get_crate_for_python_module(module_name)
@@ -972,12 +1053,17 @@ class RustEmitter:
             else:
                 params.append("&self")
 
+        # A parameter reassigned in the body needs `mut` too, not just one passed
+        # on as &mut (E0384).
+        _, method_param_assignments = self._collect_var_usage(method.body)
+
         for param in method.params:
             rust_type = self.resolver.resolve(param.type)
             rust_type_str = rust_type.to_rust()
             if trait_impl == "MicroService":
                 rust_type_str = self._microservice_param_type(method.name, param.name, rust_type_str)
-            mut = "mut " if param.name in self.ctx.mut_vars and not rust_type_str.startswith("&") else ""
+            needs_mut = param.name in self.ctx.mut_vars or method_param_assignments.get(param.name)
+            mut = "mut " if needs_mut and not rust_type_str.startswith("&") else ""
             params.append(f"{mut}{param.name}: {rust_type_str}")
 
         params_str = ", ".join(params)
@@ -1023,11 +1109,15 @@ class RustEmitter:
             # Track if we're in a Result-returning or Option-returning method
             prev_result_context = self.ctx.in_result_context
             prev_option_context = self.ctx.in_option_context
+            prev_return_type = self.ctx.current_return_type
             self.ctx.in_result_context = self._is_result_type(method.return_type) or (
                 trait_impl == "MicroService"
                 and method.name in ("process_request", "process_response", "handle_endpoint")
             )
             self.ctx.in_option_context = self._is_option_type(method.return_type)
+            self.ctx.current_return_type = (
+                self.resolver.resolve(method.return_type).to_rust() if method.return_type else None
+            )
 
             # Populate param_types for stub method resolution in method bodies.
             prev_param_types = self.ctx.param_types
@@ -1060,6 +1150,7 @@ class RustEmitter:
             # Restore previous context
             self.ctx.in_result_context = prev_result_context
             self.ctx.in_option_context = prev_option_context
+            self.ctx.current_return_type = prev_return_type
             self.ctx.param_types = prev_param_types
             self.ctx.type_env = prev_type_env
             self.ctx.option_vars = prev_option_vars
@@ -1101,11 +1192,21 @@ class RustEmitter:
         if func.docstring:
             lines.append(f"{indent}/// {func.docstring.split(chr(10))[0]}")
 
-        # Build parameter list
+        # Pre-scan the body before building the parameter list: a parameter that
+        # is reassigned (E0384) or mutated in place, e.g. values[i] = x (E0596),
+        # has to be declared `mut`.
+        prev_mut_vars = self.ctx.mut_vars
+        self.ctx.mut_vars = set()
+        self._collect_mut_vars(func.body)
+        _, param_assignments = self._collect_var_usage(func.body)
+
         params: list[str] = []
         for param in func.params:
             rust_type = self.resolver.resolve(param.type)
-            params.append(f"{param.name}: {rust_type.to_rust()}")
+            rust_type_str = rust_type.to_rust()
+            needs_mut = param_assignments.get(param.name) or param.name in self.ctx.mut_vars
+            mut_kw = "mut " if needs_mut and not rust_type_str.startswith("&") else ""
+            params.append(f"{mut_kw}{param.name}: {rust_type_str}")
 
         params_str = ", ".join(params)
 
@@ -1123,17 +1224,13 @@ class RustEmitter:
         async_kw = "async " if func.is_async else ""
         lines.append(f"{indent}pub {async_kw}fn {func.name}({params_str}){ret_str} {{")
 
-        # Pre-scan function body to find variables that will be used with &mut
-        # This needs to happen before emission so declarations can include `mut`
-        prev_mut_vars = self.ctx.mut_vars
-        self.ctx.mut_vars = set()
-        self._collect_mut_vars(func.body)
-
         # Track if we're in a Result-returning or Option-returning function
         prev_result_context = self.ctx.in_result_context
         prev_option_context = self.ctx.in_option_context
+        prev_return_type = self.ctx.current_return_type
         self.ctx.in_result_context = self._is_result_type(func.return_type)
         self.ctx.in_option_context = self._is_option_type(func.return_type)
+        self.ctx.current_return_type = self.resolver.resolve(func.return_type).to_rust() if func.return_type else None
 
         # Populate param_types for generic type unwrapping in method calls
         prev_param_types = self.ctx.param_types
@@ -1166,6 +1263,7 @@ class RustEmitter:
         # Restore previous context
         self.ctx.in_result_context = prev_result_context
         self.ctx.in_option_context = prev_option_context
+        self.ctx.current_return_type = prev_return_type
         self.ctx.param_types = prev_param_types
         self.ctx.type_env = prev_type_env
         self.ctx.mut_vars = prev_mut_vars
@@ -1450,6 +1548,11 @@ class RustEmitter:
             self._scan_expr_for_mut_vars(stmt.value)
             if isinstance(stmt.obj, IRName) and stmt.obj.name != "self":
                 self.ctx.mut_vars.add(stmt.obj.name)
+        elif isinstance(stmt, IRSubscriptAssign):
+            # d[k] = v mutates d, so d must be declared `mut`
+            self._scan_expr_for_mut_vars(stmt.value)
+            if isinstance(stmt.obj, IRName) and stmt.obj.name != "self":
+                self.ctx.mut_vars.add(stmt.obj.name)
         elif isinstance(stmt, IRIf):
             self._scan_expr_for_mut_vars(stmt.condition)
             for s in stmt.then_body:
@@ -1727,12 +1830,25 @@ class RustEmitter:
                             return f"{indent}self.{stmt.attr} {compound_ops[op]} {right};"
             return f"{indent}{obj}.{stmt.attr} = {self.emit_expression(stmt.value)};"
 
+        if isinstance(stmt, IRSubscriptAssign):
+            obj = self.emit_expression(stmt.obj)
+            index = self.emit_expression(stmt.index)
+            value = self.emit_expression(stmt.value)
+            # d[k] = v is an insert on a HashMap, but an indexed store on a Vec
+            container = self.ctx.type_env.get(stmt.obj.name) if isinstance(stmt.obj, IRName) else None
+            if container in ("dict", "Dict"):
+                return f"{indent}{obj}.insert({index}, {value});"
+            if not index.lstrip("-").isdigit():
+                index = f"{index} as usize"
+            return f"{indent}{obj}[{index}] = {value};"
+
         if isinstance(stmt, IRReturn):
             if stmt.value:
                 # Set flag to avoid adding ? when returning Result directly
                 self.ctx.in_direct_return = True
                 expr = self.emit_expression(stmt.value)
                 self.ctx.in_direct_return = False
+                expr = self._clone_if_moving_out_of_self(stmt.value, expr)
                 # Wrap non-None values in Some() for Option-returning functions
                 if self.ctx.in_option_context and expr != "None":
                     expr = f"Some({expr})"
@@ -1790,6 +1906,20 @@ class RustEmitter:
     def _emit_assign(self, stmt: IRAssign) -> str:
         """Emit an assignment statement."""
         indent = self.ctx.indent_str()
+
+        # Infer the type of an unannotated rust_std binding, so later method calls on
+        # it resolve against the rust_std method tables:
+        #   now = SystemTime.now()                 -> SystemTime (the static's owner)
+        #   since_epoch = now.duration_since(...)  -> Duration   (the mapping's return)
+        if not stmt.type_annotation and isinstance(stmt.value, IRMethodCall):
+            owner = stmt.value.obj
+            if isinstance(owner, IRName) and owner.name in self.ctx.rust_std_imports:
+                self.ctx.type_env[stmt.target] = owner.name
+            else:
+                method_mapping = self._rust_std_method(owner, stmt.value.method)
+                if method_mapping and method_mapping.returns:
+                    self.ctx.type_env[stmt.target] = method_mapping.returns
+                    self.ctx.rust_std_types.add(method_mapping.returns)
 
         # Check if this variable was hoisted (declared before an if/elif/else chain)
         # If so, treat as reassignment even if parser marked it as declaration
@@ -2444,6 +2574,10 @@ class RustEmitter:
         if isinstance(expr, IRName):
             if expr.name in self.ctx.narrowed_options:
                 return f"{expr.name}.unwrap()"
+            # rust_std constants referenced as plain values, e.g. UNIX_EPOCH
+            constant = self._rust_std_mapping(expr.name)
+            if constant:
+                return self._apply_stdlib_mapping(constant, [])
             return expr.name
 
         if isinstance(expr, IRBinaryOp):
@@ -2464,6 +2598,12 @@ class RustEmitter:
             # Check for stdlib module attributes (e.g., sys.argv, sys.platform)
             if isinstance(expr.obj, IRName):
                 module = expr.obj.name
+
+                # rust_std enum variants used as values, e.g. Ordering.SeqCst
+                variant = self._rust_std_mapping(module, expr.attr)
+                if variant:
+                    return self._apply_stdlib_mapping(variant, [])
+
                 mapping = get_stdlib_mapping(module, expr.attr)
                 if mapping:
                     # Track required imports
@@ -2545,6 +2685,15 @@ class RustEmitter:
                 # (block expressions returning tuples, tuple literals, etc.)
                 if obj.startswith("({") or obj.startswith("(") or self._is_tuple_expression(expr.obj):
                     return f"{obj}.{expr.index.value}"
+            # HashMap is indexed by &Q (&str), not by String, and its key must
+            # never be cast to usize the way a Vec index is.
+            container = self.ctx.type_env.get(expr.obj.name) if isinstance(expr.obj, IRName) else None
+            if container in ("dict", "Dict"):
+                if index.endswith(".to_string()"):
+                    index = index[: -len(".to_string()")]
+                elif isinstance(expr.index, IRName):
+                    index = f"&{index}"
+                return f"{obj}[{index}]"
             # Cast integer indices to usize for Vec/slice indexing
             # This handles cases like values[i] where i: int (i64 in Rust)
             if isinstance(expr.index, IRName):
@@ -2558,6 +2707,8 @@ class RustEmitter:
             return f"vec![{', '.join(elements)}]"
 
         if isinstance(expr, IRDict):
+            if not expr.keys:
+                return "HashMap::new()"
             pairs = []
             for k, v in zip(expr.keys, expr.values):
                 key = self.emit_expression(k)
@@ -2668,51 +2819,50 @@ class RustEmitter:
         left = self.emit_expression(expr.left)
         right = self.emit_expression(expr.right)
 
+        # pathlib overloads `/` as path join: base / name -> base.join(name).
+        # Without this it emits a real division and rustc rejects it (E0369).
+        if expr.op == BinaryOp.DIV and isinstance(expr.left, IRName) and self._is_path_var(expr.left.name):
+            return f"{left}.join({right})"
+
+        # len() emits `x.len() as i64` so it types as a Python int in value
+        # position; the comparison rules below want the raw usize `x.len()`.
+        left_recv = _len_receiver(left)
+        right_recv = _len_receiver(right)
+
         # Special handling for len() comparisons with 0 to avoid clippy::len_zero
         # len(x) > 0  -> !x.is_empty()
         # len(x) != 0 -> !x.is_empty()
         # len(x) == 0 -> x.is_empty()
         # len(x) >= 1 -> !x.is_empty()
         # 0 < len(x)  -> !x.is_empty()
-        if left.endswith(".len()") and right == "0":
-            base = left[:-6]  # Remove .len()
+        if left_recv is not None and right == "0":
             if expr.op in (BinaryOp.GT, BinaryOp.NE):
-                return f"!{base}.is_empty()"
+                return f"!{left_recv}.is_empty()"
             if expr.op == BinaryOp.EQ:
-                return f"{base}.is_empty()"
-        if right.endswith(".len()") and left == "0":
-            base = right[:-6]  # Remove .len()
+                return f"{left_recv}.is_empty()"
+        if right_recv is not None and left == "0":
             if expr.op == BinaryOp.LT:
-                return f"!{base}.is_empty()"
+                return f"!{right_recv}.is_empty()"
             if expr.op == BinaryOp.EQ:
-                return f"{base}.is_empty()"
+                return f"{right_recv}.is_empty()"
         # Also handle >= 1 pattern
-        if left.endswith(".len()") and right == "1" and expr.op == BinaryOp.GE:
-            base = left[:-6]
-            return f"!{base}.is_empty()"
+        if left_recv is not None and right == "1" and expr.op == BinaryOp.GE:
+            return f"!{left_recv}.is_empty()"
 
         # Handle integer variable compared with .len() - cast to usize
         # Example: i < values.len() where i is i64 -> (i as usize) < values.len()
-        if right.endswith(".len()") and isinstance(expr.left, IRName):
-            if expr.op in (
-                BinaryOp.LT,
-                BinaryOp.LE,
-                BinaryOp.GT,
-                BinaryOp.GE,
-                BinaryOp.EQ,
-                BinaryOp.NE,
-            ):
-                return f"({left} as usize) {BINOP_MAP.get(expr.op, '<')} {right}"
-        if left.endswith(".len()") and isinstance(expr.right, IRName):
-            if expr.op in (
-                BinaryOp.LT,
-                BinaryOp.LE,
-                BinaryOp.GT,
-                BinaryOp.GE,
-                BinaryOp.EQ,
-                BinaryOp.NE,
-            ):
-                return f"{left} {BINOP_MAP.get(expr.op, '<')} ({right} as usize)"
+        comparisons = (
+            BinaryOp.LT,
+            BinaryOp.LE,
+            BinaryOp.GT,
+            BinaryOp.GE,
+            BinaryOp.EQ,
+            BinaryOp.NE,
+        )
+        if right_recv is not None and isinstance(expr.left, IRName) and expr.op in comparisons:
+            return f"({left} as usize) {BINOP_MAP.get(expr.op, '<')} {right_recv}.len()"
+        if left_recv is not None and isinstance(expr.right, IRName) and expr.op in comparisons:
+            return f"{left_recv}.len() {BINOP_MAP.get(expr.op, '<')} ({right} as usize)"
 
         # Special handling for floor division
         if expr.op == BinaryOp.FLOOR_DIV:
@@ -2791,9 +2941,100 @@ class RustEmitter:
             return False
         return False
 
+    def _emit_timedelta(self, owner: str, func: str, kwargs: dict[str, IRExpression]) -> str | None:
+        """datetime.timedelta(days=1, hours=2) -> Duration::days(1) + Duration::hours(2).
+
+        The mapping template uses {days}/{seconds}/... placeholders that nothing ever
+        substituted, so the unit names leaked into the generated Rust verbatim.
+        """
+        if owner != "datetime" or func != "timedelta" or not kwargs:
+            return None
+        terms = [
+            f"chrono::Duration::{unit}({self.emit_expression(value)})"
+            for unit, value in kwargs.items()
+            if unit in TIMEDELTA_UNITS
+        ]
+        return " + ".join(terms) if terms else None
+
+    def _clone_if_moving_out_of_self(self, value: IRExpression | None, emitted: str) -> str:
+        """Clone an owned field returned straight out of `&self`.
+
+        `return self.name` in a `-> String` method moves out of a shared borrow,
+        which rustc rejects (E0507). Copy types (i64, bool, ...) are fine as-is.
+        """
+        if not self.ctx.in_impl or not isinstance(value, IRAttribute):
+            return emitted
+        if not isinstance(value.obj, IRName) or value.obj.name != "self":
+            return emitted
+        ret = self.ctx.current_return_type or ""
+        if ret.startswith(NON_COPY_RETURNS):
+            return f"{emitted}.clone()"
+        return emitted
+
+    def _is_path_var(self, name: str) -> bool:
+        """True when `name` is annotated as a pathlib Path."""
+        var_type = self.ctx.type_env.get(name)
+        return bool(var_type) and var_type.split(".")[-1] == "Path"
+
+    def _apply_self_mapping(self, mapping: StdlibMapping, obj: str, args: list[str]) -> str:
+        """Fill a {self}/{args} mapping template and record its imports."""
+        rust_code = mapping.rust_code.replace("{self}", obj)
+        rust_code = rust_code.replace("{args}", ", ".join(args))
+        for imp in mapping.rust_imports:
+            self.ctx.stdlib_imports.add(imp)
+        return self._handle_result_mapping(rust_code, mapping.needs_result)
+
+    def _rust_std_method(self, receiver: IRExpression | None, method: str):
+        """Instance methods on rust_std values, e.g. lock.read() -> lock.read().unwrap().
+
+        Restricted to types actually imported from rust_std so it cannot hijack a
+        pathlib Path, which shares the type name.
+        """
+        if not isinstance(receiver, IRName):
+            return None
+        type_name = self.ctx.type_env.get(receiver.name)
+        if not type_name or type_name not in self.ctx.rust_std_types:
+            return None
+        key = f"{type_name}.{method}"
+        for table in RUST_STD_METHOD_TABLES:
+            mapping = table.get(key)
+            if mapping:
+                return mapping
+        return None
+
+    def _rust_std_mapping(self, owner: str, attr: str | None = None):
+        """Resolve a call on a name imported from rust_std.*.
+
+        `from rust_std.sync import Arc` + `Arc.new(x)` resolves against the
+        rust_std.sync.Arc.new mapping; a bare `spawn(f)` against rust_std.thread.spawn.
+        """
+        module = self.ctx.rust_std_imports.get(owner)
+        if not module:
+            return None
+        original = self.ctx.import_aliases.get(owner, owner)
+        func = f"{original}.{attr}" if attr else original
+        return get_stdlib_mapping(module, func)
+
     def _emit_call(self, expr: IRCall) -> str:
         """Emit a function call."""
         args = [self.emit_expression(a) for a in expr.args]
+
+        if isinstance(expr.func, IRAttribute) and isinstance(expr.func.obj, IRName):
+            timedelta = self._emit_timedelta(expr.func.obj.name, expr.func.attr, expr.kwargs)
+            if timedelta:
+                return timedelta
+
+        # rust_std free functions and Type.method statics (Arc.new, Duration.from_secs)
+        if isinstance(expr.func, IRName):
+            mapping = self._rust_std_mapping(expr.func.name)
+            if mapping:
+                result = self._apply_stdlib_mapping(mapping, args)
+                return self._handle_result_mapping(result, mapping.needs_result)
+        if isinstance(expr.func, IRAttribute) and isinstance(expr.func.obj, IRName):
+            mapping = self._rust_std_mapping(expr.func.obj.name, expr.func.attr)
+            if mapping:
+                result = self._apply_stdlib_mapping(mapping, args)
+                return self._handle_result_mapping(result, mapping.needs_result)
 
         # Check for standalone function calls imported from stub packages (e.g., sleep())
         if isinstance(expr.func, IRName):
@@ -2880,13 +3121,24 @@ class RustEmitter:
             if len(args) == 3:
                 return f"({args[0]}..{args[1]}).step_by({args[2]} as usize)"
 
-        # Handle len()
+        # Handle len(). Rust's .len() is usize but Python's len() is an int, so
+        # cast; without it any `-> int` function returning len() fails to compile.
+        # When the target is an explicit Rust integer type (usize, u32, ...) cast
+        # to that instead, so `def f(...) -> usize: return len(x)` still typechecks.
         if func == "len":
-            return f"{args[0]}.len()"
+            expected = self.ctx.assignment_target_type or self.ctx.current_return_type
+            target = expected if expected in RUST_INT_TYPES else "i64"
+            return f"{args[0]}.len() as {target}"
 
         # Handle print()
         if func == "print":
             if args:
+                # print(f"x={x}") is already a format!(...) call; inline it rather
+                # than nesting it inside println!("{}", format!(...))
+                if isinstance(expr.args[0], IRFString):
+                    inner = args[0]
+                    if inner.startswith("format!(") and inner.endswith(")"):
+                        return f"println!({inner[len('format!('):-1]})"
                 # Strip .to_string() since println! handles Display types directly
                 arg = args[0].removesuffix(".to_string()") if args[0].endswith(".to_string()") else args[0]
                 # If arg is a string literal, use println!("literal") directly
@@ -3297,7 +3549,10 @@ class RustEmitter:
 
         # Handle different placeholder formats
         if "{args}" in rust_code:
-            rust_code = rust_code.format(args=", ".join(args))
+            # Substitute literally: templates carry Rust format strings such as
+            # log::info!("{}", {args}), and str.format would read that "{}" as a
+            # positional field and raise IndexError.
+            rust_code = rust_code.replace("{args}", ", ".join(args))
         elif "{arg0}" in rust_code or "{arg1}" in rust_code or "{&arg0}" in rust_code or "{&arg1}" in rust_code:
             # Handle indexed args
             # {argN} - substitute directly
@@ -3443,6 +3698,30 @@ class RustEmitter:
         """Emit a method call."""
         args = [self.emit_expression(a) for a in expr.args]
         method = expr.method
+
+        if isinstance(expr.obj, IRName):
+            timedelta = self._emit_timedelta(expr.obj.name, method, expr.kwargs)
+            if timedelta:
+                return timedelta
+
+        # rust_std statics parse as method calls: Arc.new(x), Duration.from_secs(1)
+        if isinstance(expr.obj, IRName):
+            mapping = self._rust_std_mapping(expr.obj.name, method)
+            if mapping:
+                result = self._apply_stdlib_mapping(mapping, args)
+                return self._handle_result_mapping(result, mapping.needs_result)
+
+        # pathlib methods on a Path-typed value: path.read_text() -> std::fs::read_to_string(&path)
+        if isinstance(expr.obj, IRName) and self._is_path_var(expr.obj.name):
+            path_mapping = PATHLIB_MAPPINGS.get(f"Path.{method}")
+            if path_mapping:
+                return self._apply_self_mapping(path_mapping, self.emit_expression(expr.obj), args)
+
+        # Instance methods on rust_std values. Unmapped, lock.read() fell through to
+        # the generic IO handling and compiled a lock read as a *file* read.
+        std_method = self._rust_std_method(expr.obj, method)
+        if std_method:
+            return self._apply_self_mapping(std_method, self.emit_expression(expr.obj), args)
 
         # Check for stub package Type.method calls (e.g., Result.Ok(), Error.msg())
         if isinstance(expr.obj, IRName):
@@ -3628,6 +3907,16 @@ class RustEmitter:
         # Check for nested stdlib calls (e.g., os.path.exists())
         if isinstance(expr.obj, IRAttribute) and isinstance(expr.obj.obj, IRName):
             module = f"{expr.obj.obj.name}.{expr.obj.attr}"
+
+            # os.environ.get() is arity-dependent, so it can't be a single template:
+            # with a default it yields a String, without one an Option. Unmapped it
+            # fell through to the dict .get() path and emitted a literal `os.environ`.
+            if module == "os.environ" and method == "get" and args:
+                key = args[0].removesuffix(".to_string()")
+                if len(args) >= 2:
+                    return f"std::env::var({key}).unwrap_or({args[1]})"
+                return f"std::env::var({key}).ok()"
+
             mapping = get_stdlib_mapping(module, method)
             if mapping:
                 result = self._apply_stdlib_mapping(mapping, args)
@@ -3731,7 +4020,11 @@ class RustEmitter:
         if method == "extend":
             return f"{obj}.extend({args[0]})"
         if method == "pop":
-            return f"{obj}.pop()"
+            # Python's list.pop() yields the element; Vec::pop yields Option<T>.
+            # Without the unwrap a `-> int` method returning it fails to compile.
+            if args:
+                return f"{obj}.remove({args[0]} as usize)"
+            return f"{obj}.pop().unwrap()"
         if method == "strip":
             return f"{obj}.trim().to_string()"
         if method == "split":
@@ -3740,7 +4033,11 @@ class RustEmitter:
                 return f"{obj}.split({arg}).collect::<Vec<_>>()"
             return f"{obj}.split_whitespace().collect::<Vec<_>>()"
         if method == "join":
-            return f"{args[0]}.join(&{obj})"
+            # str.join(iterable) takes the sequence as its argument; a thread
+            # JoinHandle's join() takes none, and indexing args[0] there crashed.
+            if args:
+                return f"{args[0]}.join(&{obj})"
+            return f"{obj}.join()"
         if method == "upper":
             return f"{obj}.to_uppercase()"
         if method == "lower":
@@ -3891,10 +4188,8 @@ class RustEmitter:
                 format_str += escaped
             elif isinstance(part, IRFormattedValue):
                 # Expression with format spec: f"{value:x}" -> format!("{:x}", value)
-                if part.format_spec:
-                    format_str += "{:" + part.format_spec + "}"
-                else:
-                    format_str += "{}"
+                rust_spec = _python_format_spec_to_rust(part.format_spec) if part.format_spec else ""
+                format_str += "{:" + rust_spec + "}" if rust_spec else "{}"
                 args.append(self.emit_expression(part.value))
             else:
                 # Expression part without format spec

@@ -47,6 +47,7 @@ Instance methods
 
 .. code-block:: rust
 
+   #[derive(Debug, Clone)]
    pub struct Counter {
        pub value: i64,
    }
@@ -55,11 +56,9 @@ Instance methods
        pub fn new(value: i64) -> Self {
            Self { value }
        }
-
        pub fn increment(&mut self) {
-           self.value = self.value + 1;
+           self.value += 1;
        }
-
        pub fn get(&self) -> i64 {
            self.value
        }
@@ -209,7 +208,7 @@ Basic dataclass
 
 .. code-block:: rust
 
-   #[derive(Clone, Debug)]
+   #[derive(Debug, Clone)]
    pub struct User {
        pub name: String,
        pub age: i64,
@@ -235,18 +234,15 @@ Dataclass with defaults
 
 .. code-block:: rust
 
-   #[derive(Clone, Debug)]
+   #[derive(Debug, Clone)]
    pub struct Config {
        pub host: String,
        pub port: i64,
    }
 
    impl Config {
-       pub fn new(host: Option<String>, port: Option<i64>) -> Self {
-           Self {
-               host: host.unwrap_or("localhost".to_string()),
-               port: port.unwrap_or(8080),
-           }
+       pub fn new(host: String, port: i64) -> Self {
+           Self { host, port }
        }
    }
 
@@ -309,6 +305,7 @@ Class with Collections
 
 .. code-block:: rust
 
+   #[derive(Debug, Clone)]
    pub struct Stack {
        pub items: Vec<i64>,
    }
@@ -317,17 +314,14 @@ Class with Collections
        pub fn new() -> Self {
            Self { items: vec![] }
        }
-
        pub fn push(&mut self, item: i64) {
            self.items.push(item);
        }
-
        pub fn pop(&mut self) -> i64 {
            self.items.pop().unwrap()
        }
-
        pub fn is_empty(&self) -> bool {
-           self.items.len() == 0
+           self.items.is_empty()
        }
    }
 

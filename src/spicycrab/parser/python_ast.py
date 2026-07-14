@@ -47,6 +47,7 @@ from spicycrab.ir.nodes import (
     IRSlice,
     IRStatement,
     IRSubscript,
+    IRSubscriptAssign,
     IRTry,
     IRTuple,
     IRTupleUnpack,
@@ -100,6 +101,26 @@ UNARYOP_MAP: dict[type, UnaryOp] = {
     ast.Not: UnaryOp.NOT,
     ast.Invert: UnaryOp.BIT_NOT,
 }
+
+# Container methods that mutate their receiver in place. A method calling one of
+# these on a self attribute (self.items.append(x)) needs &mut self.
+MUTATING_METHODS: frozenset[str] = frozenset(
+    {
+        "append",
+        "extend",
+        "insert",
+        "remove",
+        "pop",
+        "clear",
+        "sort",
+        "reverse",
+        "add",
+        "discard",
+        "update",
+        "setdefault",
+        "popitem",
+    }
+)
 
 
 @dataclass
@@ -711,21 +732,29 @@ class PythonASTVisitor(ast.NodeVisitor):
             # Check for self.x = ... assignments
             if isinstance(stmt, ast.Assign):
                 for target in stmt.targets:
-                    if (
-                        isinstance(target, ast.Attribute)
-                        and isinstance(target.value, ast.Name)
-                        and target.value.id == "self"
-                    ):
+                    if self._is_self_attr(target):
+                        return True
+                    # self.items[i] = ... mutates through the attribute
+                    if isinstance(target, ast.Subscript) and self._is_self_attr(target.value):
                         return True
             # Check for augmented assignments like self.x += 1
             if isinstance(stmt, ast.AugAssign):
-                if (
-                    isinstance(stmt.target, ast.Attribute)
-                    and isinstance(stmt.target.value, ast.Name)
-                    and stmt.target.value.id == "self"
-                ):
+                if self._is_self_attr(stmt.target):
+                    return True
+                if isinstance(stmt.target, ast.Subscript) and self._is_self_attr(stmt.target.value):
+                    return True
+            # Mutating method calls on a self attribute, e.g. self.items.append(x).
+            # These mutate through &self without any assignment, so the assignment
+            # checks above never see them and the method wrongly gets &self.
+            if isinstance(stmt, ast.Call) and isinstance(stmt.func, ast.Attribute):
+                if stmt.func.attr in MUTATING_METHODS and self._is_self_attr(stmt.func.value):
                     return True
         return False
+
+    @staticmethod
+    def _is_self_attr(node: ast.expr) -> bool:
+        """True for `self.<name>`."""
+        return isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self"
 
     def _visit_statement(self, node: ast.stmt) -> IRStatement | None:
         """Visit a statement node."""
@@ -787,6 +816,15 @@ class PythonASTVisitor(ast.NodeVisitor):
             return IRAttrAssign(
                 obj=self._visit_expression(target.value),
                 attr=target.attr,
+                value=value,
+                line=node.lineno,
+            )
+
+        # Handle subscript assignment (e.g., ages["Alice"] = 30, values[0] = 5)
+        if isinstance(target, ast.Subscript):
+            return IRSubscriptAssign(
+                obj=self._visit_expression(target.value),
+                index=self._visit_expression(target.slice),
                 value=value,
                 line=node.lineno,
             )

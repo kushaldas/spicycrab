@@ -336,6 +336,20 @@ class IRAttrAssign(IRStatement):
 
 
 @dataclass
+class IRSubscriptAssign(IRStatement):
+    """Assignment to a subscript (obj[index] = value).
+
+    Emits a HashMap insert for dicts and an indexed store for lists:
+        ages["Alice"] = 30  -> ages.insert("Alice".to_string(), 30);
+        values[0] = 5       -> values[0 as usize] = 5;
+    """
+
+    obj: IRExpression | None = None
+    index: IRExpression | None = None
+    value: IRExpression | None = None
+
+
+@dataclass
 class IRTupleUnpack(IRStatement):
     """Tuple unpacking assignment: (a, b) = expr or a, b = expr.
 

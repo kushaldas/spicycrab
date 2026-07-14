@@ -9,7 +9,8 @@ JSON_MAPPINGS: dict[str, StdlibMapping] = {
     "json.loads": StdlibMapping(
         python_module="json",
         python_func="loads",
-        rust_code="serde_json::from_str({args}).unwrap()",
+        # from_str takes &str; passing the String directly is E0308
+        rust_code="serde_json::from_str(&{args}).unwrap()",
         rust_imports=["serde_json"],
         cargo_deps=['serde_json = "1.0"'],
         needs_result=True,
@@ -17,7 +18,8 @@ JSON_MAPPINGS: dict[str, StdlibMapping] = {
     "json.dumps": StdlibMapping(
         python_module="json",
         python_func="dumps",
-        rust_code="serde_json::to_string({args}).unwrap()",
+        # to_string serializes by reference; passing by value moves the argument
+        rust_code="serde_json::to_string(&{args}).unwrap()",
         rust_imports=["serde_json"],
         cargo_deps=['serde_json = "1.0"'],
         needs_result=True,
